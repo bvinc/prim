@@ -31,21 +31,8 @@ fn collect_locals_block(block: &hir::Block, locals: &mut Vec<(hir::SymbolId, Val
 
 fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValType)>) {
     match stmt {
-        hir::Stmt::Let {
-            name, ty, value, ..
-        } => {
-            locals.push((*name, hir_type_to_valtype(ty)));
-            collect_locals_expr(value, locals);
-        }
-        hir::Stmt::LetTuple {
-            names,
-            elem_types,
-            value,
-            ..
-        } => {
-            for (name, ty) in names.iter().zip(elem_types.iter()) {
-                locals.push((*name, hir_type_to_valtype(ty)));
-            }
+        hir::Stmt::Let { pattern, value, .. } => {
+            collect_locals_pattern(pattern, locals);
             collect_locals_expr(value, locals);
         }
         hir::Stmt::Assign { value, .. } => collect_locals_expr(value, locals),
@@ -69,6 +56,26 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
         hir::Stmt::Return { value, .. } => {
             if let Some(v) = value {
                 collect_locals_expr(v, locals);
+            }
+        }
+    }
+}
+
+/// Push a local for every binding a pattern introduces, recursively.
+fn collect_locals_pattern(pattern: &hir::Pattern, locals: &mut Vec<(hir::SymbolId, ValType)>) {
+    match pattern {
+        hir::Pattern::Wildcard { .. } => {}
+        hir::Pattern::Binding { symbol, ty, .. } => {
+            locals.push((*symbol, hir_type_to_valtype(ty)));
+        }
+        hir::Pattern::Tuple { elems, .. } => {
+            for elem in elems {
+                collect_locals_pattern(elem, locals);
+            }
+        }
+        hir::Pattern::Variant { fields, .. } => {
+            for fp in fields {
+                collect_locals_pattern(&fp.pattern, locals);
             }
         }
     }
@@ -116,11 +123,7 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_locals_expr(scrutinee, locals);
             for arm in arms {
-                if let hir::Pattern::Variant { bindings, .. } = &arm.pattern {
-                    for (_, binding, ty) in bindings {
-                        locals.push((*binding, hir_type_to_valtype(ty)));
-                    }
-                }
+                collect_locals_pattern(&arm.pattern, locals);
                 collect_locals_expr(&arm.body, locals);
             }
         }
@@ -177,13 +180,14 @@ fn collect_scratch_types_stmt(
     out: &mut Vec<ValType>,
 ) {
     match stmt {
-        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
+        hir::Stmt::Assign { value, .. } => {
             collect_scratch_types_expr(value, runtime, out);
         }
-        // One i32 scratch holds the tuple pointer while elements are extracted.
-        hir::Stmt::LetTuple { value, .. } => {
-            out.push(ValType::I32);
+        // The value is produced first, then the pattern binds it (reserving a
+        // scratch pointer per tuple level).
+        hir::Stmt::Let { pattern, value, .. } => {
             collect_scratch_types_expr(value, runtime, out);
+            collect_scratch_types_pattern(pattern, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
             collect_scratch_types_expr(ptr, runtime, out);
@@ -205,6 +209,26 @@ fn collect_scratch_types_stmt(
         hir::Stmt::Return { value, .. } => {
             if let Some(v) = value {
                 collect_scratch_types_expr(v, runtime, out);
+            }
+        }
+    }
+}
+
+/// Reserve scratch slots a pattern's binding needs: one i32 pointer per tuple
+/// level (to stash the tuple base while elements are extracted). Mirrors
+/// `emit::emit_bind`.
+fn collect_scratch_types_pattern(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
+    match pattern {
+        hir::Pattern::Wildcard { .. } | hir::Pattern::Binding { .. } => {}
+        hir::Pattern::Tuple { elems, .. } => {
+            out.push(ValType::I32);
+            for elem in elems {
+                collect_scratch_types_pattern(elem, out);
+            }
+        }
+        hir::Pattern::Variant { fields, .. } => {
+            for fp in fields {
+                collect_scratch_types_pattern(&fp.pattern, out);
             }
         }
     }
@@ -241,6 +265,7 @@ fn collect_scratch_types_expr(
             out.push(ValType::I32);
             collect_scratch_types_expr(scrutinee, runtime, out);
             for arm in arms {
+                collect_scratch_types_pattern(&arm.pattern, out);
                 collect_scratch_types_expr(&arm.body, runtime, out);
             }
         }
@@ -327,9 +352,7 @@ pub(crate) fn collect_dbg_prefixes_block<'a>(block: &'a hir::Block, out: &mut Ve
 
 fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
     match stmt {
-        hir::Stmt::Let { value, .. }
-        | hir::Stmt::LetTuple { value, .. }
-        | hir::Stmt::Assign { value, .. } => {
+        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
             collect_dbg_prefixes_expr(value, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
@@ -449,9 +472,7 @@ pub(crate) fn collect_str_literals_block<'a>(block: &'a hir::Block, out: &mut Ve
 
 fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
     match stmt {
-        hir::Stmt::Let { value, .. }
-        | hir::Stmt::LetTuple { value, .. }
-        | hir::Stmt::Assign { value, .. } => {
+        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
             collect_str_literals_expr(value, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {

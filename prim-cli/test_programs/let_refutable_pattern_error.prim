@@ -1,0 +1,11 @@
+enum MaybeI32 {
+    None,
+    Some { value: i32 },
+}
+
+// A `let` binding must be irrefutable; an enum-variant pattern can fail to
+// match, so it is rejected.
+fn main() {
+    let MaybeI32.Some { value } = MaybeI32.Some { value = 1i32 }
+    let _ = value
+}

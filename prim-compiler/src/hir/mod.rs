@@ -445,18 +445,13 @@ pub struct Block {
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
+    /// `let <pattern> [: ty] = value`. The pattern is irrefutable (wildcard,
+    /// binding, or tuples thereof); `ty` is the optional annotation
+    /// (`Undetermined` if absent), applied to `value` before the pattern is
+    /// typed against the result.
     Let {
-        name: SymbolId,
-        mutable: bool,
+        pattern: Pattern,
         ty: Type,
-        value: Expr,
-        span: SpanId,
-    },
-    /// `let (a, b, ...) = value` — bind each tuple element to a local. Element
-    /// types are filled in at typecheck.
-    LetTuple {
-        names: Vec<SymbolId>,
-        elem_types: Vec<Type>,
         value: Expr,
         span: SpanId,
     },
@@ -629,19 +624,56 @@ pub struct MatchArm {
     pub span: SpanId,
 }
 
+/// A pattern, shared by `let` bindings and `match` arms. Recursive: tuple
+/// patterns nest sub-patterns and variant fields nest sub-patterns. The `ty`
+/// fields are filled in by typecheck.
 #[derive(Clone, Debug)]
 pub enum Pattern {
     Wildcard {
+        ty: Type,
+        span: SpanId,
+    },
+    /// A name binding — matches anything and binds it to `symbol`.
+    Binding {
+        symbol: SymbolId,
+        ty: Type,
+        span: SpanId,
+    },
+    /// `(a, b, ...)` — matched element-wise against a tuple value. `ty` is the
+    /// whole tuple type.
+    Tuple {
+        elems: Vec<Pattern>,
+        ty: Type,
         span: SpanId,
     },
     Variant {
         enum_id: EnumId,
         variant_idx: u32,
-        /// `(field name, local symbol introduced into the arm body, local type)`
-        /// triples. Empty for unit variants.
-        bindings: Vec<(InternSymbol, SymbolId, Type)>,
+        /// Field sub-patterns, ordered as written. Empty for unit variants.
+        fields: Vec<FieldPattern>,
         span: SpanId,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldPattern {
+    /// Field name on the variant.
+    pub field: InternSymbol,
+    /// The field's resolved type (filled in by typecheck).
+    pub ty: Type,
+    /// Sub-pattern matched against the field's value.
+    pub pattern: Pattern,
+}
+
+impl Pattern {
+    pub fn span(&self) -> SpanId {
+        match self {
+            Pattern::Wildcard { span, .. }
+            | Pattern::Binding { span, .. }
+            | Pattern::Tuple { span, .. }
+            | Pattern::Variant { span, .. } => *span,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

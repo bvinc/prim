@@ -73,6 +73,12 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    /// A refutable pattern (one that can fail to match, e.g. an enum
+    /// variant) used in a `let` binding, which must always match.
+    RefutablePattern {
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -129,6 +135,9 @@ impl std::fmt::Display for LoweringError {
                     name
                 )
             }
+            LoweringError::RefutablePattern { .. } => {
+                write!(f, "refutable pattern not allowed in `let` binding")
+            }
         }
     }
 }
@@ -149,7 +158,8 @@ impl LoweringError {
             | LoweringError::UnknownRuntimeAbi { span, .. }
             | LoweringError::NotAnEnum { span, .. }
             | LoweringError::InvalidImplTarget { span, .. }
-            | LoweringError::NotAssociatedFn { span, .. } => *span,
+            | LoweringError::NotAssociatedFn { span, .. }
+            | LoweringError::RefutablePattern { span, .. } => *span,
         }
     }
 
@@ -166,7 +176,8 @@ impl LoweringError {
             | LoweringError::UnknownRuntimeAbi { file, .. }
             | LoweringError::NotAnEnum { file, .. }
             | LoweringError::InvalidImplTarget { file, .. }
-            | LoweringError::NotAssociatedFn { file, .. } => *file,
+            | LoweringError::NotAssociatedFn { file, .. }
+            | LoweringError::RefutablePattern { file, .. } => *file,
         }
     }
 }
@@ -1012,52 +1023,21 @@ impl<'a> LoweringContext<'a> {
     ) -> hir::Stmt {
         match stmt {
             Stmt::Let {
-                name,
-                mutable,
+                pattern,
                 type_annotation,
                 value,
             } => {
                 let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
-                let sym = self.insert_symbol(module, name.sym, SymbolKind::Local);
-                self.local_scope.insert(
-                    self.interner.resolve(&name.sym).to_string(),
-                    LocalBinding {
-                        symbol: sym,
-                        mutable: *mutable,
-                    },
-                );
+                let span = self.span_id(pattern.span(), file_id);
+                // `let` patterns must be irrefutable: no variant (enum) tests.
+                self.check_irrefutable(pattern, file_id);
+                let pattern_hir = self.lower_pattern(pattern, module, file_id, module_scope);
                 hir::Stmt::Let {
-                    name: sym,
-                    mutable: *mutable,
+                    pattern: pattern_hir,
                     ty: self.lower_type(
                         type_annotation.as_ref().unwrap_or(&Type::Undetermined),
                         module_scope,
                     ),
-                    value: value_hir,
-                    span: self.span_id(name.span, file_id),
-                }
-            }
-            Stmt::LetTuple { names, value } => {
-                let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
-                let span =
-                    self.span_id(names.first().map(|n| n.span).unwrap_or(value.span), file_id);
-                let syms: Vec<SymbolId> = names
-                    .iter()
-                    .map(|n| {
-                        let sym = self.insert_symbol(module, n.sym, SymbolKind::Local);
-                        self.local_scope.insert(
-                            self.interner.resolve(&n.sym).to_string(),
-                            LocalBinding {
-                                symbol: sym,
-                                mutable: false,
-                            },
-                        );
-                        sym
-                    })
-                    .collect();
-                hir::Stmt::LetTuple {
-                    names: syms,
-                    elem_types: Vec::new(),
                     value: value_hir,
                     span,
                 }
@@ -1265,15 +1245,21 @@ impl<'a> LoweringContext<'a> {
         let block = hir::Block {
             stmts: vec![
                 hir::Stmt::Let {
-                    name: loop_sym,
-                    mutable: true,
+                    pattern: hir::Pattern::Binding {
+                        symbol: loop_sym,
+                        ty: hir::Type::Undetermined,
+                        span: span_id,
+                    },
                     ty: hir::Type::Undetermined,
                     value: start_hir,
                     span: span_id,
                 },
                 hir::Stmt::Let {
-                    name: end_sym,
-                    mutable: false,
+                    pattern: hir::Pattern::Binding {
+                        symbol: end_sym,
+                        ty: hir::Type::Undetermined,
+                        span: span_id,
+                    },
                     ty: hir::Type::Undetermined,
                     value: end_hir,
                     span: span_id,
@@ -1326,6 +1312,26 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// `let` patterns are irrefutable: they may not contain a variant
+    /// (enum) test, which could fail to match at runtime. Tuples and
+    /// bindings nest freely.
+    fn check_irrefutable(&mut self, pat: &prim_parse::Pattern, file_id: FileId) {
+        match pat {
+            prim_parse::Pattern::Wildcard { .. } | prim_parse::Pattern::Binding { .. } => {}
+            prim_parse::Pattern::Tuple { elems, .. } => {
+                for elem in elems {
+                    self.check_irrefutable(elem, file_id);
+                }
+            }
+            prim_parse::Pattern::Variant { span, .. } => {
+                self.errors.push(LoweringError::RefutablePattern {
+                    file: file_id,
+                    span: *span,
+                });
+            }
+        }
+    }
+
     fn lower_pattern(
         &mut self,
         pat: &prim_parse::Pattern,
@@ -1335,12 +1341,43 @@ impl<'a> LoweringContext<'a> {
     ) -> hir::Pattern {
         match pat {
             prim_parse::Pattern::Wildcard { span } => hir::Pattern::Wildcard {
+                ty: hir::Type::Undetermined,
                 span: self.span_id(*span, file_id),
             },
+            prim_parse::Pattern::Binding {
+                name,
+                mutable,
+                span,
+            } => {
+                let sym = self.insert_symbol(module, name.sym, SymbolKind::Local);
+                self.local_scope.insert(
+                    self.interner.resolve(&name.sym).to_string(),
+                    LocalBinding {
+                        symbol: sym,
+                        mutable: *mutable,
+                    },
+                );
+                hir::Pattern::Binding {
+                    symbol: sym,
+                    ty: hir::Type::Undetermined,
+                    span: self.span_id(*span, file_id),
+                }
+            }
+            prim_parse::Pattern::Tuple { elems, span } => {
+                let elems = elems
+                    .iter()
+                    .map(|e| self.lower_pattern(e, module, file_id, module_scope))
+                    .collect();
+                hir::Pattern::Tuple {
+                    elems,
+                    ty: hir::Type::Undetermined,
+                    span: self.span_id(*span, file_id),
+                }
+            }
             prim_parse::Pattern::Variant {
                 enum_path,
                 variant_name,
-                bindings,
+                fields,
                 span,
             } => {
                 let name_str = self.path_name(enum_path);
@@ -1376,25 +1413,20 @@ impl<'a> LoweringContext<'a> {
                         (hir::EnumId(0), 0)
                     }
                 };
-                // Each binding introduces a fresh Local in the arm scope.
-                let binding_pairs: Vec<(hir::InternSymbol, SymbolId, hir::Type)> = bindings
+                // Each field binds via a (possibly nested) sub-pattern,
+                // lowered in the arm's scope.
+                let fields: Vec<hir::FieldPattern> = fields
                     .iter()
-                    .map(|b| {
-                        let sym = self.insert_symbol(module, b.binding.sym, SymbolKind::Local);
-                        self.local_scope.insert(
-                            self.interner.resolve(&b.binding.sym).to_string(),
-                            LocalBinding {
-                                symbol: sym,
-                                mutable: false,
-                            },
-                        );
-                        (b.field.sym, sym, hir::Type::Undetermined)
+                    .map(|fp| hir::FieldPattern {
+                        field: fp.field.sym,
+                        ty: hir::Type::Undetermined,
+                        pattern: self.lower_pattern(&fp.pattern, module, file_id, module_scope),
                     })
                     .collect();
                 hir::Pattern::Variant {
                     enum_id,
                     variant_idx,
-                    bindings: binding_pairs,
+                    fields,
                     span: self.span_id(*span, file_id),
                 }
             }

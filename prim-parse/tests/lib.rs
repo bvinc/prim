@@ -1,4 +1,6 @@
-use prim_parse::{BinaryOp, ExprKind, ImportSelector, Interner, ParseError, Stmt, Type, parse};
+use prim_parse::{
+    BinaryOp, ExprKind, ImportSelector, Interner, ParseError, Pattern, Stmt, Type, parse,
+};
 use prim_tok::TokenKind;
 use std::sync::Arc;
 
@@ -104,8 +106,7 @@ fn test_parse_let_statement() {
     assert_eq!(main_func.body.stmts.len(), 1);
     match &main_func.body.stmts[0] {
         Stmt::Let {
-            name,
-            mutable,
+            pattern: Pattern::Binding { name, mutable, .. },
             type_annotation,
             value,
             ..
@@ -166,8 +167,7 @@ fn test_parse_let_without_type() {
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
         Stmt::Let {
-            name,
-            mutable,
+            pattern: Pattern::Binding { name, mutable, .. },
             type_annotation,
             value,
             ..
@@ -321,7 +321,7 @@ fn test_parse_error_unexpected_token() {
         Err(ParseError::UnexpectedToken {
             expected, found, ..
         }) => {
-            assert_eq!(expected, "identifier");
+            assert_eq!(expected, "Expected pattern");
             assert_eq!(found, TokenKind::Equals);
         }
         _ => panic!("Expected UnexpectedToken error, got {:?}", result),
@@ -1513,8 +1513,7 @@ fn test_parse_let_mut() {
     assert_eq!(main_func.body.stmts.len(), 1);
     match &main_func.body.stmts[0] {
         Stmt::Let {
-            name,
-            mutable,
+            pattern: Pattern::Binding { name, mutable, .. },
             type_annotation,
             value,
             ..
@@ -1539,8 +1538,7 @@ fn test_parse_let_mut_without_type() {
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
         Stmt::Let {
-            name,
-            mutable,
+            pattern: Pattern::Binding { name, mutable, .. },
             type_annotation,
             ..
         } => {

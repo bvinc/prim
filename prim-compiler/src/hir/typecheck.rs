@@ -520,15 +520,33 @@ impl<'a> Checker<'a> {
         span: SpanId,
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<Vec<SymbolId>, TypeCheckError> {
+        let scrut_ty = Type::Enum(enum_id, enum_args.to_vec());
         match pattern {
-            crate::hir::Pattern::Wildcard { .. } => {
+            crate::hir::Pattern::Wildcard { ty, .. } => {
                 coverage.cover_wildcard();
+                *ty = scrut_ty;
                 Ok(Vec::new())
             }
+            // A bare binding is an irrefutable catch-all that binds the whole
+            // scrutinee.
+            crate::hir::Pattern::Binding {
+                symbol,
+                ty: binding_ty,
+                ..
+            } => {
+                coverage.cover_wildcard();
+                *binding_ty = scrut_ty.clone();
+                locals.insert(*symbol, scrut_ty);
+                Ok(vec![*symbol])
+            }
+            crate::hir::Pattern::Tuple { .. } => Err(self.error(
+                span,
+                TypeCheckKind::Legacy("tuple pattern cannot match an enum value".to_string()),
+            )),
             crate::hir::Pattern::Variant {
                 enum_id: pattern_enum,
                 variant_idx,
-                bindings,
+                fields,
                 ..
             } => {
                 if *pattern_enum != enum_id {
@@ -557,23 +575,85 @@ impl<'a> Checker<'a> {
                             TypeCheckKind::Legacy("variant fields not found".to_string()),
                         )
                     })?;
-                let mut arm_bindings = Vec::with_capacity(bindings.len());
-                for (field_sym, binding_sym, binding_ty) in bindings.iter_mut() {
-                    let declared = field_map.get(field_sym).cloned().ok_or_else(|| {
+                let mut arm_bindings = Vec::new();
+                for fp in fields.iter_mut() {
+                    let declared = field_map.get(&fp.field).cloned().ok_or_else(|| {
                         self.error(
                             span,
                             TypeCheckKind::Legacy(format!(
                                 "no field '{}' on variant",
-                                self.program.interner.resolve(field_sym)
+                                self.program.interner.resolve(&fp.field)
                             )),
                         )
                     })?;
                     let resolved = Self::substitute_params_with_slice(&declared, enum_args);
-                    *binding_ty = resolved.clone();
-                    locals.insert(*binding_sym, resolved);
-                    arm_bindings.push(*binding_sym);
+                    fp.ty = resolved.clone();
+                    // Field sub-patterns are irrefutable in this phase.
+                    self.type_irrefutable_pattern(&mut fp.pattern, &resolved, locals)?;
+                    Self::collect_pattern_bindings(&fp.pattern, &mut arm_bindings);
                 }
                 Ok(arm_bindings)
+            }
+        }
+    }
+
+    /// Type an irrefutable pattern (wildcard, binding, or tuple) against an
+    /// expected type, recording each binding's type into `locals` and the
+    /// pattern node. Used by `let` and by variant field sub-patterns.
+    fn type_irrefutable_pattern(
+        &mut self,
+        pattern: &mut crate::hir::Pattern,
+        expected: &Type,
+        locals: &mut HashMap<SymbolId, Type>,
+    ) -> Result<(), TypeCheckError> {
+        match pattern {
+            crate::hir::Pattern::Wildcard { ty, .. } => {
+                *ty = expected.clone();
+                Ok(())
+            }
+            crate::hir::Pattern::Binding { symbol, ty, .. } => {
+                *ty = expected.clone();
+                locals.insert(*symbol, expected.clone());
+                Ok(())
+            }
+            crate::hir::Pattern::Tuple { elems, ty, span } => match expected {
+                Type::Tuple(elem_types) if elem_types.len() == elems.len() => {
+                    *ty = expected.clone();
+                    for (elem, elem_ty) in elems.iter_mut().zip(elem_types.iter()) {
+                        self.type_irrefutable_pattern(elem, elem_ty, locals)?;
+                    }
+                    Ok(())
+                }
+                other => Err(self.error(
+                    *span,
+                    TypeCheckKind::Legacy(format!(
+                        "tuple pattern with {} elements doesn't match {}",
+                        elems.len(),
+                        self.type_name(other)
+                    )),
+                )),
+            },
+            crate::hir::Pattern::Variant { span, .. } => Err(self.error(
+                *span,
+                TypeCheckKind::Legacy("refutable pattern in irrefutable position".to_string()),
+            )),
+        }
+    }
+
+    /// Collect every symbol bound by a pattern (recursively).
+    fn collect_pattern_bindings(pattern: &crate::hir::Pattern, out: &mut Vec<SymbolId>) {
+        match pattern {
+            crate::hir::Pattern::Wildcard { .. } => {}
+            crate::hir::Pattern::Binding { symbol, .. } => out.push(*symbol),
+            crate::hir::Pattern::Tuple { elems, .. } => {
+                for elem in elems {
+                    Self::collect_pattern_bindings(elem, out);
+                }
+            }
+            crate::hir::Pattern::Variant { fields, .. } => {
+                for fp in fields {
+                    Self::collect_pattern_bindings(&fp.pattern, out);
+                }
             }
         }
     }
@@ -815,11 +895,10 @@ impl<'a> Checker<'a> {
     ) -> Result<(), TypeCheckError> {
         match stmt {
             Stmt::Let {
-                name,
+                pattern,
                 ty,
                 value,
                 span,
-                ..
             } => {
                 if !matches!(ty, Type::Undetermined) {
                     self.apply_expected(value, ty);
@@ -848,33 +927,9 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                locals.insert(*name, ty.clone());
+                let bound_ty = ty.clone();
+                self.type_irrefutable_pattern(pattern, &bound_ty, locals)?;
                 Ok(())
-            }
-            Stmt::LetTuple {
-                names,
-                elem_types,
-                value,
-                span,
-            } => {
-                let val_ty = self.check_expr(value, locals)?;
-                match val_ty {
-                    Type::Tuple(elems) if elems.len() == names.len() => {
-                        for (name, elem) in names.iter().zip(elems.iter()) {
-                            locals.insert(*name, elem.clone());
-                        }
-                        *elem_types = elems;
-                        Ok(())
-                    }
-                    other => Err(self.error(
-                        *span,
-                        TypeCheckKind::Legacy(format!(
-                            "tuple pattern with {} elements doesn't match {}",
-                            names.len(),
-                            self.type_name(&other)
-                        )),
-                    )),
-                }
             }
             Stmt::Assign {
                 target,
@@ -2258,6 +2313,26 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Resolve any lingering inference variables in a pattern's stored types.
+    fn finalize_pattern(&self, pattern: &mut crate::hir::Pattern) {
+        match pattern {
+            crate::hir::Pattern::Wildcard { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Binding { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Tuple { elems, ty, .. } => {
+                *ty = self.finalize_type(ty);
+                for elem in elems {
+                    self.finalize_pattern(elem);
+                }
+            }
+            crate::hir::Pattern::Variant { fields, .. } => {
+                for fp in fields {
+                    fp.ty = self.finalize_type(&fp.ty);
+                    self.finalize_pattern(&mut fp.pattern);
+                }
+            }
+        }
+    }
+
     fn finalize_block(&self, block: &mut Block) -> Result<(), TypeCheckError> {
         for stmt in &mut block.stmts {
             self.finalize_stmt(stmt)?;
@@ -2270,14 +2345,14 @@ impl<'a> Checker<'a> {
 
     fn finalize_stmt(&self, stmt: &mut Stmt) -> Result<(), TypeCheckError> {
         match stmt {
-            Stmt::Let { ty, value, .. } => {
+            Stmt::Let {
+                pattern, ty, value, ..
+            } => {
                 self.finalize_expr(value)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&value.ty);
                 }
-            }
-            Stmt::LetTuple { value, .. } => {
-                self.finalize_expr(value)?;
+                self.finalize_pattern(pattern);
             }
             Stmt::Assign { value, .. } => {
                 self.finalize_expr(value)?;
@@ -2384,6 +2459,7 @@ impl<'a> Checker<'a> {
             ExprKind::Match { scrutinee, arms } => {
                 self.finalize_expr(scrutinee)?;
                 for arm in arms {
+                    self.finalize_pattern(&mut arm.pattern);
                     self.finalize_expr(&mut arm.body)?;
                 }
             }

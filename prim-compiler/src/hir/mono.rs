@@ -98,7 +98,6 @@ impl Mono<'_> {
     fn rewrite_stmt(&mut self, stmt: &mut Stmt, subst: &[Type]) {
         match stmt {
             Stmt::Let { value, .. } => self.rewrite_expr(value, subst),
-            Stmt::LetTuple { value, .. } => self.rewrite_expr(value, subst),
             Stmt::Assign { value, .. } => self.rewrite_expr(value, subst),
             Stmt::DerefAssign { ptr, value, .. } => {
                 self.rewrite_expr(ptr, subst);
@@ -407,16 +406,11 @@ impl Mono<'_> {
 
     fn substitute_stmt(&mut self, stmt: &mut Stmt, subst: &[Type]) {
         match stmt {
-            Stmt::Let { ty, value, .. } => {
-                *ty = self.substitute_type(ty, subst);
-                self.substitute_expr(value, subst);
-            }
-            Stmt::LetTuple {
-                elem_types, value, ..
+            Stmt::Let {
+                pattern, ty, value, ..
             } => {
-                for t in elem_types.iter_mut() {
-                    *t = self.substitute_type(t, subst);
-                }
+                *ty = self.substitute_type(ty, subst);
+                self.substitute_pattern(pattern, subst);
                 self.substitute_expr(value, subst);
             }
             Stmt::Assign { value, .. } => self.substitute_expr(value, subst),
@@ -440,6 +434,25 @@ impl Mono<'_> {
             Stmt::Return { value, .. } => {
                 if let Some(v) = value {
                     self.substitute_expr(v, subst);
+                }
+            }
+        }
+    }
+
+    fn substitute_pattern(&mut self, pattern: &mut super::Pattern, subst: &[Type]) {
+        match pattern {
+            super::Pattern::Wildcard { ty, .. } => *ty = self.substitute_type(ty, subst),
+            super::Pattern::Binding { ty, .. } => *ty = self.substitute_type(ty, subst),
+            super::Pattern::Tuple { elems, ty, .. } => {
+                *ty = self.substitute_type(ty, subst);
+                for elem in elems {
+                    self.substitute_pattern(elem, subst);
+                }
+            }
+            super::Pattern::Variant { fields, .. } => {
+                for fp in fields {
+                    fp.ty = self.substitute_type(&fp.ty, subst);
+                    self.substitute_pattern(&mut fp.pattern, subst);
                 }
             }
         }
@@ -486,14 +499,7 @@ impl Mono<'_> {
             ExprKind::Match { scrutinee, arms } => {
                 self.substitute_expr(scrutinee, subst);
                 for arm in arms {
-                    match &mut arm.pattern {
-                        super::Pattern::Wildcard { .. } => {}
-                        super::Pattern::Variant { bindings, .. } => {
-                            for (_, _, ty) in bindings {
-                                *ty = self.substitute_type(ty, subst);
-                            }
-                        }
-                    }
+                    self.substitute_pattern(&mut arm.pattern, subst);
                     self.substitute_expr(&mut arm.body, subst);
                 }
             }

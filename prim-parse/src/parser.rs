@@ -1601,32 +1601,9 @@ impl<'a> Parser<'a> {
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
         self.consume(TokenKind::Let, "Expected 'let'")?;
 
-        let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
-        if mutable {
-            self.advance();
-        }
-
-        // Tuple-destructuring binding: `let (a, b, ...) = value`.
-        if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
-            self.advance(); // consume '('
-            let mut names = Vec::new();
-            loop {
-                let n_span = self.consume(TokenKind::Identifier, "binding name")?.span;
-                names.push(self.ident(n_span));
-                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                    self.advance();
-                    continue;
-                }
-                break;
-            }
-            self.consume(TokenKind::RightParen, "Expected ')' to close tuple pattern")?;
-            self.consume(TokenKind::Equals, "Expected '=' in let statement")?;
-            let value = self.parse_expression(Precedence::NONE)?;
-            return Ok(Stmt::LetTuple { names, value });
-        }
-
-        let name_span = self.consume(TokenKind::Identifier, "identifier")?.span;
-        let name = self.ident(name_span);
+        // The binding form is a pattern; `let` accepts only the irrefutable
+        // subset (wildcard, binding, tuples thereof), enforced at lower time.
+        let pattern = self.parse_pattern()?;
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
@@ -1641,8 +1618,7 @@ impl<'a> Parser<'a> {
         // Terminator will be handled by parse_statement_list
 
         Ok(Stmt::Let {
-            name,
-            mutable,
+            pattern,
             type_annotation,
             value,
         })
@@ -1812,10 +1788,7 @@ impl<'a> Parser<'a> {
         let pattern = self.parse_pattern()?;
         self.consume(TokenKind::FatArrow, "Expected '=>' after match pattern")?;
         let body = self.parse_expression(Precedence::NONE)?;
-        let span = match &pattern {
-            crate::Pattern::Wildcard { span } => span.cover(body.span),
-            crate::Pattern::Variant { span, .. } => span.cover(body.span),
-        };
+        let span = pattern.span().cover(body.span);
         Ok(crate::MatchArm {
             pattern,
             body,
@@ -1823,22 +1796,67 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a pattern. Recursive: tuple patterns nest sub-patterns, and
+    /// variant fields nest sub-patterns. Disambiguation:
+    /// - `mut x` / bare `x` → a binding
+    /// - `_` → wildcard
+    /// - `(...)` → tuple
+    /// - `A.B { ... }` (a dotted path) → enum variant
     fn parse_pattern(&mut self) -> Result<crate::Pattern, ParseError> {
-        // `_` wildcard.
-        if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
-            let next_text = {
-                let span = self.tokens[self.current].span;
-                span.text(self.source)
-            };
-            if next_text == "_" {
-                let span = self.advance().span;
-                return Ok(crate::Pattern::Wildcard { span });
+        // `mut x` — a mutable binding.
+        if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
+            let mut_span = self.advance().span;
+            let name_span = self
+                .consume(TokenKind::Identifier, "Expected binding name after 'mut'")?
+                .span;
+            let name = self.ident(name_span);
+            return Ok(crate::Pattern::Binding {
+                name,
+                mutable: true,
+                span: mut_span.cover(name_span),
+            });
+        }
+
+        // `(a, b, ...)` — a tuple pattern.
+        if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+            let open = self.advance().span;
+            let mut elems = Vec::new();
+            if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                elems.push(self.parse_pattern()?);
+                while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                    if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                        break;
+                    }
+                    elems.push(self.parse_pattern()?);
+                }
             }
+            let close =
+                self.consume(TokenKind::RightParen, "Expected ')' to close tuple pattern")?;
+            return Ok(crate::Pattern::Tuple {
+                elems,
+                span: open.cover(close.span),
+            });
         }
 
         let first_span = self
-            .consume(TokenKind::Identifier, "Expected enum name in pattern")?
+            .consume(TokenKind::Identifier, "Expected pattern")?
             .span;
+        if first_span.text(self.source) == "_" {
+            return Ok(crate::Pattern::Wildcard { span: first_span });
+        }
+
+        // A bare identifier (no `.`) is a binding; a dotted path is an
+        // enum-variant pattern.
+        if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
+            let name = self.ident(first_span);
+            return Ok(crate::Pattern::Binding {
+                name,
+                mutable: false,
+                span: first_span,
+            });
+        }
+
         let mut segments = vec![self.ident(first_span)];
         while matches!(self.peek_kind(), Some(TokenKind::Dot)) {
             self.advance();
@@ -1847,35 +1865,23 @@ impl<'a> Parser<'a> {
                 .span;
             segments.push(self.ident(segment_span));
         }
-        if segments.len() < 2 {
-            return match self.peek_kind() {
-                Some(found) => Err(ParseError::UnexpectedToken {
-                    expected: "enum variant pattern".to_string(),
-                    found,
-                    span: self.current_span(),
-                }),
-                None => Err(ParseError::UnexpectedEof {
-                    span: self.current_span(),
-                }),
-            };
-        }
         let variant_name = segments.pop().expect("variant segment");
         let enum_path = NamePath { segments };
-        let (bindings, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+        let (fields, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
             self.advance(); // consume '{'
-            let mut bindings = Vec::new();
+            let mut fields = Vec::new();
             if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
-                bindings.push(self.parse_pattern_binding()?);
+                fields.push(self.parse_field_pattern()?);
                 while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                     self.advance();
                     if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
                         break;
                     }
-                    bindings.push(self.parse_pattern_binding()?);
+                    fields.push(self.parse_field_pattern()?);
                 }
             }
             let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
-            (bindings, close.span)
+            (fields, close.span)
         } else {
             (Vec::new(), variant_name.span)
         };
@@ -1883,28 +1889,30 @@ impl<'a> Parser<'a> {
         Ok(crate::Pattern::Variant {
             enum_path,
             variant_name,
-            bindings,
+            fields,
             span,
         })
     }
 
-    fn parse_pattern_binding(&mut self) -> Result<crate::PatternBinding, ParseError> {
+    fn parse_field_pattern(&mut self) -> Result<crate::FieldPattern, ParseError> {
         let field_span = self
             .consume(TokenKind::Identifier, "Expected field name in pattern")?
             .span;
         let field = self.ident(field_span);
-        // `name: alias` lets the binding differ from the field name;
-        // bare `name` introduces a local with the field's own name.
-        let binding = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+        // `name: <pattern>` matches the field against a sub-pattern; bare
+        // `name` is shorthand for `name: name` — a binding of the field's
+        // own name.
+        let pattern = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance();
-            let alias_span = self
-                .consume(TokenKind::Identifier, "Expected binding name after ':'")?
-                .span;
-            self.ident(alias_span)
+            self.parse_pattern()?
         } else {
-            field
+            crate::Pattern::Binding {
+                name: field,
+                mutable: false,
+                span: field_span,
+            }
         };
-        Ok(crate::PatternBinding { field, binding })
+        Ok(crate::FieldPattern { field, pattern })
     }
 
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token, ParseError> {

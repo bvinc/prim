@@ -219,34 +219,11 @@ fn emit_block(f: &mut Function, block: &hir::Block, ctx: &EmitCtx) -> Result<(),
 
 fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), WasmError> {
     match stmt {
-        hir::Stmt::Let { name, value, .. } => {
+        hir::Stmt::Let { pattern, value, .. } => {
+            // Evaluate the initializer, leaving it on the stack, then bind it
+            // by walking the (irrefutable) pattern.
             emit_expr(f, value, ctx)?;
-            if let Some(&idx) = ctx.locals.get(name) {
-                f.instruction(&Instruction::LocalSet(idx));
-            }
-        }
-        hir::Stmt::LetTuple {
-            names,
-            elem_types,
-            value,
-            ..
-        } => {
-            // Evaluate the tuple once into a scratch local, then load each
-            // element into its binding. (Scratch reserved first to match the
-            // pre-walk order.)
-            let counter = ctx.scratch_counter.get();
-            ctx.scratch_counter.set(counter + 1);
-            let ptr_local = ctx.scratch_base + counter;
-            emit_expr(f, value, ctx)?;
-            f.instruction(&Instruction::LocalSet(ptr_local));
-            let layout = compute_tuple_layout(elem_types);
-            for (name, (offset, ty)) in names.iter().zip(layout.elems.iter()) {
-                f.instruction(&Instruction::LocalGet(ptr_local));
-                emit_field_load(f, ty, *offset);
-                if let Some(&idx) = ctx.locals.get(name) {
-                    f.instruction(&Instruction::LocalSet(idx));
-                }
-            }
+            emit_bind(f, pattern, ctx);
         }
         hir::Stmt::Assign { target, value, .. } => {
             emit_expr(f, value, ctx)?;
@@ -970,9 +947,18 @@ fn emit_match_arm_chain(
         hir::Pattern::Wildcard { .. } => {
             emit_expr(f, &arm.body, ctx)?;
         }
+        // A bare binding is an irrefutable catch-all: bind the whole
+        // scrutinee, then run the body unconditionally.
+        hir::Pattern::Binding { symbol, .. } => {
+            if let Some(&local) = ctx.locals.get(symbol) {
+                f.instruction(&Instruction::LocalGet(scrutinee_local));
+                f.instruction(&Instruction::LocalSet(local));
+            }
+            emit_expr(f, &arm.body, ctx)?;
+        }
         hir::Pattern::Variant {
             variant_idx,
-            bindings,
+            fields,
             ..
         } => {
             f.instruction(&Instruction::LocalGet(scrutinee_local));
@@ -989,13 +975,18 @@ fn emit_match_arm_chain(
             }
             ctx.enter_ctrl();
 
-            emit_match_bindings(f, scrutinee_local, enum_id, *variant_idx, bindings, ctx);
+            emit_match_bindings(f, scrutinee_local, enum_id, *variant_idx, fields, ctx);
             emit_expr(f, &arm.body, ctx)?;
 
             f.instruction(&Instruction::Else);
             emit_match_arm_chain(f, scrutinee_local, enum_id, arms, index + 1, result_ty, ctx)?;
             f.instruction(&Instruction::End);
             ctx.exit_ctrl();
+        }
+        hir::Pattern::Tuple { .. } => {
+            // Scrutinee is always an enum; a tuple pattern is a type error
+            // rejected before codegen.
+            f.instruction(&Instruction::Unreachable);
         }
     }
 
@@ -1007,7 +998,7 @@ fn emit_match_bindings(
     scrutinee_local: u32,
     enum_id: hir::EnumId,
     variant_idx: u32,
-    bindings: &[(hir::InternSymbol, hir::SymbolId, hir::Type)],
+    fields: &[hir::FieldPattern],
     ctx: &EmitCtx,
 ) {
     let variant = match ctx
@@ -1015,28 +1006,67 @@ fn emit_match_bindings(
         .get(&enum_id)
         .and_then(|layout| layout.variants.get(variant_idx as usize))
     {
-        Some(v) => v,
+        Some(v) => v.clone(),
         None => {
             f.instruction(&Instruction::Unreachable);
             return;
         }
     };
 
-    for (field_sym, binding_sym, _) in bindings {
-        let (payload_offset, field_ty) = match variant.fields.get(field_sym) {
+    for fp in fields {
+        let (payload_offset, field_ty) = match variant.fields.get(&fp.field) {
             Some(t) => t.clone(),
             None => {
                 f.instruction(&Instruction::Unreachable);
                 continue;
             }
         };
-        let Some(&local) = ctx.locals.get(binding_sym) else {
-            f.instruction(&Instruction::Unreachable);
-            continue;
-        };
+        // Load the field value, then bind it via its (irrefutable) sub-pattern.
         f.instruction(&Instruction::LocalGet(scrutinee_local));
         emit_field_load(f, &field_ty, 8 + payload_offset);
-        f.instruction(&Instruction::LocalSet(local));
+        emit_bind(f, &fp.pattern, ctx);
+    }
+}
+
+/// Bind a value already on the operand stack against an irrefutable pattern,
+/// consuming it.
+fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
+    match pattern {
+        hir::Pattern::Wildcard { ty, .. } => {
+            if produces_value(ty) {
+                f.instruction(&Instruction::Drop);
+            }
+        }
+        hir::Pattern::Binding { symbol, .. } => {
+            if let Some(&idx) = ctx.locals.get(symbol) {
+                f.instruction(&Instruction::LocalSet(idx));
+            } else {
+                f.instruction(&Instruction::Drop);
+            }
+        }
+        hir::Pattern::Tuple { elems, ty, .. } => {
+            // Stash the tuple pointer in a scratch local, then load and bind
+            // each element. Scratch is reserved here (after the value was
+            // produced) to match the pre-walk order.
+            let counter = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(counter + 1);
+            let ptr_local = ctx.scratch_base + counter;
+            f.instruction(&Instruction::LocalSet(ptr_local));
+            let elem_types: Vec<hir::Type> = match ty {
+                hir::Type::Tuple(ts) => ts.clone(),
+                _ => Vec::new(),
+            };
+            let layout = compute_tuple_layout(&elem_types);
+            for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
+                f.instruction(&Instruction::LocalGet(ptr_local));
+                emit_field_load(f, elem_ty, *offset);
+                emit_bind(f, elem, ctx);
+            }
+        }
+        hir::Pattern::Variant { .. } => {
+            // Refutable; never reached in an irrefutable position.
+            f.instruction(&Instruction::Unreachable);
+        }
     }
 }
 

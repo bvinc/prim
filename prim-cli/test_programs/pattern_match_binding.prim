@@ -1,0 +1,29 @@
+import std.io.println
+
+enum MaybeI32 {
+    None,
+    Some { value: i32 },
+}
+
+// Field sub-patterns: `value: x` renames the binding, `value: _` discards it.
+fn describe(m: MaybeI32) -> i32 {
+    return match m {
+        MaybeI32.Some { value: x } => x,
+        MaybeI32.None => 0i32,
+    }
+}
+
+// A bare binding arm is an irrefutable catch-all that binds the whole
+// scrutinee (here, the enum value itself).
+fn unwrap_or_zero(m: MaybeI32) -> i32 {
+    return match m {
+        MaybeI32.Some { value } => value,
+        rest => describe(rest),
+    }
+}
+
+fn main() {
+    println(describe(MaybeI32.Some { value = 5i32 }))
+    println(describe(MaybeI32.None))
+    println(unwrap_or_zero(MaybeI32.None))
+}

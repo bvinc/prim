@@ -199,31 +199,53 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-/// Pattern syntax in a match arm. Kept minimal for phase 1: just unit
-/// and struct-like variant patterns, plus a wildcard. No nesting, no
-/// guards, no literal patterns.
+/// A pattern, used by both `let` bindings and `match` arms. Patterns
+/// nest recursively. `let` accepts only the irrefutable subset
+/// (wildcard, binding, and tuples thereof); `match` accepts the full
+/// set.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
-    Wildcard {
+    /// `_` — matches anything, binds nothing.
+    Wildcard { span: Span },
+    /// A bare identifier — matches anything and binds it to a name. The
+    /// `mutable` flag carries `let mut` through to the binding.
+    Binding {
+        name: Ident,
+        mutable: bool,
         span: Span,
     },
+    /// `(a, b, ...)` — matches a tuple element-wise.
+    Tuple { elems: Vec<Pattern>, span: Span },
+    /// A struct-like enum variant, e.g. `Some { value: x }`. Field
+    /// sub-patterns bind the payload.
     Variant {
         enum_path: NamePath,
         variant_name: Ident,
-        /// `field name → binding name` pairs. Empty for unit variants.
-        bindings: Vec<PatternBinding>,
+        /// `field name → sub-pattern` pairs. Empty for unit variants.
+        fields: Vec<FieldPattern>,
         span: Span,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PatternBinding {
+pub struct FieldPattern {
     /// Field name on the variant.
     pub field: Ident,
-    /// Local binding name introduced into the arm body's scope. When
-    /// the source writes `Some { value }`, `field` and `binding` are
-    /// the same; `Some { value: x }` lets them differ.
-    pub binding: Ident,
+    /// Sub-pattern matched against the field's value. When the source
+    /// writes `Some { value }`, this is a `Binding` named `value`;
+    /// `Some { value: x }` makes it a `Binding` named `x`.
+    pub pattern: Pattern,
+}
+
+impl Pattern {
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard { span }
+            | Pattern::Binding { span, .. }
+            | Pattern::Tuple { span, .. }
+            | Pattern::Variant { span, .. } => *span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -284,15 +306,8 @@ pub struct Block {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
-        name: Ident,
-        mutable: bool,
+        pattern: Pattern,
         type_annotation: Option<Type>,
-        value: Expr,
-    },
-    /// Tuple-destructuring binding: `let (a, b, ...) = value`. Each name binds
-    /// the corresponding tuple element.
-    LetTuple {
-        names: Vec<Ident>,
         value: Expr,
     },
     Assign {

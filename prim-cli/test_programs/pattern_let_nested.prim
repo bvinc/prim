@@ -1,0 +1,17 @@
+import std.io.println
+
+// `let` patterns nest: tuples within tuples, wildcards that discard, and
+// bindings, all driven by the unified pattern system.
+fn main() {
+    let nested = ((1i32, 2i32), 3i32)
+    let ((a, b), c) = nested
+    println(a + b + c)
+
+    // `_` discards an element.
+    let (_, second) = (10i32, 20i32)
+    println(second)
+
+    // A whole-value discard still evaluates the initializer.
+    let _ = 99i32
+    println(second)
+}
