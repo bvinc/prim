@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["prim-tok", "prim-parse", "prim-codegen"]
+
+[package]
+name = "prim"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "prim"
+path = "src/main.rs"
+
+[dependencies]
+prim-parse = { path = "prim-parse" }
+prim-codegen = { path = "prim-codegen" }
+
+[workspace.lints.clippy]
+uninlined_format_args = "allow"
+
+[lints]
+workspace = true

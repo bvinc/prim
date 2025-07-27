@@ -1,0 +1,15 @@
+[package]
+name = "prim-codegen"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+prim-parse = { path = "../prim-parse" }
+cranelift = "0.112"
+cranelift-module = "0.112"
+cranelift-object = "0.112"
+cranelift-jit = "0.112"
+cranelift-native = "0.112"

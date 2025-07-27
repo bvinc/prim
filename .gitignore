@@ -1,0 +1,25 @@
+# Rust build artifacts
+/target
+
+# Prim compiler output files
+output
+output.o
+output.s
+output.c
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Nix
+result
+result-*
+
+# direnv
+.direnv/

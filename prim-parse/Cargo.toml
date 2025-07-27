@@ -1,0 +1,10 @@
+[package]
+name = "prim-parse"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+prim-tok = { path = "../prim-tok" }
