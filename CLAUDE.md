@@ -111,6 +111,40 @@ The compiler requires:
 - **GCC** for linking with C runtime
 - **Cranelift 0.112** crates for code generation
 
+## Git Commit Guidelines
+
+When making commits to this project, follow these conventions:
+
+### Commit Format
+- **No type prefixes** (no "feat:", "fix:", etc.)
+- **Imperative mood**: "add feature" not "added feature"  
+- **First line under 50 characters** when possible
+- **Never include Claude signatures** or AI attributions
+- **Descriptive body** for complex changes (wrap at 72 chars)
+
+### Examples
+```
+Good:
+add support for floating point literals
+refactor error handling to use custom types
+fix segfault in printf integration
+
+Bad:
+feat: add support for floating point literals  
+Added support for floating point literals
+🤖 Generated with Claude Code
+```
+
+### Multi-line Format
+```
+add comprehensive error handling system
+
+- Replace all panic!() calls with Result returns
+- Add dedicated error.rs files for each compiler crate  
+- Implement Display trait for user-friendly messages
+- Add test coverage for error conditions
+```
+
 ## Implementation Notes
 
 The current implementation provides a solid foundation for expanding the Prim language with additional features, better error messages, and potentially new target platforms.
