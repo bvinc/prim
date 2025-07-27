@@ -318,6 +318,7 @@ version = "0.1.0"
 dependencies = [
  "prim-codegen",
  "prim-parse",
+ "prim-tok",
 ]
 
 [[package]]

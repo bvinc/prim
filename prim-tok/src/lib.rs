@@ -1,3 +1,6 @@
+mod error;
+pub use error::{TokenError, TokenResult};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Literals
@@ -69,11 +72,11 @@ impl<'a> Tokenizer<'a> {
         }
     }
     
-    pub fn tokenize(&mut self) -> Vec<Token<'a>> {
+    pub fn tokenize(&mut self) -> TokenResult<Vec<Token<'a>>> {
         let mut tokens = Vec::new();
         
         while self.current.is_some() {
-            let token = self.next_token();
+            let token = self.next_token()?;
             tokens.push(token);
         }
         
@@ -83,158 +86,156 @@ impl<'a> Tokenizer<'a> {
             position: self.position,
         });
         
-        tokens
+        Ok(tokens)
     }
     
-    fn next_token(&mut self) -> Token<'a> {
+    fn next_token(&mut self) -> TokenResult<Token<'a>> {
         let start_pos = self.position;
         let ch = self.current_char();
         
         match ch {
             ' ' | '\t' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Whitespace,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '\n' | '\r' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Newline,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '+' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Plus,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '-' => {
                 self.advance();
                 if self.current_char() == '>' {
                     self.advance();
-                    Token {
+                    Ok(Token {
                         kind: TokenKind::Arrow,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    }
+                    })
                 } else {
-                    Token {
+                    Ok(Token {
                         kind: TokenKind::Minus,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    }
+                    })
                 }
             }
             '*' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Star,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '=' => {
                 self.advance();
                 if self.current_char() == '=' {
                     self.advance();
-                    Token {
+                    Ok(Token {
                         kind: TokenKind::DoubleEquals,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    }
+                    })
                 } else {
-                    Token {
+                    Ok(Token {
                         kind: TokenKind::Equals,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    }
+                    })
                 }
             }
             '(' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::LeftParen,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             ')' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::RightParen,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '{' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::LeftBrace,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '}' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::RightBrace,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             ',' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Comma,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             ':' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Colon,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             ';' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Semicolon,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             '&' => {
                 self.advance();
-                Token {
+                Ok(Token {
                     kind: TokenKind::Ampersand,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                }
+                })
             }
             _ if ch.is_ascii_digit() => self.read_number(start_pos),
             _ if ch.is_ascii_alphabetic() || ch == '_' => self.read_identifier(start_pos),
             _ => {
-                self.advance();
-                Token {
-                    kind: TokenKind::Identifier,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                }
+                Err(TokenError::UnexpectedCharacter { 
+                    ch, 
+                    position: start_pos 
+                })
             }
         }
     }
     
-    fn read_number(&mut self, start_pos: usize) -> Token<'a> {
+    fn read_number(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
         let mut is_float = false;
         
         while self.current.is_some() && (self.current_char().is_ascii_digit() || self.current_char() == '.') {
@@ -254,18 +255,28 @@ impl<'a> Tokenizer<'a> {
             }
         }
         
-        Token {
+        let text = &self.input[start_pos..self.position];
+        
+        // Basic validation - ensure we have at least one digit
+        if text.chars().next().map_or(true, |c| !c.is_ascii_digit()) {
+            return Err(TokenError::InvalidNumber { 
+                text: text.to_string(), 
+                position: start_pos 
+            });
+        }
+        
+        Ok(Token {
             kind: if is_float {
                 TokenKind::FloatLiteral
             } else {
                 TokenKind::IntLiteral
             },
-            text: &self.input[start_pos..self.position],
+            text,
             position: start_pos,
-        }
+        })
     }
     
-    fn read_identifier(&mut self, start_pos: usize) -> Token<'a> {
+    fn read_identifier(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
         while self.current.is_some() && (self.current_char().is_ascii_alphanumeric() || self.current_char() == '_') {
             self.advance();
         }
@@ -293,11 +304,11 @@ impl<'a> Tokenizer<'a> {
             _ => TokenKind::Identifier,
         };
         
-        Token {
+        Ok(Token {
             kind,
             text,
             position: start_pos,
-        }
+        })
     }
     
     fn current_char(&self) -> char {
@@ -319,7 +330,7 @@ mod tests {
     #[test]
     fn test_simple_tokens() {
         let mut tokenizer = Tokenizer::new("let x = 42");
-        let tokens = tokenizer.tokenize();
+        let tokens = tokenizer.tokenize().unwrap();
         
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
@@ -334,7 +345,7 @@ mod tests {
     #[test]
     fn test_type_annotations() {
         let mut tokenizer = Tokenizer::new("let x: u32 = 0u32");
-        let tokens = tokenizer.tokenize();
+        let tokens = tokenizer.tokenize().unwrap();
         
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
@@ -349,7 +360,7 @@ mod tests {
     #[test]
     fn test_function_signature() {
         let mut tokenizer = Tokenizer::new("fn double(x: u32) -> u32");
-        let tokens = tokenizer.tokenize();
+        let tokens = tokenizer.tokenize().unwrap();
         
         // Filter out whitespace for easier testing
         let non_whitespace: Vec<_> = tokens.into_iter()
@@ -374,5 +385,19 @@ mod tests {
         assert_eq!(non_whitespace[7].text, "->");
         assert_eq!(non_whitespace[8].kind, TokenKind::U32);
         assert_eq!(non_whitespace[8].text, "u32");
+    }
+    
+    #[test]
+    fn test_error_unexpected_character() {
+        let mut tokenizer = Tokenizer::new("let x = @");
+        let result = tokenizer.tokenize();
+        
+        match result {
+            Err(TokenError::UnexpectedCharacter { ch, position }) => {
+                assert_eq!(ch, '@');
+                assert_eq!(position, 8);
+            }
+            _ => panic!("Expected UnexpectedCharacter error"),
+        }
     }
 }

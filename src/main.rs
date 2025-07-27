@@ -27,7 +27,7 @@ fn main() {
     let program = match parse(&source_code) {
         Ok(program) => program,
         Err(err) => {
-            eprintln!("Parse error: {:?}", err);
+            eprintln!("{}", err);
             std::process::exit(1);
         }
     };

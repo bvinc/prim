@@ -6,6 +6,9 @@ use cranelift::prelude::*;
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+mod error;
+pub use error::{CodegenError, CodegenResult};
+
 pub struct CraneliftCodeGenerator {
     module: ObjectModule,
     ctx: codegen::Context,
@@ -15,20 +18,23 @@ pub struct CraneliftCodeGenerator {
 }
 
 impl CraneliftCodeGenerator {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> CodegenResult<Self> {
         let mut flag_builder = settings::builder();
-        flag_builder.set("use_colocated_libcalls", "false")?;
-        flag_builder.set("is_pic", "false")?;
-        let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
-        });
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder))?;
+        flag_builder.set("use_colocated_libcalls", "false")
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
+        flag_builder.set("is_pic", "false")
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
+        let isa_builder = cranelift_native::builder().map_err(|msg| {
+            CodegenError::UnsupportedTarget { message: msg.to_string() }
+        })?;
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder))
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         let builder = ObjectBuilder::new(
             isa,
             "prim_program",
             cranelift_module::default_libcall_names(),
-        )?;
+        ).map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         let module = ObjectModule::new(builder);
         let ctx = module.make_context();
         
@@ -41,7 +47,7 @@ impl CraneliftCodeGenerator {
         })
     }
     
-    pub fn generate(mut self, program: &Program) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub fn generate(mut self, program: &Program) -> CodegenResult<Vec<u8>> {
         // Create println function first
         let println_func_id = self.create_println_function()?;
         
@@ -49,7 +55,8 @@ impl CraneliftCodeGenerator {
         let mut sig = self.module.make_signature();
         sig.returns.push(AbiParam::new(types::I32));
         
-        let main_func_id = self.module.declare_function("main", Linkage::Export, &sig)?;
+        let main_func_id = self.module.declare_function("main", Linkage::Export, &sig)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Generate function body
         self.ctx.func.signature = sig;
@@ -74,12 +81,13 @@ impl CraneliftCodeGenerator {
         }
         
         // Define the function
-        self.module.define_function(main_func_id, &mut self.ctx)?;
+        self.module.define_function(main_func_id, &mut self.ctx)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         self.module.clear_context(&mut self.ctx);
         
         // Finalize the object
         let product = self.module.finish();
-        Ok(product.emit()?)
+        product.emit().map_err(|e| CodegenError::CraneliftError { message: e.to_string() })
     }
     
     fn generate_statement_impl(
@@ -89,7 +97,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
         println_func_id: cranelift_module::FuncId
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> CodegenResult<()> {
         match stmt {
             Stmt::Let { name, type_annotation: _, value } => {
                 // Create a variable
@@ -119,7 +127,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         expr: &Expr,
         println_func_id: cranelift_module::FuncId
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> CodegenResult<Value> {
         match expr {
             Expr::IntLiteral(value) => {
                 // Parse the literal (handle type suffixes like 42u32)
@@ -138,7 +146,7 @@ impl CraneliftCodeGenerator {
                 if let Some(&var) = variables.get(name) {
                     Ok(builder.use_var(var))
                 } else {
-                    panic!("Undefined variable: {}", name);
+                    Err(CodegenError::UndefinedVariable { name: name.clone() })
                 }
             }
             Expr::Binary { left, op, right } => {
@@ -171,13 +179,13 @@ impl CraneliftCodeGenerator {
                     // Return void value (0)
                     Ok(builder.ins().iconst(types::I64, 0))
                 } else {
-                    panic!("Unsupported function call: {}", name);
+                    Err(CodegenError::UnsupportedFunctionCall { name: name.clone() })
                 }
             }
         }
     }
     
-    fn create_println_function(&mut self) -> Result<cranelift_module::FuncId, Box<dyn std::error::Error>> {
+    fn create_println_function(&mut self) -> CodegenResult<cranelift_module::FuncId> {
         // Create printf function signature (from C library)
         let mut printf_sig = self.module.make_signature();
         printf_sig.params.push(AbiParam::new(types::I64)); // format string pointer
@@ -185,23 +193,27 @@ impl CraneliftCodeGenerator {
         printf_sig.returns.push(AbiParam::new(types::I32)); // return value
         
         // Declare printf as external function
-        let printf_func_id = self.module.declare_function("printf", Linkage::Import, &printf_sig)?;
+        let printf_func_id = self.module.declare_function("printf", Linkage::Import, &printf_sig)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Create println function signature
         let mut println_sig = self.module.make_signature();
         println_sig.params.push(AbiParam::new(types::I64));
         
         // Declare println function
-        let println_func_id = self.module.declare_function("println", Linkage::Local, &println_sig)?;
+        let println_func_id = self.module.declare_function("println", Linkage::Local, &println_sig)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Create format string data
         let format_string = "%ld\n\0"; // format for long integer with newline
-        let format_data_id = self.module.declare_data("format_string", Linkage::Local, true, false)?;
+        let format_data_id = self.module.declare_data("format_string", Linkage::Local, true, false)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Define the format string data
         let mut format_data_desc = cranelift_module::DataDescription::new();
         format_data_desc.define(format_string.as_bytes().to_vec().into_boxed_slice());
-        self.module.define_data(format_data_id, &format_data_desc)?;
+        self.module.define_data(format_data_id, &format_data_desc)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Create function context
         let mut func_ctx = cranelift::codegen::Context::new();
@@ -233,7 +245,8 @@ impl CraneliftCodeGenerator {
         }
         
         // Define the function
-        self.module.define_function(println_func_id, &mut func_ctx)?;
+        self.module.define_function(println_func_id, &mut func_ctx)
+            .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         self.module.clear_context(&mut func_ctx);
         
         Ok(println_func_id)
@@ -241,7 +254,7 @@ impl CraneliftCodeGenerator {
     
 }
 
-pub fn generate_object_code(program: &Program) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn generate_object_code(program: &Program) -> CodegenResult<Vec<u8>> {
     let generator = CraneliftCodeGenerator::new()?;
     generator.generate(program)
 }
@@ -290,5 +303,31 @@ mod tests {
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
         assert!(!code.is_empty());
+    }
+    
+    #[test]
+    fn test_error_undefined_variable() {
+        let program = parse("let result = unknown_var").unwrap();
+        let result = generate_object_code(&program);
+        
+        match result {
+            Err(CodegenError::UndefinedVariable { name }) => {
+                assert_eq!(name, "unknown_var");
+            }
+            _ => panic!("Expected UndefinedVariable error"),
+        }
+    }
+    
+    #[test]
+    fn test_error_unsupported_function() {
+        let program = parse("unsupported_func()").unwrap();
+        let result = generate_object_code(&program);
+        
+        match result {
+            Err(CodegenError::UnsupportedFunctionCall { name }) => {
+                assert_eq!(name, "unsupported_func");
+            }
+            _ => panic!("Expected UnsupportedFunctionCall error"),
+        }
     }
 }

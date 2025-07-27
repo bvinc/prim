@@ -12,6 +12,7 @@ name = "prim"
 path = "src/main.rs"
 
 [dependencies]
+prim-tok = { path = "prim-tok" }
 prim-parse = { path = "prim-parse" }
 prim-codegen = { path = "prim-codegen" }
 

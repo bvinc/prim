@@ -60,15 +60,8 @@ pub struct Parser<'a> {
     current: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParseError {
-    UnexpectedToken {
-        expected: String,
-        found: TokenKind,
-        position: usize,
-    },
-    UnexpectedEof,
-}
+mod error;
+pub use error::ParseError;
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: Vec<Token<'a>>) -> Self {
@@ -359,7 +352,7 @@ impl<'a> Parser<'a> {
 
 pub fn parse(input: &str) -> Result<Program, ParseError> {
     let mut tokenizer = Tokenizer::new(input);
-    let tokens = tokenizer.tokenize();
+    let tokens = tokenizer.tokenize()?;
     let mut parser = Parser::new(tokens);
     parser.parse()
 }
@@ -485,6 +478,31 @@ mod tests {
                 }
             }
             _ => panic!("Expected println function call"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_error_unexpected_token() {
+        let result = parse("let = 42");
+        
+        match result {
+            Err(ParseError::UnexpectedToken { expected, found, .. }) => {
+                assert_eq!(expected, "identifier");
+                assert_eq!(found, TokenKind::Equals);
+            }
+            _ => panic!("Expected UnexpectedToken error"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_error_from_tokenizer() {
+        let result = parse("let x = @");
+        
+        match result {
+            Err(ParseError::TokenError(prim_tok::TokenError::UnexpectedCharacter { ch, .. })) => {
+                assert_eq!(ch, '@');
+            }
+            _ => panic!("Expected TokenError from tokenizer"),
         }
     }
 }
