@@ -1,7 +1,7 @@
 mod error;
 pub use error::TokenError;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenKind {
     // Literals
     IntLiteral,
@@ -104,30 +104,9 @@ impl<'a> Tokenizer<'a> {
         let ch = self.current_char();
 
         match ch {
-            ' ' | '\t' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Whitespace,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            '\n' | '\r' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Newline,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            '+' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Plus,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
+            ' ' | '\t' => self.make_simple_token(TokenKind::Whitespace, start_pos),
+            '\n' | '\r' => self.make_simple_token(TokenKind::Newline, start_pos),
+            '+' => self.make_simple_token(TokenKind::Plus, start_pos),
             '-' => {
                 self.advance();
                 if self.current_char() == '>' {
@@ -145,14 +124,7 @@ impl<'a> Tokenizer<'a> {
                     })
                 }
             }
-            '*' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Star,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
+            '*' => self.make_simple_token(TokenKind::Star, start_pos),
             '=' => {
                 self.advance();
                 if self.current_char() == '=' {
@@ -170,62 +142,13 @@ impl<'a> Tokenizer<'a> {
                     })
                 }
             }
-            '(' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::LeftParen,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            ')' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::RightParen,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            '{' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::LeftBrace,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            '}' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::RightBrace,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            ',' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Comma,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            ':' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Colon,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
-            ';' => {
-                self.advance();
-                Ok(Token {
-                    kind: TokenKind::Semicolon,
-                    text: &self.input[start_pos..self.position],
-                    position: start_pos,
-                })
-            }
+            '(' => self.make_simple_token(TokenKind::LeftParen, start_pos),
+            ')' => self.make_simple_token(TokenKind::RightParen, start_pos),
+            '{' => self.make_simple_token(TokenKind::LeftBrace, start_pos),
+            '}' => self.make_simple_token(TokenKind::RightBrace, start_pos),
+            ',' => self.make_simple_token(TokenKind::Comma, start_pos),
+            ':' => self.make_simple_token(TokenKind::Colon, start_pos),
+            ';' => self.make_simple_token(TokenKind::Semicolon, start_pos),
             '&' => {
                 self.advance();
                 Ok(Token {
@@ -333,6 +256,19 @@ impl<'a> Tokenizer<'a> {
             self.current = self.chars.next();
         }
     }
+
+    fn make_simple_token(
+        &mut self,
+        kind: TokenKind,
+        start_pos: usize,
+    ) -> Result<Token<'a>, TokenError> {
+        self.advance();
+        Ok(Token {
+            kind,
+            text: &self.input[start_pos..self.position],
+            position: start_pos,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -410,7 +346,11 @@ mod tests {
                 assert_eq!(ch, '@');
                 assert_eq!(position, 8);
             }
-            _ => panic!("Expected UnexpectedCharacter error"),
+            _ => assert!(
+                false,
+                "Expected UnexpectedCharacter error, got {:?}",
+                result
+            ),
         }
     }
 }

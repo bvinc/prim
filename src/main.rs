@@ -7,12 +7,61 @@ use std::process::Command;
 mod error;
 pub use error::{CompilerError, CompilerResult, PrimError};
 
+#[derive(Debug)]
+enum MainError {
+    InsufficientArguments,
+    InvalidUsage(String),
+    UnknownCommand(String),
+    CompilationError(String),
+    IoError(std::io::Error),
+    LinkingError(String),
+    ExecutionError(String),
+}
+
+impl std::fmt::Display for MainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MainError::InsufficientArguments => write!(f, "Insufficient arguments provided"),
+            MainError::InvalidUsage(usage) => write!(f, "{}", usage),
+            MainError::UnknownCommand(cmd) => write!(f, "Unknown command: {}", cmd),
+            MainError::CompilationError(msg) => write!(f, "Compilation error: {}", msg),
+            MainError::IoError(err) => write!(f, "IO error: {}", err),
+            MainError::LinkingError(msg) => write!(f, "Linking error: {}", msg),
+            MainError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for MainError {}
+
+impl From<std::io::Error> for MainError {
+    fn from(err: std::io::Error) -> Self {
+        MainError::IoError(err)
+    }
+}
+
 fn main() {
+    let exit_code = match run_main() {
+        Ok(code) => code,
+        Err(MainError::InsufficientArguments) => {
+            let args: Vec<String> = env::args().collect();
+            print_help(&args[0]);
+            1
+        }
+        Err(err) => {
+            eprintln!("{}", err);
+            1
+        }
+    };
+
+    std::process::exit(exit_code);
+}
+
+fn run_main() -> Result<i32, MainError> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        print_help(&args[0]);
-        std::process::exit(1);
+        return Err(MainError::InsufficientArguments);
     }
 
     let command = &args[1];
@@ -20,25 +69,32 @@ fn main() {
     match command.as_str() {
         "build" => {
             if args.len() != 3 {
-                eprintln!("Usage: {} build <source.prim>", args[0]);
-                std::process::exit(1);
+                return Err(MainError::InvalidUsage(format!(
+                    "Usage: {} build <source.prim>",
+                    args[0]
+                )));
             }
-            build_program(&args[2]);
+            build_program(&args[2])?;
+            Ok(0)
         }
         "run" => {
             if args.len() != 3 {
-                eprintln!("Usage: {} run <source.prim>", args[0]);
-                std::process::exit(1);
+                return Err(MainError::InvalidUsage(format!(
+                    "Usage: {} run <source.prim>",
+                    args[0]
+                )));
             }
-            run_program(&args[2]);
+            let exit_code = run_program(&args[2])?;
+            Ok(exit_code)
         }
         "help" | "--help" | "-h" => {
             print_help(&args[0]);
+            Ok(0)
         }
         _ => {
             eprintln!("Unknown command: {}", command);
             print_help(&args[0]);
-            std::process::exit(1);
+            Err(MainError::UnknownCommand(command.to_string()))
         }
     }
 }
@@ -59,162 +115,96 @@ fn print_help(program_name: &str) {
     println!("    {} run example.prim", program_name);
 }
 
-fn build_program(filename: &str) {
-    let program = compile_source(filename);
+fn build_program(filename: &str) -> Result<(), MainError> {
+    let program = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = match generate_object_code(&program) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("Code generation error: {}", err);
-            std::process::exit(1);
-        }
-    };
+    let object_code = generate_object_code(&program)
+        .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create executable name from source file name
     let executable_name = filename.trim_end_matches(".prim");
     let obj_filename = format!("{}.o", executable_name);
 
     // Write object code to file
-    if let Err(err) = fs::write(&obj_filename, &object_code) {
-        eprintln!("Error writing object file: {}", err);
-        std::process::exit(1);
-    }
+    fs::write(&obj_filename, &object_code)?;
 
     // Link with GCC to get C runtime library
     let link_output = Command::new("gcc")
         .args([&obj_filename, "-o", executable_name])
-        .output();
+        .output()
+        .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
-    match link_output {
-        Ok(result) => {
-            if result.status.success() {
-                println!("Successfully built executable: {}", executable_name);
+    if link_output.status.success() {
+        println!("Successfully built executable: {}", executable_name);
 
-                // Clean up object file
-                if let Err(err) = fs::remove_file(&obj_filename) {
-                    eprintln!(
-                        "Warning: Could not clean up object file {}: {}",
-                        obj_filename, err
-                    );
-                }
-            } else {
-                eprintln!("Linking failed:");
-                eprint!("{}", String::from_utf8_lossy(&result.stderr));
-                std::process::exit(1);
-            }
+        // Clean up object file
+        if let Err(err) = fs::remove_file(&obj_filename) {
+            eprintln!(
+                "Warning: Could not clean up object file {}: {}",
+                obj_filename, err
+            );
         }
-        Err(err) => {
-            eprintln!("Error running linker: {}", err);
-            eprintln!("Make sure GNU binutils (ld) is installed and in your PATH");
-            std::process::exit(1);
-        }
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&link_output.stderr);
+        Err(MainError::LinkingError(format!(
+            "Linking failed: {}",
+            stderr
+        )))
     }
 }
 
-fn run_program(filename: &str) {
-    let program = compile_source(filename);
+fn run_program(filename: &str) -> Result<i32, MainError> {
+    let program = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = match generate_object_code(&program) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("Code generation error: {}", err);
-            std::process::exit(1);
-        }
-    };
+    let object_code = generate_object_code(&program)
+        .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Write object code to temporary file
     let obj_filename = "temp_output.o";
     let executable_name = "temp_output";
 
-    if let Err(err) = fs::write(obj_filename, &object_code) {
-        eprintln!("Error writing object file: {}", err);
-        std::process::exit(1);
-    }
+    fs::write(obj_filename, &object_code)?;
 
     // Link with GCC to get C runtime library
     let link_output = Command::new("gcc")
         .args([obj_filename, "-o", executable_name])
-        .output();
+        .output()
+        .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
-    match link_output {
-        Ok(result) => {
-            if result.status.success() {
-                // Run the program immediately
-                let run_result = Command::new(format!("./{}", executable_name)).output();
-                match run_result {
-                    Ok(run_output) => {
-                        print!("{}", String::from_utf8_lossy(&run_output.stdout));
-                        if !run_output.stderr.is_empty() {
-                            eprint!("{}", String::from_utf8_lossy(&run_output.stderr));
-                        }
-
-                        // Clean up temporary files before exiting
-                        let _ = fs::remove_file(obj_filename);
-                        let _ = fs::remove_file(executable_name);
-
-                        // Exit with the same code as the executed program
-                        std::process::exit(run_output.status.code().unwrap_or(0));
-                    }
-                    Err(err) => {
-                        // Clean up temporary files before exiting
-                        let _ = fs::remove_file(obj_filename);
-                        let _ = fs::remove_file(executable_name);
-
-                        eprintln!("Error running program: {}", err);
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                eprintln!("Linking failed:");
-                eprint!("{}", String::from_utf8_lossy(&result.stderr));
-                std::process::exit(1);
-            }
-        }
-        Err(err) => {
-            eprintln!("Error running linker: {}", err);
-            eprintln!("Make sure GNU binutils (ld) is installed and in your PATH");
-            std::process::exit(1);
-        }
+    if !link_output.status.success() {
+        let stderr = String::from_utf8_lossy(&link_output.stderr);
+        return Err(MainError::LinkingError(format!(
+            "Linking failed: {}",
+            stderr
+        )));
     }
+
+    // Run the program immediately
+    let run_result = Command::new(format!("./{}", executable_name))
+        .output()
+        .map_err(|err| MainError::ExecutionError(format!("Error running program: {}", err)))?;
+
+    // Print program output
+    print!("{}", String::from_utf8_lossy(&run_result.stdout));
+    if !run_result.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&run_result.stderr));
+    }
+
+    // Clean up temporary files
+    let _ = fs::remove_file(obj_filename);
+    let _ = fs::remove_file(executable_name);
+
+    // Return the same exit code as the executed program
+    Ok(run_result.status.code().unwrap_or(0))
 }
 
-fn compile_source(filename: &str) -> prim_parse::Program {
+fn compile_source(filename: &str) -> Result<prim_parse::Program, MainError> {
     // Read the source file
-    let source_code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(err) => {
-            eprintln!("Error reading file '{}': {}", filename, err);
-            std::process::exit(1);
-        }
-    };
+    let source_code = fs::read_to_string(filename).map_err(MainError::IoError)?;
 
     // Parse the source code
-    match parse(&source_code) {
-        Ok(program) => program,
-        Err(err) => {
-            eprintln!("{}", err);
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Compile source code using unified error handling
-///
-/// This function demonstrates the unified error handling approach
-/// but is not currently used by the CLI (which uses the older pattern)
-#[allow(dead_code)]
-fn compile_source_unified(filename: &str) -> CompilerResult<prim_parse::Program> {
-    // Read the source file
-    let source_code = fs::read_to_string(filename).map_err(|err| {
-        CompilerError::Codegen(prim_codegen::CodegenError::InvalidExpression {
-            message: format!("Failed to read file: {}", err),
-            context: format!("file: {}", filename),
-        })
-    })?;
-
-    // Parse the source code with automatic error conversion
-    let program = parse(&source_code)?;
-    Ok(program)
+    parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))
 }

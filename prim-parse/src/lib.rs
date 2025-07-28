@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(ParseError::UnexpectedToken {
                     expected: "function name".to_string(),
-                    found: self.peek().kind.clone(),
+                    found: self.peek().kind,
                     position: self.peek().position,
                 });
             }
@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(ParseError::UnexpectedToken {
                     expected: "parameter name".to_string(),
-                    found: self.peek().kind.clone(),
+                    found: self.peek().kind,
                     position: self.peek().position,
                 });
             }
@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(ParseError::UnexpectedToken {
                     expected: "identifier".to_string(),
-                    found: self.peek().kind.clone(),
+                    found: self.peek().kind,
                     position: self.peek().position,
                 });
             }
@@ -295,7 +295,7 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(ParseError::UnexpectedToken {
                     expected: "type".to_string(),
-                    found: type_token.kind.clone(),
+                    found: type_token.kind,
                     position: type_token.position,
                 });
             }
@@ -346,7 +346,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     return Err(ParseError::UnexpectedToken {
                         expected: "binary operator".to_string(),
-                        found: token.kind.clone(),
+                        found: token.kind,
                         position: token.position,
                     });
                 }
@@ -426,7 +426,7 @@ impl<'a> Parser<'a> {
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
-                found: token.kind.clone(),
+                found: token.kind,
                 position: token.position,
             }),
         }
@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
         } else {
             Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
-                found: self.peek().kind.clone(),
+                found: self.peek().kind,
                 position: self.peek().position,
             })
         }
@@ -523,7 +523,7 @@ mod tests {
                 assert_eq!(type_annotation, &Some(Type::U32));
                 assert_eq!(value, &Expr::IntLiteral("42".to_string()));
             }
-            _ => panic!("Expected let statement"),
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
 
@@ -542,7 +542,7 @@ mod tests {
                 assert_eq!(type_annotation, &None);
                 assert_eq!(value, &Expr::IntLiteral("42".to_string()));
             }
-            _ => panic!("Expected let statement"),
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
 
@@ -562,12 +562,12 @@ mod tests {
                             assert_eq!(left.as_ref(), &Expr::IntLiteral("5".to_string()));
                             assert_eq!(right.as_ref(), &Expr::IntLiteral("2".to_string()));
                         }
-                        _ => panic!("Expected binary expression"),
+                        _ => panic!("Expected binary expression, got {:?}", expr),
                     }
                 }
-                _ => panic!("Expected binary expression"),
+                _ => panic!("Expected binary expression, got {:?}", expr),
             },
-            _ => panic!("Expected let statement"),
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
 
@@ -587,12 +587,12 @@ mod tests {
                             assert_eq!(left.as_ref(), &Expr::Identifier("x".to_string()));
                             assert_eq!(right.as_ref(), &Expr::IntLiteral("5".to_string()));
                         }
-                        _ => panic!("Expected binary expression"),
+                        _ => panic!("Expected binary expression, got {:?}", expr),
                     }
                 }
-                _ => panic!("Expected binary expression"),
+                _ => panic!("Expected binary expression, got {:?}", expr),
             },
-            _ => panic!("Expected let statement"),
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
 
@@ -607,7 +607,10 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0], Expr::IntLiteral("42".to_string()));
             }
-            _ => panic!("Expected println function call"),
+            _ => panic!(
+                "Expected println function call, got {:?}",
+                &main_func.body[0]
+            ),
         }
     }
 
@@ -626,10 +629,13 @@ mod tests {
                         assert_eq!(left.as_ref(), &Expr::Identifier("x".to_string()));
                         assert_eq!(right.as_ref(), &Expr::IntLiteral("5".to_string()));
                     }
-                    _ => panic!("Expected binary expression"),
+                    _ => panic!("Expected binary expression, got {:?}", expr),
                 }
             }
-            _ => panic!("Expected println function call"),
+            _ => panic!(
+                "Expected println function call, got {:?}",
+                &main_func.body[0]
+            ),
         }
     }
 
@@ -644,7 +650,7 @@ mod tests {
                 assert_eq!(expected, "identifier");
                 assert_eq!(found, TokenKind::Equals);
             }
-            _ => panic!("Expected UnexpectedToken error"),
+            _ => panic!("Expected UnexpectedToken error, got {:?}", result),
         }
     }
 
@@ -658,7 +664,7 @@ mod tests {
             })) => {
                 assert_eq!(ch, '@');
             }
-            _ => panic!("Expected TokenError from tokenizer"),
+            _ => panic!("Expected TokenError from tokenizer, got {:?}", result),
         }
     }
 
@@ -668,7 +674,7 @@ mod tests {
 
         match result {
             Err(ParseError::MissingMainFunction) => {}
-            _ => panic!("Expected MissingMainFunction error"),
+            _ => panic!("Expected MissingMainFunction error, got {:?}", result),
         }
     }
 
@@ -678,7 +684,7 @@ mod tests {
 
         match result {
             Err(ParseError::StatementsOutsideFunction) => {}
-            _ => panic!("Expected StatementsOutsideFunction error"),
+            _ => panic!("Expected StatementsOutsideFunction error, got {:?}", result),
         }
     }
 }

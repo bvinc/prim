@@ -77,7 +77,30 @@ impl CraneliftCodeGenerator {
         function: &Function,
         println_func_id: cranelift_module::FuncId,
     ) -> Result<(), CodegenError> {
-        // Create function signature
+        let sig = self.create_function_signature(function);
+        let linkage = self.determine_linkage(function);
+
+        let func_id = self
+            .module
+            .declare_function(&function.name, linkage, &sig)
+            .map_err(|e| CodegenError::CraneliftError {
+                message: e.to_string(),
+            })?;
+
+        self.generate_function_body(function, println_func_id, sig)?;
+
+        // Define the function
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| CodegenError::CraneliftError {
+                message: e.to_string(),
+            })?;
+        self.module.clear_context(&mut self.ctx);
+
+        Ok(())
+    }
+
+    fn create_function_signature(&mut self, function: &Function) -> Signature {
         let mut sig = self.module.make_signature();
 
         // Add parameters to signature
@@ -92,103 +115,129 @@ impl CraneliftCodeGenerator {
             sig.returns.push(AbiParam::new(types::I64)); // For now, all returns are i64
         }
 
-        // Determine linkage - main is exported, others are local
-        let linkage = if function.name == "main" {
+        sig
+    }
+
+    fn determine_linkage(&self, function: &Function) -> Linkage {
+        if function.name == "main" {
             Linkage::Export
         } else {
             Linkage::Local
-        };
+        }
+    }
 
-        let func_id = self
-            .module
-            .declare_function(&function.name, linkage, &sig)
-            .map_err(|e| CodegenError::CraneliftError {
-                message: e.to_string(),
-            })?;
-
-        // Generate function body
+    fn generate_function_body(
+        &mut self,
+        function: &Function,
+        println_func_id: cranelift_module::FuncId,
+        sig: Signature,
+    ) -> Result<(), CodegenError> {
         self.ctx.func.signature = sig;
 
-        {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
-            let entry_block = builder.create_block();
-            builder.append_block_params_for_function_params(entry_block);
-            builder.switch_to_block(entry_block);
-            builder.seal_block(entry_block);
+        let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
 
-            // Create fresh variable context for this function
-            let mut variables = HashMap::new();
-            let mut variable_counter = 0;
+        let (variables, mut variable_counter) =
+            Self::setup_function_parameters(&mut builder, entry_block, function);
+        let last_expr_value = Self::generate_function_statements(
+            variables,
+            &mut variable_counter,
+            &mut self.module,
+            &mut builder,
+            function,
+            println_func_id,
+        )?;
+        Self::generate_function_return(&mut builder, function, last_expr_value);
 
-            // Add parameters to variables
-            let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
-            for (i, param) in function.parameters.iter().enumerate() {
-                let var = Variable::new(variable_counter);
-                variable_counter += 1;
-                builder.declare_var(var, types::I64);
-                builder.def_var(var, block_params[i]);
-                variables.insert(param.name.clone(), var);
-            }
+        builder.finalize();
+        Ok(())
+    }
 
-            // Generate code for each statement in function body, keeping track of last expression
-            let mut last_expr_value = None;
-            for stmt in &function.body {
-                match stmt {
-                    Stmt::Expr(expr) => {
-                        // Keep track of the last expression value
-                        last_expr_value = Some(Self::generate_expression_impl(
-                            &variables,
-                            &mut self.module,
-                            &mut builder,
-                            expr,
-                            println_func_id,
-                        )?);
-                    }
-                    _ => {
-                        Self::generate_statement_impl(
-                            &mut variables,
-                            &mut variable_counter,
-                            &mut self.module,
-                            &mut builder,
-                            stmt,
-                            println_func_id,
-                        )?;
-                        last_expr_value = None; // Reset if we have a non-expression statement
-                    }
-                }
-            }
+    fn setup_function_parameters(
+        builder: &mut FunctionBuilder,
+        entry_block: Block,
+        function: &Function,
+    ) -> (HashMap<String, Variable>, usize) {
+        let mut variables = HashMap::new();
+        let mut variable_counter = 0;
 
-            // Add return statement
-            if function.name == "main" {
-                // Main function returns 0
-                let zero = builder.ins().iconst(types::I32, 0);
-                builder.ins().return_(&[zero]);
-            } else if function.return_type.is_some() {
-                // Function has return type, return the last expression or default value
-                if let Some(return_val) = last_expr_value {
-                    builder.ins().return_(&[return_val]);
-                } else {
-                    // Return a default value if no expression
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    builder.ins().return_(&[zero]);
-                }
-            } else {
-                // Other functions return void
-                builder.ins().return_(&[]);
-            }
-
-            builder.finalize();
+        // Add parameters to variables
+        let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
+        for (i, param) in function.parameters.iter().enumerate() {
+            let var = Variable::new(variable_counter);
+            variable_counter += 1;
+            builder.declare_var(var, types::I64);
+            builder.def_var(var, block_params[i]);
+            variables.insert(param.name.clone(), var);
         }
 
-        // Define the function
-        self.module
-            .define_function(func_id, &mut self.ctx)
-            .map_err(|e| CodegenError::CraneliftError {
-                message: e.to_string(),
-            })?;
-        self.module.clear_context(&mut self.ctx);
+        (variables, variable_counter)
+    }
 
-        Ok(())
+    fn generate_function_statements(
+        variables: HashMap<String, Variable>,
+        variable_counter: &mut usize,
+        module: &mut ObjectModule,
+        builder: &mut FunctionBuilder,
+        function: &Function,
+        println_func_id: cranelift_module::FuncId,
+    ) -> Result<Option<Value>, CodegenError> {
+        let mut variables = variables;
+        let mut last_expr_value = None;
+
+        for stmt in &function.body {
+            match stmt {
+                Stmt::Expr(expr) => {
+                    last_expr_value = Some(Self::generate_expression_impl(
+                        &variables,
+                        module,
+                        builder,
+                        expr,
+                        println_func_id,
+                    )?);
+                }
+                _ => {
+                    Self::generate_statement_impl(
+                        &mut variables,
+                        variable_counter,
+                        module,
+                        builder,
+                        stmt,
+                        println_func_id,
+                    )?;
+                    last_expr_value = None;
+                }
+            }
+        }
+
+        Ok(last_expr_value)
+    }
+
+    fn generate_function_return(
+        builder: &mut FunctionBuilder,
+        function: &Function,
+        last_expr_value: Option<Value>,
+    ) {
+        if function.name == "main" {
+            // Main function returns 0
+            let zero = builder.ins().iconst(types::I32, 0);
+            builder.ins().return_(&[zero]);
+        } else if function.return_type.is_some() {
+            // Function has return type, return the last expression or default value
+            if let Some(return_val) = last_expr_value {
+                builder.ins().return_(&[return_val]);
+            } else {
+                // Return a default value if no expression
+                let zero = builder.ins().iconst(types::I64, 0);
+                builder.ins().return_(&[zero]);
+            }
+        } else {
+            // Other functions return void
+            builder.ins().return_(&[]);
+        }
     }
 
     fn generate_statement_impl(
@@ -246,14 +295,18 @@ impl CraneliftCodeGenerator {
                     .chars()
                     .take_while(|c| c.is_ascii_digit())
                     .collect::<String>();
-                let num: i64 = num_part.parse().unwrap_or(0);
+                let num: i64 = num_part
+                    .parse()
+                    .map_err(|_| CodegenError::InvalidExpression {
+                        message: format!("Invalid integer literal: {}", value),
+                        context: "number parsing".to_string(),
+                    })?;
                 Ok(builder.ins().iconst(types::I64, num))
             }
-            Expr::FloatLiteral(_) => {
-                // For now, treat floats as integers (truncated)
-                // TODO: Implement proper float support
-                Ok(builder.ins().iconst(types::I64, 0))
-            }
+            Expr::FloatLiteral(value) => Err(CodegenError::InvalidExpression {
+                message: format!("Float literals are not yet supported: {}", value),
+                context: "float literal evaluation".to_string(),
+            }),
             Expr::Identifier(name) => {
                 if let Some(&var) = variables.get(name) {
                     Ok(builder.use_var(var))
@@ -473,7 +526,7 @@ mod tests {
             Err(CodegenError::UndefinedVariable { name, context: _ }) => {
                 assert_eq!(name, "unknown_var");
             }
-            _ => panic!("Expected UndefinedVariable error"),
+            _ => panic!("Expected UndefinedVariable error, got {:?}", result),
         }
     }
 
@@ -486,7 +539,11 @@ mod tests {
             Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
                 assert_eq!(name, "unsupported_func");
             }
-            _ => panic!("Expected UnsupportedFunctionCall error"),
+            _ => assert!(
+                false,
+                "Expected UnsupportedFunctionCall error, got {:?}",
+                result
+            ),
         }
     }
 }
