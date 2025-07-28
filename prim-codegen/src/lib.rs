@@ -1,4 +1,4 @@
-use prim_parse::{Program, Stmt, Expr, BinaryOp};
+use prim_parse::{Program, Stmt, Expr, BinaryOp, Function};
 use std::collections::HashMap;
 
 use cranelift::prelude::*;
@@ -51,11 +51,40 @@ impl CraneliftCodeGenerator {
         // Create println function first
         let println_func_id = self.create_println_function()?;
         
-        // Create main function
-        let mut sig = self.module.make_signature();
-        sig.returns.push(AbiParam::new(types::I32));
+        // Generate all functions
+        for function in &program.functions {
+            self.generate_function(function, println_func_id)?;
+        }
         
-        let main_func_id = self.module.declare_function("main", Linkage::Export, &sig)
+        // Finalize the object
+        let product = self.module.finish();
+        product.emit().map_err(|e| CodegenError::CraneliftError { message: e.to_string() })
+    }
+
+    fn generate_function(&mut self, function: &Function, println_func_id: cranelift_module::FuncId) -> CodegenResult<()> {
+        // Create function signature
+        let mut sig = self.module.make_signature();
+        
+        // Add parameters to signature
+        for _param in &function.parameters {
+            sig.params.push(AbiParam::new(types::I64)); // For now, all params are i64
+        }
+        
+        // Add return type to signature
+        if function.name == "main" {
+            sig.returns.push(AbiParam::new(types::I32)); // main returns int
+        } else if let Some(_return_type) = &function.return_type {
+            sig.returns.push(AbiParam::new(types::I64)); // For now, all returns are i64
+        }
+        
+        // Determine linkage - main is exported, others are local
+        let linkage = if function.name == "main" {
+            Linkage::Export
+        } else {
+            Linkage::Local
+        };
+        
+        let func_id = self.module.declare_function(&function.name, linkage, &sig)
             .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         
         // Generate function body
@@ -68,26 +97,63 @@ impl CraneliftCodeGenerator {
             builder.switch_to_block(entry_block);
             builder.seal_block(entry_block);
             
-            // Generate code for each statement
-            for stmt in &program.statements {
-                Self::generate_statement_impl(&mut self.variables, &mut self.variable_counter, &mut self.module, &mut builder, stmt, println_func_id)?;
+            // Create fresh variable context for this function
+            let mut variables = HashMap::new();
+            let mut variable_counter = 0;
+            
+            // Add parameters to variables
+            let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
+            for (i, param) in function.parameters.iter().enumerate() {
+                let var = Variable::new(variable_counter);
+                variable_counter += 1;
+                builder.declare_var(var, types::I64);
+                builder.def_var(var, block_params[i]);
+                variables.insert(param.name.clone(), var);
             }
             
-            // Return 0 from main
-            let zero = builder.ins().iconst(types::I32, 0);
-            builder.ins().return_(&[zero]);
+            // Generate code for each statement in function body, keeping track of last expression
+            let mut last_expr_value = None;
+            for stmt in &function.body {
+                match stmt {
+                    Stmt::Expr(expr) => {
+                        // Keep track of the last expression value
+                        last_expr_value = Some(Self::generate_expression_impl(&variables, &mut self.module, &mut builder, expr, println_func_id)?);
+                    }
+                    _ => {
+                        Self::generate_statement_impl(&mut variables, &mut variable_counter, &mut self.module, &mut builder, stmt, println_func_id)?;
+                        last_expr_value = None; // Reset if we have a non-expression statement
+                    }
+                }
+            }
+            
+            // Add return statement
+            if function.name == "main" {
+                // Main function returns 0
+                let zero = builder.ins().iconst(types::I32, 0);
+                builder.ins().return_(&[zero]);
+            } else if function.return_type.is_some() {
+                // Function has return type, return the last expression or default value
+                if let Some(return_val) = last_expr_value {
+                    builder.ins().return_(&[return_val]);
+                } else {
+                    // Return a default value if no expression
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[zero]);
+                }
+            } else {
+                // Other functions return void
+                builder.ins().return_(&[]);
+            }
             
             builder.finalize();
         }
         
         // Define the function
-        self.module.define_function(main_func_id, &mut self.ctx)
+        self.module.define_function(func_id, &mut self.ctx)
             .map_err(|e| CodegenError::CraneliftError { message: e.to_string() })?;
         self.module.clear_context(&mut self.ctx);
         
-        // Finalize the object
-        let product = self.module.finish();
-        product.emit().map_err(|e| CodegenError::CraneliftError { message: e.to_string() })
+        Ok(())
     }
     
     fn generate_statement_impl(
@@ -266,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_generate_simple_let() {
-        let program = parse("let x: u32 = 5").unwrap();
+        let program = parse("fn main() { let x: u32 = 5 }").unwrap();
         let object_code = generate_object_code(&program);
         
         // Just check that we get some object code without panicking
@@ -277,7 +343,7 @@ mod tests {
     
     #[test]
     fn test_generate_arithmetic() {
-        let program = parse("let result = 3").unwrap();
+        let program = parse("fn main() { let result = 3 }").unwrap();
         let object_code = generate_object_code(&program);
         
         assert!(object_code.is_ok());
@@ -287,7 +353,7 @@ mod tests {
     
     #[test]
     fn test_generate_println() {
-        let program = parse("println(5)").unwrap();
+        let program = parse("fn main() { println(5) }").unwrap();
         let object_code = generate_object_code(&program);
         
         assert!(object_code.is_ok());
@@ -297,7 +363,7 @@ mod tests {
     
     #[test]
     fn test_generate_complex_expression() {
-        let program = parse("let result = 2 + 3 * 4").unwrap();
+        let program = parse("fn main() { let result = 2 + 3 * 4 }").unwrap();
         let object_code = generate_object_code(&program);
         
         assert!(object_code.is_ok());
@@ -307,7 +373,7 @@ mod tests {
     
     #[test]
     fn test_error_undefined_variable() {
-        let program = parse("let result = unknown_var").unwrap();
+        let program = parse("fn main() { let result = unknown_var }").unwrap();
         let result = generate_object_code(&program);
         
         match result {
@@ -320,7 +386,7 @@ mod tests {
     
     #[test]
     fn test_error_unsupported_function() {
-        let program = parse("unsupported_func()").unwrap();
+        let program = parse("fn main() { unsupported_func() }").unwrap();
         let result = generate_object_code(&program);
         
         match result {

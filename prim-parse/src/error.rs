@@ -9,6 +9,8 @@ pub enum ParseError {
     },
     UnexpectedEof,
     TokenError(TokenError),
+    MissingMainFunction,
+    StatementsOutsideFunction,
 }
 
 impl From<TokenError> for ParseError {
@@ -28,6 +30,12 @@ impl std::fmt::Display for ParseError {
             }
             ParseError::TokenError(token_err) => {
                 write!(f, "Tokenizer {}", token_err)
+            }
+            ParseError::MissingMainFunction => {
+                write!(f, "Parse error: program must have a main function")
+            }
+            ParseError::StatementsOutsideFunction => {
+                write!(f, "Parse error: statements must be inside a function")
             }
         }
     }

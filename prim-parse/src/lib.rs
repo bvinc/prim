@@ -51,8 +51,22 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Function {
+    pub name: String,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Option<Type>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parameter {
+    pub name: String,
+    pub type_annotation: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    pub statements: Vec<Stmt>,
+    pub functions: Vec<Function>,
 }
 
 pub struct Parser<'a> {
@@ -69,7 +83,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
-        let mut statements = Vec::new();
+        let mut functions = Vec::new();
 
         while !self.is_at_end() {
             // Skip whitespace and newlines
@@ -78,11 +92,137 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            let stmt = self.parse_statement()?;
-            statements.push(stmt);
+            // Only allow function definitions at the top level
+            match self.peek().kind {
+                TokenKind::Fn => {
+                    let function = self.parse_function()?;
+                    functions.push(function);
+                }
+                _ => {
+                    return Err(ParseError::StatementsOutsideFunction);
+                }
+            }
         }
 
-        Ok(Program { statements })
+        // Validate that a main function exists
+        if !functions.iter().any(|f| f.name == "main") {
+            return Err(ParseError::MissingMainFunction);
+        }
+
+        Ok(Program { functions })
+    }
+
+    fn parse_function(&mut self) -> Result<Function, ParseError> {
+        self.consume(TokenKind::Fn, "Expected 'fn'")?;
+        self.skip_whitespace();
+
+        let name = match self.peek().kind {
+            TokenKind::Identifier => {
+                let token = self.advance();
+                token.text.to_string()
+            }
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "function name".to_string(),
+                    found: self.peek().kind.clone(),
+                    position: self.peek().position,
+                });
+            }
+        };
+
+        self.skip_whitespace();
+        self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
+        
+        // Parse parameters
+        let parameters = self.parse_parameter_list()?;
+        
+        self.consume(TokenKind::RightParen, "Expected ')'")?;
+        self.skip_whitespace();
+
+        // Parse optional return type
+        let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+            self.advance(); // consume '->'
+            self.skip_whitespace();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        self.skip_whitespace();
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
+
+        // Parse function body
+        let mut body = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+            // Skip whitespace and newlines
+            if matches!(self.peek().kind, TokenKind::Whitespace | TokenKind::Newline) {
+                self.advance();
+                continue;
+            }
+
+            let stmt = self.parse_statement()?;
+            body.push(stmt);
+        }
+
+        self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
+
+        Ok(Function {
+            name,
+            parameters,
+            return_type,
+            body,
+        })
+    }
+
+    fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
+        let mut parameters = Vec::new();
+        
+        self.skip_whitespace();
+        if matches!(self.peek().kind, TokenKind::RightParen) {
+            return Ok(parameters); // Empty parameter list
+        }
+        
+        // Parse first parameter
+        parameters.push(self.parse_parameter()?);
+        
+        // Parse remaining parameters
+        while {
+            self.skip_whitespace();
+            matches!(self.peek().kind, TokenKind::Comma)
+        } {
+            self.advance(); // consume ','
+            self.skip_whitespace();
+            parameters.push(self.parse_parameter()?);
+        }
+        
+        Ok(parameters)
+    }
+
+    fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
+        let name = match self.peek().kind {
+            TokenKind::Identifier => {
+                let token = self.advance();
+                token.text.to_string()
+            }
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "parameter name".to_string(),
+                    found: self.peek().kind.clone(),
+                    position: self.peek().position,
+                });
+            }
+        };
+
+        self.skip_whitespace();
+        self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
+        self.skip_whitespace();
+
+        let type_annotation = self.parse_type()?;
+
+        Ok(Parameter {
+            name,
+            type_annotation,
+        })
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -363,10 +503,13 @@ mod tests {
 
     #[test]
     fn test_parse_let_statement() {
-        let program = parse("let x: u32 = 42").unwrap();
+        let program = parse("fn main() { let x: u32 = 42 }").unwrap();
 
-        assert_eq!(program.statements.len(), 1);
-        match &program.statements[0] {
+        assert_eq!(program.functions.len(), 1);
+        let main_func = &program.functions[0];
+        assert_eq!(main_func.name, "main");
+        assert_eq!(main_func.body.len(), 1);
+        match &main_func.body[0] {
             Stmt::Let {
                 name,
                 type_annotation,
@@ -382,9 +525,10 @@ mod tests {
 
     #[test]
     fn test_parse_let_without_type() {
-        let program = parse("let x = 42").unwrap();
+        let program = parse("fn main() { let x = 42 }").unwrap();
 
-        match &program.statements[0] {
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
             Stmt::Let {
                 name,
                 type_annotation,
@@ -400,9 +544,10 @@ mod tests {
 
     #[test]
     fn test_parse_arithmetic_expression() {
-        let program = parse("let result = x + 5 * 2").unwrap();
+        let program = parse("fn main() { let result = x + 5 * 2 }").unwrap();
 
-        match &program.statements[0] {
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
                 Expr::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Add);
@@ -424,9 +569,10 @@ mod tests {
 
     #[test]
     fn test_parse_arithmetic_expression_2() {
-        let program = parse("let result = x * 5 + 2").unwrap();
+        let program = parse("fn main() { let result = x * 5 + 2 }").unwrap();
 
-        match &program.statements[0] {
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
                 Expr::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Add);
@@ -448,9 +594,10 @@ mod tests {
     
     #[test]
     fn test_parse_println() {
-        let program = parse("println(42)").unwrap();
+        let program = parse("fn main() { println(42) }").unwrap();
         
-        match &program.statements[0] {
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
                 assert_eq!(name, "println");
                 assert_eq!(args.len(), 1);
@@ -462,9 +609,10 @@ mod tests {
     
     #[test]
     fn test_parse_println_with_expression() {
-        let program = parse("println(x + 5)").unwrap();
+        let program = parse("fn main() { println(x + 5) }").unwrap();
         
-        match &program.statements[0] {
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
                 assert_eq!(name, "println");
                 assert_eq!(args.len(), 1);
@@ -483,7 +631,7 @@ mod tests {
     
     #[test]
     fn test_parse_error_unexpected_token() {
-        let result = parse("let = 42");
+        let result = parse("fn main() { let = 42 }");
         
         match result {
             Err(ParseError::UnexpectedToken { expected, found, .. }) => {
@@ -496,13 +644,33 @@ mod tests {
     
     #[test]
     fn test_parse_error_from_tokenizer() {
-        let result = parse("let x = @");
+        let result = parse("fn main() { let x = @ }");
         
         match result {
             Err(ParseError::TokenError(prim_tok::TokenError::UnexpectedCharacter { ch, .. })) => {
                 assert_eq!(ch, '@');
             }
             _ => panic!("Expected TokenError from tokenizer"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_error_missing_main() {
+        let result = parse("fn foo() { let x = 42 }");
+        
+        match result {
+            Err(ParseError::MissingMainFunction) => {},
+            _ => panic!("Expected MissingMainFunction error"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_error_statements_outside_function() {
+        let result = parse("let x = 42");
+        
+        match result {
+            Err(ParseError::StatementsOutsideFunction) => {},
+            _ => panic!("Expected StatementsOutsideFunction error"),
         }
     }
 }
