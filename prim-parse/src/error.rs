@@ -22,8 +22,16 @@ impl From<TokenError> for ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::UnexpectedToken { expected, found, position } => {
-                write!(f, "Parse error at position {}: expected {}, found {:?}", position, expected, found)
+            ParseError::UnexpectedToken {
+                expected,
+                found,
+                position,
+            } => {
+                write!(
+                    f,
+                    "Parse error at position {}: expected {}, found {:?}",
+                    position, expected, found
+                )
             }
             ParseError::UnexpectedEof => {
                 write!(f, "Parse error: unexpected end of file")

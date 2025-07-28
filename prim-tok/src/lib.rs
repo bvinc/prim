@@ -6,7 +6,7 @@ pub enum TokenKind {
     // Literals
     IntLiteral,
     FloatLiteral,
-    
+
     // Keywords
     Let,
     Struct,
@@ -14,32 +14,42 @@ pub enum TokenKind {
     Impl,
     If,
     Println,
-    
+
     // Types
-    U8, I8, U16, I16, U32, I32, U64, I64, Usize, Isize,
-    F32, F64,
-    
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    Usize,
+    Isize,
+    F32,
+    F64,
+
     // Identifiers
     Identifier,
-    
+
     // Operators
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Equals,    // =
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Equals,       // =
     DoubleEquals, // ==
-    Arrow,     // ->
-    
+    Arrow,        // ->
+
     // Punctuation
-    LeftParen,    // (
-    RightParen,   // )
-    LeftBrace,    // {
-    RightBrace,   // }
-    Comma,        // ,
-    Colon,        // :
-    Semicolon,    // ;
-    Ampersand,    // &
-    
+    LeftParen,  // (
+    RightParen, // )
+    LeftBrace,  // {
+    RightBrace, // }
+    Comma,      // ,
+    Colon,      // :
+    Semicolon,  // ;
+    Ampersand,  // &
+
     // Special
     Whitespace,
     Newline,
@@ -71,28 +81,28 @@ impl<'a> Tokenizer<'a> {
             current,
         }
     }
-    
+
     pub fn tokenize(&mut self) -> TokenResult<Vec<Token<'a>>> {
         let mut tokens = Vec::new();
-        
+
         while self.current.is_some() {
             let token = self.next_token()?;
             tokens.push(token);
         }
-        
+
         tokens.push(Token {
             kind: TokenKind::Eof,
             text: "",
             position: self.position,
         });
-        
+
         Ok(tokens)
     }
-    
+
     fn next_token(&mut self) -> TokenResult<Token<'a>> {
         let start_pos = self.position;
         let ch = self.current_char();
-        
+
         match ch {
             ' ' | '\t' => {
                 self.advance();
@@ -226,19 +236,19 @@ impl<'a> Tokenizer<'a> {
             }
             _ if ch.is_ascii_digit() => self.read_number(start_pos),
             _ if ch.is_ascii_alphabetic() || ch == '_' => self.read_identifier(start_pos),
-            _ => {
-                Err(TokenError::UnexpectedCharacter { 
-                    ch, 
-                    position: start_pos 
-                })
-            }
+            _ => Err(TokenError::UnexpectedCharacter {
+                ch,
+                position: start_pos,
+            }),
         }
     }
-    
+
     fn read_number(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
         let mut is_float = false;
-        
-        while self.current.is_some() && (self.current_char().is_ascii_digit() || self.current_char() == '.') {
+
+        while self.current.is_some()
+            && (self.current_char().is_ascii_digit() || self.current_char() == '.')
+        {
             if self.current_char() == '.' {
                 if is_float {
                     break;
@@ -247,24 +257,24 @@ impl<'a> Tokenizer<'a> {
             }
             self.advance();
         }
-        
+
         // Handle type suffixes (e.g., 42u32, 3.14f64)
         if self.current.is_some() && self.current_char().is_ascii_alphabetic() {
             while self.current.is_some() && (self.current_char().is_ascii_alphanumeric()) {
                 self.advance();
             }
         }
-        
+
         let text = &self.input[start_pos..self.position];
-        
+
         // Basic validation - ensure we have at least one digit
         if text.chars().next().is_none_or(|c| !c.is_ascii_digit()) {
-            return Err(TokenError::InvalidNumber { 
-                text: text.to_string(), 
-                position: start_pos 
+            return Err(TokenError::InvalidNumber {
+                text: text.to_string(),
+                position: start_pos,
             });
         }
-        
+
         Ok(Token {
             kind: if is_float {
                 TokenKind::FloatLiteral
@@ -275,12 +285,14 @@ impl<'a> Tokenizer<'a> {
             position: start_pos,
         })
     }
-    
+
     fn read_identifier(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
-        while self.current.is_some() && (self.current_char().is_ascii_alphanumeric() || self.current_char() == '_') {
+        while self.current.is_some()
+            && (self.current_char().is_ascii_alphanumeric() || self.current_char() == '_')
+        {
             self.advance();
         }
-        
+
         let text = &self.input[start_pos..self.position];
         let kind = match text {
             "let" => TokenKind::Let,
@@ -303,18 +315,18 @@ impl<'a> Tokenizer<'a> {
             "f64" => TokenKind::F64,
             _ => TokenKind::Identifier,
         };
-        
+
         Ok(Token {
             kind,
             text,
             position: start_pos,
         })
     }
-    
+
     fn current_char(&self) -> char {
         self.current.unwrap_or('\0')
     }
-    
+
     fn advance(&mut self) {
         if self.current.is_some() {
             self.position += self.current.unwrap().len_utf8();
@@ -331,7 +343,7 @@ mod tests {
     fn test_simple_tokens() {
         let mut tokenizer = Tokenizer::new("let x = 42");
         let tokens = tokenizer.tokenize().unwrap();
-        
+
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
@@ -341,12 +353,12 @@ mod tests {
         assert_eq!(tokens[6].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[6].text, "42");
     }
-    
+
     #[test]
     fn test_type_annotations() {
         let mut tokenizer = Tokenizer::new("let x: u32 = 0u32");
         let tokens = tokenizer.tokenize().unwrap();
-        
+
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
@@ -356,17 +368,18 @@ mod tests {
         assert_eq!(tokens[5].kind, TokenKind::U32);
         assert_eq!(tokens[5].text, "u32");
     }
-    
+
     #[test]
     fn test_function_signature() {
         let mut tokenizer = Tokenizer::new("fn double(x: u32) -> u32");
         let tokens = tokenizer.tokenize().unwrap();
-        
+
         // Filter out whitespace for easier testing
-        let non_whitespace: Vec<_> = tokens.into_iter()
+        let non_whitespace: Vec<_> = tokens
+            .into_iter()
             .filter(|t| !matches!(t.kind, TokenKind::Whitespace))
             .collect();
-        
+
         assert_eq!(non_whitespace[0].kind, TokenKind::Fn);
         assert_eq!(non_whitespace[0].text, "fn");
         assert_eq!(non_whitespace[1].kind, TokenKind::Identifier);
@@ -386,12 +399,12 @@ mod tests {
         assert_eq!(non_whitespace[8].kind, TokenKind::U32);
         assert_eq!(non_whitespace[8].text, "u32");
     }
-    
+
     #[test]
     fn test_error_unexpected_character() {
         let mut tokenizer = Tokenizer::new("let x = @");
         let result = tokenizer.tokenize();
-        
+
         match result {
             Err(TokenError::UnexpectedCharacter { ch, position }) => {
                 assert_eq!(ch, '@');

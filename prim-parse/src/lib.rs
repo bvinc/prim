@@ -132,10 +132,10 @@ impl<'a> Parser<'a> {
 
         self.skip_whitespace();
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
-        
+
         // Parse parameters
         let parameters = self.parse_parameter_list()?;
-        
+
         self.consume(TokenKind::RightParen, "Expected ')'")?;
         self.skip_whitespace();
 
@@ -176,15 +176,15 @@ impl<'a> Parser<'a> {
 
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
-        
+
         self.skip_whitespace();
         if matches!(self.peek().kind, TokenKind::RightParen) {
             return Ok(parameters); // Empty parameter list
         }
-        
+
         // Parse first parameter
         parameters.push(self.parse_parameter()?);
-        
+
         // Parse remaining parameters
         while {
             self.skip_whitespace();
@@ -194,7 +194,7 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             parameters.push(self.parse_parameter()?);
         }
-        
+
         Ok(parameters)
     }
 
@@ -394,10 +394,7 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume '('
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
-                    Ok(Expr::FunctionCall {
-                        name,
-                        args,
-                    })
+                    Ok(Expr::FunctionCall { name, args })
                 } else {
                     Ok(Expr::Identifier(name))
                 }
@@ -427,18 +424,18 @@ impl<'a> Parser<'a> {
             }),
         }
     }
-    
+
     fn parse_argument_list(&mut self) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
-        
+
         self.skip_whitespace();
         if matches!(self.peek().kind, TokenKind::RightParen) {
             return Ok(args); // Empty argument list
         }
-        
+
         // Parse first argument
         args.push(self.parse_expression()?);
-        
+
         // Parse remaining arguments
         while {
             self.skip_whitespace();
@@ -448,7 +445,7 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             args.push(self.parse_expression()?);
         }
-        
+
         Ok(args)
     }
 
@@ -591,11 +588,11 @@ mod tests {
             _ => panic!("Expected let statement"),
         }
     }
-    
+
     #[test]
     fn test_parse_println() {
         let program = parse("fn main() { println(42) }").unwrap();
-        
+
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
@@ -606,11 +603,11 @@ mod tests {
             _ => panic!("Expected println function call"),
         }
     }
-    
+
     #[test]
     fn test_parse_println_with_expression() {
         let program = parse("fn main() { println(x + 5) }").unwrap();
-        
+
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
@@ -628,48 +625,52 @@ mod tests {
             _ => panic!("Expected println function call"),
         }
     }
-    
+
     #[test]
     fn test_parse_error_unexpected_token() {
         let result = parse("fn main() { let = 42 }");
-        
+
         match result {
-            Err(ParseError::UnexpectedToken { expected, found, .. }) => {
+            Err(ParseError::UnexpectedToken {
+                expected, found, ..
+            }) => {
                 assert_eq!(expected, "identifier");
                 assert_eq!(found, TokenKind::Equals);
             }
             _ => panic!("Expected UnexpectedToken error"),
         }
     }
-    
+
     #[test]
     fn test_parse_error_from_tokenizer() {
         let result = parse("fn main() { let x = @ }");
-        
+
         match result {
-            Err(ParseError::TokenError(prim_tok::TokenError::UnexpectedCharacter { ch, .. })) => {
+            Err(ParseError::TokenError(prim_tok::TokenError::UnexpectedCharacter {
+                ch, ..
+            })) => {
                 assert_eq!(ch, '@');
             }
             _ => panic!("Expected TokenError from tokenizer"),
         }
     }
-    
+
     #[test]
     fn test_parse_error_missing_main() {
         let result = parse("fn foo() { let x = 42 }");
-        
+
         match result {
-            Err(ParseError::MissingMainFunction) => {},
+            Err(ParseError::MissingMainFunction) => {}
             _ => panic!("Expected MissingMainFunction error"),
         }
     }
-    
+
     #[test]
     fn test_parse_error_statements_outside_function() {
         let result = parse("let x = 42");
-        
+
         match result {
-            Err(ParseError::StatementsOutsideFunction) => {},
+            Err(ParseError::StatementsOutsideFunction) => {}
             _ => panic!("Expected StatementsOutsideFunction error"),
         }
     }
