@@ -339,10 +339,17 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            let op = match self.advance().kind {
+            let token = self.advance();
+            let op = match token.kind {
                 TokenKind::Plus => BinaryOp::Add,
                 TokenKind::Minus => BinaryOp::Subtract,
-                _ => unreachable!(),
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "binary operator".to_string(),
+                        found: token.kind.clone(),
+                        position: token.position,
+                    });
+                }
             };
             self.skip_whitespace();
             let right = self.parse_multiplication()?;

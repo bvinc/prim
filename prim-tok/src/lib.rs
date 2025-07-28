@@ -1,5 +1,5 @@
 mod error;
-pub use error::{TokenError, TokenResult};
+pub use error::TokenError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -82,7 +82,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn tokenize(&mut self) -> TokenResult<Vec<Token<'a>>> {
+    pub fn tokenize(&mut self) -> Result<Vec<Token<'a>>, TokenError> {
         let mut tokens = Vec::new();
 
         while self.current.is_some() {
@@ -99,7 +99,7 @@ impl<'a> Tokenizer<'a> {
         Ok(tokens)
     }
 
-    fn next_token(&mut self) -> TokenResult<Token<'a>> {
+    fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
         let start_pos = self.position;
         let ch = self.current_char();
 
@@ -243,7 +243,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn read_number(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
+    fn read_number(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         let mut is_float = false;
 
         while self.current.is_some()
@@ -286,7 +286,7 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
-    fn read_identifier(&mut self, start_pos: usize) -> TokenResult<Token<'a>> {
+    fn read_identifier(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         while self.current.is_some()
             && (self.current_char().is_ascii_alphanumeric() || self.current_char() == '_')
         {
@@ -328,8 +328,8 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn advance(&mut self) {
-        if self.current.is_some() {
-            self.position += self.current.unwrap().len_utf8();
+        if let Some(ch) = self.current {
+            self.position += ch.len_utf8();
             self.current = self.chars.next();
         }
     }

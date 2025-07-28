@@ -39,7 +39,7 @@ fn test_codegen_error_undefined_variable() {
     let result = generate_object_code(&program);
 
     match result {
-        Err(CodegenError::UndefinedVariable { name }) => {
+        Err(CodegenError::UndefinedVariable { name, context: _ }) => {
             assert_eq!(name, "unknown_var");
         }
         _ => panic!("Expected CodegenError::UndefinedVariable, got {:?}", result),
@@ -52,7 +52,7 @@ fn test_codegen_error_unsupported_function() {
     let result = generate_object_code(&program);
 
     match result {
-        Err(CodegenError::UnsupportedFunctionCall { name }) => {
+        Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
             assert_eq!(name, "unsupported_func");
         }
         _ => panic!(
@@ -208,4 +208,43 @@ fn test_cli_run_command() {
 
     // Clean up
     let _ = fs::remove_file(test_file);
+}
+
+#[test]
+fn test_unified_error_handling() {
+    // Test that error codes and categories work correctly
+    let parse_result = parse("let x = @");
+    match parse_result {
+        Err(err) => {
+            assert_eq!(err.error_code(), "TOK001"); // UnexpectedCharacter
+            assert_eq!(err.category(), "Tokenization");
+            assert!(err.position().is_some());
+            assert_eq!(err.context(), Some("character scanning"));
+        }
+        Ok(_) => panic!("Expected error for invalid syntax"),
+    }
+
+    // Test parse error codes
+    let parse_result = parse("fn main() { let = 42 }");
+    match parse_result {
+        Err(err) => {
+            assert_eq!(err.error_code(), "PAR001"); // UnexpectedToken
+            assert_eq!(err.category(), "Parsing");
+            assert!(err.position().is_some());
+            assert_eq!(err.context(), Some("syntax parsing"));
+        }
+        Ok(_) => panic!("Expected error for invalid syntax"),
+    }
+
+    // Test codegen error codes
+    let program = parse("fn main() { let x = unknown_var }").unwrap();
+    let result = generate_object_code(&program);
+    match result {
+        Err(err) => {
+            assert_eq!(err.error_code(), "COD001"); // UndefinedVariable
+            assert_eq!(err.category(), "Code Generation");
+            assert_eq!(err.context(), Some("expression evaluation"));
+        }
+        Ok(_) => panic!("Expected error for undefined variable"),
+    }
 }

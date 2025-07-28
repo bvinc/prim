@@ -23,4 +23,33 @@ impl std::fmt::Display for TokenError {
 
 impl std::error::Error for TokenError {}
 
-pub type TokenResult<T> = Result<T, TokenError>;
+/// Implementation of unified error trait for TokenError
+impl TokenError {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            TokenError::UnexpectedCharacter { .. } => "TOK001",
+            TokenError::UnterminatedString { .. } => "TOK002",
+            TokenError::InvalidNumber { .. } => "TOK003",
+        }
+    }
+
+    pub fn category(&self) -> &'static str {
+        "Tokenization"
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        match self {
+            TokenError::UnexpectedCharacter { position, .. } => Some(*position),
+            TokenError::UnterminatedString { position } => Some(*position),
+            TokenError::InvalidNumber { position, .. } => Some(*position),
+        }
+    }
+
+    pub fn context(&self) -> Option<&str> {
+        match self {
+            TokenError::UnexpectedCharacter { .. } => Some("character scanning"),
+            TokenError::UnterminatedString { .. } => Some("string literal"),
+            TokenError::InvalidNumber { .. } => Some("number literal"),
+        }
+    }
+}

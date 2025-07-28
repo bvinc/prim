@@ -4,6 +4,9 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
+mod error;
+pub use error::{CompilerError, CompilerResult, PrimError};
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -195,4 +198,23 @@ fn compile_source(filename: &str) -> prim_parse::Program {
             std::process::exit(1);
         }
     }
+}
+
+/// Compile source code using unified error handling
+///
+/// This function demonstrates the unified error handling approach
+/// but is not currently used by the CLI (which uses the older pattern)
+#[allow(dead_code)]
+fn compile_source_unified(filename: &str) -> CompilerResult<prim_parse::Program> {
+    // Read the source file
+    let source_code = fs::read_to_string(filename).map_err(|err| {
+        CompilerError::Codegen(prim_codegen::CodegenError::InvalidExpression {
+            message: format!("Failed to read file: {}", err),
+            context: format!("file: {}", filename),
+        })
+    })?;
+
+    // Parse the source code with automatic error conversion
+    let program = parse(&source_code)?;
+    Ok(program)
 }

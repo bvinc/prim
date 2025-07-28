@@ -7,7 +7,7 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 mod error;
-pub use error::{CodegenError, CodegenResult};
+pub use error::CodegenError;
 
 pub struct CraneliftCodeGenerator {
     module: ObjectModule,
@@ -16,7 +16,7 @@ pub struct CraneliftCodeGenerator {
 }
 
 impl CraneliftCodeGenerator {
-    pub fn new() -> CodegenResult<Self> {
+    pub fn new() -> Result<Self, CodegenError> {
         let mut flag_builder = settings::builder();
         flag_builder
             .set("use_colocated_libcalls", "false")
@@ -56,7 +56,7 @@ impl CraneliftCodeGenerator {
         })
     }
 
-    pub fn generate(mut self, program: &Program) -> CodegenResult<Vec<u8>> {
+    pub fn generate(mut self, program: &Program) -> Result<Vec<u8>, CodegenError> {
         // Create println function first
         let println_func_id = self.create_println_function()?;
 
@@ -76,7 +76,7 @@ impl CraneliftCodeGenerator {
         &mut self,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
-    ) -> CodegenResult<()> {
+    ) -> Result<(), CodegenError> {
         // Create function signature
         let mut sig = self.module.make_signature();
 
@@ -198,7 +198,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
         println_func_id: cranelift_module::FuncId,
-    ) -> CodegenResult<()> {
+    ) -> Result<(), CodegenError> {
         match stmt {
             Stmt::Let {
                 name,
@@ -238,7 +238,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         expr: &Expr,
         println_func_id: cranelift_module::FuncId,
-    ) -> CodegenResult<Value> {
+    ) -> Result<Value, CodegenError> {
         match expr {
             Expr::IntLiteral(value) => {
                 // Parse the literal (handle type suffixes like 42u32)
@@ -258,7 +258,10 @@ impl CraneliftCodeGenerator {
                 if let Some(&var) = variables.get(name) {
                     Ok(builder.use_var(var))
                 } else {
-                    Err(CodegenError::UndefinedVariable { name: name.clone() })
+                    Err(CodegenError::UndefinedVariable {
+                        name: name.clone(),
+                        context: "expression evaluation".to_string(),
+                    })
                 }
             }
             Expr::Binary { left, op, right } => {
@@ -309,13 +312,16 @@ impl CraneliftCodeGenerator {
                     // Return void value (0)
                     Ok(builder.ins().iconst(types::I64, 0))
                 } else {
-                    Err(CodegenError::UnsupportedFunctionCall { name: name.clone() })
+                    Err(CodegenError::UnsupportedFunctionCall {
+                        name: name.clone(),
+                        context: "function call".to_string(),
+                    })
                 }
             }
         }
     }
 
-    fn create_println_function(&mut self) -> CodegenResult<cranelift_module::FuncId> {
+    fn create_println_function(&mut self) -> Result<cranelift_module::FuncId, CodegenError> {
         // Create printf function signature (from C library)
         let mut printf_sig = self.module.make_signature();
         printf_sig.params.push(AbiParam::new(types::I64)); // format string pointer
@@ -407,7 +413,7 @@ impl CraneliftCodeGenerator {
     }
 }
 
-pub fn generate_object_code(program: &Program) -> CodegenResult<Vec<u8>> {
+pub fn generate_object_code(program: &Program) -> Result<Vec<u8>, CodegenError> {
     let generator = CraneliftCodeGenerator::new()?;
     generator.generate(program)
 }
@@ -464,7 +470,7 @@ mod tests {
         let result = generate_object_code(&program);
 
         match result {
-            Err(CodegenError::UndefinedVariable { name }) => {
+            Err(CodegenError::UndefinedVariable { name, context: _ }) => {
                 assert_eq!(name, "unknown_var");
             }
             _ => panic!("Expected UndefinedVariable error"),
@@ -477,7 +483,7 @@ mod tests {
         let result = generate_object_code(&program);
 
         match result {
-            Err(CodegenError::UnsupportedFunctionCall { name }) => {
+            Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
                 assert_eq!(name, "unsupported_func");
             }
             _ => panic!("Expected UnsupportedFunctionCall error"),
