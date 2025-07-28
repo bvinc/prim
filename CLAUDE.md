@@ -95,10 +95,21 @@ All example Prim programs are in `tests/data/`:
 
 The project maintains high code quality standards:
 
-- **Zero compiler warnings** (enforced)
-- **Zero clippy warnings** (enforced, with `uninlined_format_args` allowed via workspace lints)
-- **Consistent formatting** via rustfmt
+- **Zero compiler warnings** (enforced - code must never have warnings)
+- **Zero clippy warnings** (enforced - code must never have clippy warnings)
+- **Consistent formatting** via rustfmt (code must always be formatted with `cargo fmt` before committing)
 - **Comprehensive error handling** throughout the pipeline
+
+### Pre-commit Requirements
+
+Before committing any code changes, you MUST:
+
+1. **Format the code**: Run `cargo fmt --all` to ensure consistent formatting
+2. **Check for warnings**: Run `cargo build` and ensure zero compiler warnings
+3. **Check clippy**: Run `cargo clippy --all-targets --all-features` and ensure zero clippy warnings
+4. **Run tests**: Run `cargo test` and ensure all tests pass
+
+Any commit that introduces warnings or clippy warnings will be rejected.
 
 ## Troubleshooting
 
