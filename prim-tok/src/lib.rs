@@ -258,7 +258,7 @@ impl<'a> Tokenizer<'a> {
         let text = &self.input[start_pos..self.position];
         
         // Basic validation - ensure we have at least one digit
-        if text.chars().next().map_or(true, |c| !c.is_ascii_digit()) {
+        if text.chars().next().is_none_or(|c| !c.is_ascii_digit()) {
             return Err(TokenError::InvalidNumber { 
                 text: text.to_string(), 
                 position: start_pos 

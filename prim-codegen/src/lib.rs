@@ -13,8 +13,6 @@ pub struct CraneliftCodeGenerator {
     module: ObjectModule,
     ctx: codegen::Context,
     builder_context: FunctionBuilderContext,
-    variables: HashMap<String, Variable>,
-    variable_counter: usize,
 }
 
 impl CraneliftCodeGenerator {
@@ -42,8 +40,6 @@ impl CraneliftCodeGenerator {
             module,
             ctx,
             builder_context: FunctionBuilderContext::new(),
-            variables: HashMap::new(),
-            variable_counter: 0,
         })
     }
     

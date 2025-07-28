@@ -108,3 +108,61 @@ fn test_function_with_return_type() {
     
     assert!(result.is_ok(), "Expected successful compilation with function parameters and return type, got {:?}", result);
 }
+
+#[test]
+fn test_cli_build_command() {
+    use std::process::Command;
+    use std::fs;
+    
+    // Create a simple test program
+    let test_program = "fn main() { println(42) }";
+    let test_file = "test_cli_build.prim";
+    fs::write(test_file, test_program).expect("Failed to write test file");
+    
+    // Test build command
+    let output = Command::new("cargo")
+        .args(["run", "--", "build", test_file])
+        .output()
+        .expect("Failed to execute build command");
+    
+    assert!(output.status.success(), "Build command failed: {}", String::from_utf8_lossy(&output.stderr));
+    
+    // Check that executable was created
+    let executable_name = "test_cli_build";
+    assert!(fs::metadata(executable_name).is_ok(), "Executable was not created");
+    
+    // Test that executable runs correctly
+    let run_output = Command::new(format!("./{}", executable_name))
+        .output()
+        .expect("Failed to run generated executable");
+    
+    assert!(run_output.status.success(), "Generated executable failed to run");
+    assert_eq!(String::from_utf8_lossy(&run_output.stdout).trim(), "42");
+    
+    // Clean up
+    let _ = fs::remove_file(test_file);
+    let _ = fs::remove_file(executable_name);
+}
+
+#[test]
+fn test_cli_run_command() {
+    use std::process::Command;
+    use std::fs;
+    
+    // Create a simple test program
+    let test_program = "fn main() { println(123) }";
+    let test_file = "test_cli_run.prim";
+    fs::write(test_file, test_program).expect("Failed to write test file");
+    
+    // Test run command
+    let output = Command::new("cargo")
+        .args(["run", "--", "run", test_file])
+        .output()
+        .expect("Failed to execute run command");
+    
+    assert!(output.status.success(), "Run command failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "123");
+    
+    // Clean up
+    let _ = fs::remove_file(test_file);
+}

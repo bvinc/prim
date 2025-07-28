@@ -72,14 +72,16 @@ cargo fmt --all
 
 ### Using the Compiler
 ```bash
-# Compile and run a Prim program
-cargo run tests/data/example.prim
+# Build a Prim program to executable
+cargo run -- build tests/data/example.prim
+# Creates executable: tests/data/example
 
-# This will:
-# 1. Parse tests/data/example.prim
-# 2. Generate output.o (object file)
-# 3. Link with GCC to create ./output executable
-# 4. Run ./output and show the result
+# Compile and run a Prim program
+cargo run -- run tests/data/example.prim
+# Compiles and immediately runs the program
+
+# Show help
+cargo run -- help
 ```
 
 ### Test Programs
