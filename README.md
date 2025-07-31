@@ -3,7 +3,7 @@ Prim is a programming language that values simplicity, safety, and a useful and 
 Primitive integer types: u8, i8, u16, i16, u32, i32, u64, i64, usize, isize.
 Primitive floating point types: f32, f64.
 
-===Let expressions===
+## Let expressions
 
 ```
 let x: u32 = 0
@@ -11,7 +11,7 @@ let x: u32 = 0u32
 let x = 0u32
 ```
 
-===Structs===
+## Structs
 
 ```
 struct Point {
@@ -20,7 +20,7 @@ struct Point {
 }
 ```
 
-===Functions===
+## Functions
 
 ```
 fn double(x: u32) -> u32 {
@@ -29,7 +29,7 @@ fn double(x: u32) -> u32 {
 }
 ```
 
-===Methods===
+## Methods
 
 ```
 impl Point {
@@ -39,7 +39,7 @@ impl Point {
 }
 ```
 
-===Control Flow
+## Control Flow
 
 ```
 if x == 5 {
