@@ -116,10 +116,10 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let program = compile_source(filename)?;
+    let (program, source) = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program)
+    let object_code = generate_object_code(&program, &source)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create executable name from source file name
@@ -156,10 +156,10 @@ fn build_program(filename: &str) -> Result<(), MainError> {
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
-    let program = compile_source(filename)?;
+    let (program, source) = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program)
+    let object_code = generate_object_code(&program, &source)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Write object code to temporary file
@@ -201,10 +201,12 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     Ok(run_result.status.code().unwrap_or(0))
 }
 
-fn compile_source(filename: &str) -> Result<prim_parse::Program, MainError> {
+fn compile_source(filename: &str) -> Result<(prim_parse::Program, String), MainError> {
     // Read the source file
     let source_code = fs::read_to_string(filename).map_err(MainError::IoError)?;
 
     // Parse the source code
-    parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))
+    let program =
+        parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
+    Ok((program, source_code))
 }

@@ -56,13 +56,13 @@ impl CraneliftCodeGenerator {
         })
     }
 
-    pub fn generate(mut self, program: &Program) -> Result<Vec<u8>, CodegenError> {
+    pub fn generate(mut self, program: &Program, source: &str) -> Result<Vec<u8>, CodegenError> {
         // Create println function first
         let println_func_id = self.create_println_function()?;
 
         // Generate all functions
         for function in &program.functions {
-            self.generate_function(function, println_func_id)?;
+            self.generate_function(function, println_func_id, source)?;
         }
 
         // Finalize the object
@@ -76,18 +76,19 @@ impl CraneliftCodeGenerator {
         &mut self,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
+        source: &str,
     ) -> Result<(), CodegenError> {
-        let sig = self.create_function_signature(function);
-        let linkage = self.determine_linkage(function);
+        let sig = self.create_function_signature(function, source);
+        let linkage = self.determine_linkage(function, source);
 
         let func_id = self
             .module
-            .declare_function(&function.name, linkage, &sig)
+            .declare_function(function.name.text(source), linkage, &sig)
             .map_err(|e| CodegenError::CraneliftError {
                 message: e.to_string(),
             })?;
 
-        self.generate_function_body(function, println_func_id, sig)?;
+        self.generate_function_body(function, println_func_id, sig, source)?;
 
         // Define the function
         self.module
@@ -100,7 +101,7 @@ impl CraneliftCodeGenerator {
         Ok(())
     }
 
-    fn create_function_signature(&mut self, function: &Function) -> Signature {
+    fn create_function_signature(&mut self, function: &Function, source: &str) -> Signature {
         let mut sig = self.module.make_signature();
 
         // Add parameters to signature
@@ -109,7 +110,7 @@ impl CraneliftCodeGenerator {
         }
 
         // Add return type to signature
-        if function.name == "main" {
+        if function.name.text(source) == "main" {
             sig.returns.push(AbiParam::new(types::I32)); // main returns int
         } else if let Some(_return_type) = &function.return_type {
             sig.returns.push(AbiParam::new(types::I64)); // For now, all returns are i64
@@ -118,8 +119,8 @@ impl CraneliftCodeGenerator {
         sig
     }
 
-    fn determine_linkage(&self, function: &Function) -> Linkage {
-        if function.name == "main" {
+    fn determine_linkage(&self, function: &Function, source: &str) -> Linkage {
+        if function.name.text(source) == "main" {
             Linkage::Export
         } else {
             Linkage::Local
@@ -131,6 +132,7 @@ impl CraneliftCodeGenerator {
         function: &Function,
         println_func_id: cranelift_module::FuncId,
         sig: Signature,
+        source: &str,
     ) -> Result<(), CodegenError> {
         self.ctx.func.signature = sig;
 
@@ -141,7 +143,7 @@ impl CraneliftCodeGenerator {
         builder.seal_block(entry_block);
 
         let (variables, mut variable_counter) =
-            Self::setup_function_parameters(&mut builder, entry_block, function);
+            Self::setup_function_parameters(&mut builder, entry_block, function, source);
         let last_expr_value = Self::generate_function_statements(
             variables,
             &mut variable_counter,
@@ -149,8 +151,9 @@ impl CraneliftCodeGenerator {
             &mut builder,
             function,
             println_func_id,
+            source,
         )?;
-        Self::generate_function_return(&mut builder, function, last_expr_value);
+        Self::generate_function_return(&mut builder, function, last_expr_value, source);
 
         builder.finalize();
         Ok(())
@@ -160,6 +163,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         entry_block: Block,
         function: &Function,
+        source: &str,
     ) -> (HashMap<String, Variable>, usize) {
         let mut variables = HashMap::new();
         let mut variable_counter = 0;
@@ -171,7 +175,7 @@ impl CraneliftCodeGenerator {
             variable_counter += 1;
             builder.declare_var(var, types::I64);
             builder.def_var(var, block_params[i]);
-            variables.insert(param.name.clone(), var);
+            variables.insert(param.name.text(source).to_string(), var);
         }
 
         (variables, variable_counter)
@@ -184,6 +188,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
+        source: &str,
     ) -> Result<Option<Value>, CodegenError> {
         let mut variables = variables;
         let mut last_expr_value = None;
@@ -197,6 +202,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         expr,
                         println_func_id,
+                        source,
                     )?);
                 }
                 _ => {
@@ -207,6 +213,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         stmt,
                         println_func_id,
+                        source,
                     )?;
                     last_expr_value = None;
                 }
@@ -220,8 +227,9 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         function: &Function,
         last_expr_value: Option<Value>,
+        source: &str,
     ) {
-        if function.name == "main" {
+        if function.name.text(source) == "main" {
             // Main function returns 0
             let zero = builder.ins().iconst(types::I32, 0);
             builder.ins().return_(&[zero]);
@@ -247,6 +255,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
         println_func_id: cranelift_module::FuncId,
+        source: &str,
     ) -> Result<(), CodegenError> {
         match stmt {
             Stmt::Let {
@@ -266,16 +275,24 @@ impl CraneliftCodeGenerator {
                     builder,
                     value,
                     println_func_id,
+                    source,
                 )?;
 
                 // Store in variable
                 builder.def_var(var, val);
-                variables.insert(name.clone(), var);
+                variables.insert(name.text(source).to_string(), var);
 
                 Ok(())
             }
             Stmt::Expr(expr) => {
-                Self::generate_expression_impl(variables, module, builder, expr, println_func_id)?;
+                Self::generate_expression_impl(
+                    variables,
+                    module,
+                    builder,
+                    expr,
+                    println_func_id,
+                    source,
+                )?;
                 Ok(())
             }
         }
@@ -287,32 +304,38 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         expr: &Expr,
         println_func_id: cranelift_module::FuncId,
+        source: &str,
     ) -> Result<Value, CodegenError> {
         match expr {
             Expr::IntLiteral(value) => {
                 // Parse the literal (handle type suffixes like 42u32)
-                let num_part = value
+                let value_text = value.text(source);
+                let num_part = value_text
                     .chars()
                     .take_while(|c| c.is_ascii_digit())
                     .collect::<String>();
                 let num: i64 = num_part
                     .parse()
                     .map_err(|_| CodegenError::InvalidExpression {
-                        message: format!("Invalid integer literal: {}", value),
+                        message: format!("Invalid integer literal: {}", value_text),
                         context: "number parsing".to_string(),
                     })?;
                 Ok(builder.ins().iconst(types::I64, num))
             }
             Expr::FloatLiteral(value) => Err(CodegenError::InvalidExpression {
-                message: format!("Float literals are not yet supported: {}", value),
+                message: format!(
+                    "Float literals are not yet supported: {}",
+                    value.text(source)
+                ),
                 context: "float literal evaluation".to_string(),
             }),
             Expr::Identifier(name) => {
-                if let Some(&var) = variables.get(name) {
+                let name_text = name.text(source);
+                if let Some(&var) = variables.get(name_text) {
                     Ok(builder.use_var(var))
                 } else {
                     Err(CodegenError::UndefinedVariable {
-                        name: name.clone(),
+                        name: name_text.to_string(),
                         context: "expression evaluation".to_string(),
                     })
                 }
@@ -324,6 +347,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     left,
                     println_func_id,
+                    source,
                 )?;
                 let right_val = Self::generate_expression_impl(
                     variables,
@@ -331,6 +355,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     right,
                     println_func_id,
+                    source,
                 )?;
 
                 let result = match op {
@@ -345,7 +370,7 @@ impl CraneliftCodeGenerator {
                 Ok(result)
             }
             Expr::FunctionCall { name, args } => {
-                if name == "println" && args.len() == 1 {
+                if name.text(source) == "println" && args.len() == 1 {
                     // Generate the argument
                     let arg_val = Self::generate_expression_impl(
                         variables,
@@ -353,6 +378,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         &args[0],
                         println_func_id,
+                        source,
                     )?;
 
                     // Get function reference
@@ -366,7 +392,7 @@ impl CraneliftCodeGenerator {
                     Ok(builder.ins().iconst(types::I64, 0))
                 } else {
                     Err(CodegenError::UnsupportedFunctionCall {
-                        name: name.clone(),
+                        name: name.text(source).to_string(),
                         context: "function call".to_string(),
                     })
                 }
@@ -466,9 +492,9 @@ impl CraneliftCodeGenerator {
     }
 }
 
-pub fn generate_object_code(program: &Program) -> Result<Vec<u8>, CodegenError> {
+pub fn generate_object_code(program: &Program, source: &str) -> Result<Vec<u8>, CodegenError> {
     let generator = CraneliftCodeGenerator::new()?;
-    generator.generate(program)
+    generator.generate(program, source)
 }
 
 #[cfg(test)]
@@ -478,8 +504,9 @@ mod tests {
 
     #[test]
     fn test_generate_simple_let() {
-        let program = parse("fn main() { let x: u32 = 5 }").unwrap();
-        let object_code = generate_object_code(&program);
+        let source = "fn main() { let x: u32 = 5 }";
+        let program = parse(source).unwrap();
+        let object_code = generate_object_code(&program, source);
 
         // Just check that we get some object code without panicking
         assert!(object_code.is_ok());
@@ -489,8 +516,9 @@ mod tests {
 
     #[test]
     fn test_generate_arithmetic() {
-        let program = parse("fn main() { let result = 3 }").unwrap();
-        let object_code = generate_object_code(&program);
+        let source = "fn main() { let result = 3 }";
+        let program = parse(source).unwrap();
+        let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
@@ -499,8 +527,9 @@ mod tests {
 
     #[test]
     fn test_generate_println() {
-        let program = parse("fn main() { println(5) }").unwrap();
-        let object_code = generate_object_code(&program);
+        let source = "fn main() { println(5) }";
+        let program = parse(source).unwrap();
+        let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
@@ -509,8 +538,9 @@ mod tests {
 
     #[test]
     fn test_generate_complex_expression() {
-        let program = parse("fn main() { let result = 2 + 3 * 4 }").unwrap();
-        let object_code = generate_object_code(&program);
+        let source = "fn main() { let result = 2 + 3 * 4 }";
+        let program = parse(source).unwrap();
+        let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
@@ -519,8 +549,9 @@ mod tests {
 
     #[test]
     fn test_error_undefined_variable() {
-        let program = parse("fn main() { let result = unknown_var }").unwrap();
-        let result = generate_object_code(&program);
+        let source = "fn main() { let result = unknown_var }";
+        let program = parse(source).unwrap();
+        let result = generate_object_code(&program, source);
 
         match result {
             Err(CodegenError::UndefinedVariable { name, context: _ }) => {
@@ -532,8 +563,9 @@ mod tests {
 
     #[test]
     fn test_error_unsupported_function() {
-        let program = parse("fn main() { unsupported_func() }").unwrap();
-        let result = generate_object_code(&program);
+        let source = "fn main() { unsupported_func() }";
+        let program = parse(source).unwrap();
+        let result = generate_object_code(&program, source);
 
         match result {
             Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {

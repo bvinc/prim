@@ -1,5 +1,11 @@
 use prim_tok::{Token, TokenKind, Tokenizer};
 
+mod error;
+pub use error::ParseError;
+
+mod span;
+pub use span::Span;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     U8,
@@ -18,16 +24,16 @@ pub enum Type {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    IntLiteral(String),
-    FloatLiteral(String),
-    Identifier(String),
+    IntLiteral(Span),
+    FloatLiteral(Span),
+    Identifier(Span),
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
     },
     FunctionCall {
-        name: String,
+        name: Span,
         args: Vec<Expr>,
     },
 }
@@ -43,7 +49,7 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
-        name: String,
+        name: Span,
         type_annotation: Option<Type>,
         value: Expr,
     },
@@ -52,7 +58,7 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
-    pub name: String,
+    pub name: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
@@ -60,7 +66,7 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
-    pub name: String,
+    pub name: Span,
     pub type_annotation: Type,
 }
 
@@ -72,14 +78,16 @@ pub struct Program {
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     current: usize,
+    source: &'a str, // Keep reference to source for span text extraction
 }
 
-mod error;
-pub use error::ParseError;
-
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token<'a>>) -> Self {
-        Self { tokens, current: 0 }
+    pub fn new(tokens: Vec<Token<'a>>, source: &'a str) -> Self {
+        Self {
+            tokens,
+            current: 0,
+            source,
+        }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
@@ -105,7 +113,7 @@ impl<'a> Parser<'a> {
         }
 
         // Validate that a main function exists
-        if !functions.iter().any(|f| f.name == "main") {
+        if !functions.iter().any(|f| self.span_text(&f.name) == "main") {
             return Err(ParseError::MissingMainFunction);
         }
 
@@ -119,7 +127,7 @@ impl<'a> Parser<'a> {
         let name = match self.peek().kind {
             TokenKind::Identifier => {
                 let token = self.advance();
-                token.text.to_string()
+                Self::token_span(token)
             }
             _ => {
                 return Err(ParseError::UnexpectedToken {
@@ -202,7 +210,7 @@ impl<'a> Parser<'a> {
         let name = match self.peek().kind {
             TokenKind::Identifier => {
                 let token = self.advance();
-                token.text.to_string()
+                Self::token_span(token)
             }
             _ => {
                 return Err(ParseError::UnexpectedToken {
@@ -242,7 +250,7 @@ impl<'a> Parser<'a> {
         let name = match self.peek().kind {
             TokenKind::Identifier => {
                 let token = self.advance();
-                token.text.to_string()
+                Self::token_span(token)
             }
             _ => {
                 return Err(ParseError::UnexpectedToken {
@@ -391,10 +399,10 @@ impl<'a> Parser<'a> {
         let token = self.advance();
 
         match &token.kind {
-            TokenKind::IntLiteral => Ok(Expr::IntLiteral(token.text.to_string())),
-            TokenKind::FloatLiteral => Ok(Expr::FloatLiteral(token.text.to_string())),
+            TokenKind::IntLiteral => Ok(Expr::IntLiteral(Self::token_span(token))),
+            TokenKind::FloatLiteral => Ok(Expr::FloatLiteral(Self::token_span(token))),
             TokenKind::Identifier => {
-                let name = token.text.to_string();
+                let name = Self::token_span(token);
                 // Check if this is a function call
                 self.skip_whitespace();
                 if matches!(self.peek().kind, TokenKind::LeftParen) {
@@ -408,12 +416,13 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Println => {
                 // println is a built-in function
+                let name_span = Self::token_span(token);
                 self.skip_whitespace();
                 self.consume(TokenKind::LeftParen, "Expected '(' after println")?;
                 let args = self.parse_argument_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(Expr::FunctionCall {
-                    name: "println".to_string(),
+                    name: name_span,
                     args,
                 })
             }
@@ -492,12 +501,22 @@ impl<'a> Parser<'a> {
     fn previous(&self) -> &Token<'a> {
         &self.tokens[self.current - 1]
     }
+
+    /// Create a span from a token (no self needed)
+    fn token_span(token: &Token) -> Span {
+        Span::new(token.position, token.position + token.text.len())
+    }
+
+    /// Get text from a span
+    fn span_text(&self, span: &Span) -> &str {
+        span.text(self.source)
+    }
 }
 
 pub fn parse(input: &str) -> Result<Program, ParseError> {
     let mut tokenizer = Tokenizer::new(input);
     let tokens = tokenizer.tokenize()?;
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(tokens, input);
     parser.parse()
 }
 
@@ -507,11 +526,12 @@ mod tests {
 
     #[test]
     fn test_parse_let_statement() {
-        let program = parse("fn main() { let x: u32 = 42 }").unwrap();
+        let source = "fn main() { let x: u32 = 42 }";
+        let program = parse(source).unwrap();
 
         assert_eq!(program.functions.len(), 1);
         let main_func = &program.functions[0];
-        assert_eq!(main_func.name, "main");
+        assert_eq!(main_func.name.text(source), "main");
         assert_eq!(main_func.body.len(), 1);
         match &main_func.body[0] {
             Stmt::Let {
@@ -519,9 +539,12 @@ mod tests {
                 type_annotation,
                 value,
             } => {
-                assert_eq!(name, "x");
+                assert_eq!(name.text(source), "x");
                 assert_eq!(type_annotation, &Some(Type::U32));
-                assert_eq!(value, &Expr::IntLiteral("42".to_string()));
+                match value {
+                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    _ => panic!("Expected IntLiteral, got {:?}", value),
+                }
             }
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
@@ -529,7 +552,8 @@ mod tests {
 
     #[test]
     fn test_parse_let_without_type() {
-        let program = parse("fn main() { let x = 42 }").unwrap();
+        let source = "fn main() { let x = 42 }";
+        let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
@@ -538,9 +562,12 @@ mod tests {
                 type_annotation,
                 value,
             } => {
-                assert_eq!(name, "x");
+                assert_eq!(name.text(source), "x");
                 assert_eq!(type_annotation, &None);
-                assert_eq!(value, &Expr::IntLiteral("42".to_string()));
+                match value {
+                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    _ => panic!("Expected IntLiteral, got {:?}", value),
+                }
             }
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
@@ -548,24 +575,34 @@ mod tests {
 
     #[test]
     fn test_parse_arithmetic_expression() {
-        let program = parse("fn main() { let result = x + 5 * 2 }").unwrap();
+        let source = "fn main() { let result = x + 5 * 2 }";
+        let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
                 Expr::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Add);
-                    assert_eq!(left.as_ref(), &Expr::Identifier("x".to_string()));
+                    match left.as_ref() {
+                        Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                        _ => panic!("Expected Identifier, got {:?}", left),
+                    }
                     match right.as_ref() {
                         Expr::Binary { left, op, right } => {
                             assert_eq!(op, &BinaryOp::Multiply);
-                            assert_eq!(left.as_ref(), &Expr::IntLiteral("5".to_string()));
-                            assert_eq!(right.as_ref(), &Expr::IntLiteral("2".to_string()));
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
                         }
-                        _ => panic!("Expected binary expression, got {:?}", expr),
+                        _ => panic!("Expected binary expression, got {:?}", right),
                     }
                 }
-                _ => panic!("Expected binary expression, got {:?}", expr),
+                _ => panic!("Expected binary expression, got {:?}", value),
             },
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
@@ -573,24 +610,34 @@ mod tests {
 
     #[test]
     fn test_parse_arithmetic_expression_2() {
-        let program = parse("fn main() { let result = x * 5 + 2 }").unwrap();
+        let source = "fn main() { let result = x * 5 + 2 }";
+        let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
                 Expr::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Add);
-                    assert_eq!(right.as_ref(), &Expr::IntLiteral("2".to_string()));
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
                     match left.as_ref() {
                         Expr::Binary { left, op, right } => {
                             assert_eq!(op, &BinaryOp::Multiply);
-                            assert_eq!(left.as_ref(), &Expr::Identifier("x".to_string()));
-                            assert_eq!(right.as_ref(), &Expr::IntLiteral("5".to_string()));
+                            match left.as_ref() {
+                                Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                                _ => panic!("Expected Identifier, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
                         }
-                        _ => panic!("Expected binary expression, got {:?}", expr),
+                        _ => panic!("Expected binary expression, got {:?}", left),
                     }
                 }
-                _ => panic!("Expected binary expression, got {:?}", expr),
+                _ => panic!("Expected binary expression, got {:?}", value),
             },
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
@@ -598,14 +645,18 @@ mod tests {
 
     #[test]
     fn test_parse_println() {
-        let program = parse("fn main() { println(42) }").unwrap();
+        let source = "fn main() { println(42) }";
+        let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
-                assert_eq!(name, "println");
+                assert_eq!(name.text(source), "println");
                 assert_eq!(args.len(), 1);
-                assert_eq!(args[0], Expr::IntLiteral("42".to_string()));
+                match &args[0] {
+                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    _ => panic!("Expected IntLiteral, got {:?}", &args[0]),
+                }
             }
             _ => panic!(
                 "Expected println function call, got {:?}",
@@ -616,20 +667,27 @@ mod tests {
 
     #[test]
     fn test_parse_println_with_expression() {
-        let program = parse("fn main() { println(x + 5) }").unwrap();
+        let source = "fn main() { println(x + 5) }";
+        let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Expr(Expr::FunctionCall { name, args }) => {
-                assert_eq!(name, "println");
+                assert_eq!(name.text(source), "println");
                 assert_eq!(args.len(), 1);
                 match &args[0] {
                     Expr::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Add);
-                        assert_eq!(left.as_ref(), &Expr::Identifier("x".to_string()));
-                        assert_eq!(right.as_ref(), &Expr::IntLiteral("5".to_string()));
+                        match left.as_ref() {
+                            Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                            _ => panic!("Expected Identifier, got {:?}", left),
+                        }
+                        match right.as_ref() {
+                            Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        }
                     }
-                    _ => panic!("Expected binary expression, got {:?}", expr),
+                    _ => panic!("Expected binary expression, got {:?}", &args[0]),
                 }
             }
             _ => panic!(

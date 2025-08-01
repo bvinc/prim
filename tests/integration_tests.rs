@@ -35,8 +35,9 @@ fn test_parser_error_unexpected_token() {
 
 #[test]
 fn test_codegen_error_undefined_variable() {
-    let program = parse("fn main() { let x = unknown_var }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn main() { let x = unknown_var }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     match result {
         Err(CodegenError::UndefinedVariable { name, context: _ }) => {
@@ -48,8 +49,9 @@ fn test_codegen_error_undefined_variable() {
 
 #[test]
 fn test_codegen_error_unsupported_function() {
-    let program = parse("fn main() { unsupported_func() }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn main() { unsupported_func() }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     match result {
         Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
@@ -64,8 +66,9 @@ fn test_codegen_error_unsupported_function() {
 
 #[test]
 fn test_successful_compilation() {
-    let program = parse("fn main() { let x: u32 = 42\nprintln(x) }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn main() { let x: u32 = 42\nprintln(x) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     assert!(
         result.is_ok(),
@@ -78,8 +81,9 @@ fn test_successful_compilation() {
 
 #[test]
 fn test_arithmetic_expression() {
-    let program = parse("fn main() { let result = 2 + 3 * 4\nprintln(result) }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn main() { let result = 2 + 3 * 4\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     assert!(
         result.is_ok(),
@@ -113,10 +117,9 @@ fn test_parser_error_statements_outside_function() {
 
 #[test]
 fn test_multiple_functions_compilation() {
-    let program =
-        parse("fn helper() -> u32 { let x = 10\nlet y = 5\nx + y }\nfn main() { println(42) }")
-            .unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn helper() -> u32 { let x = 10\nlet y = 5\nx + y }\nfn main() { println(42) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     assert!(
         result.is_ok(),
@@ -127,9 +130,9 @@ fn test_multiple_functions_compilation() {
 
 #[test]
 fn test_function_with_return_type() {
-    let program =
-        parse("fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(5) }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(5) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
 
     assert!(
         result.is_ok(),
@@ -237,8 +240,9 @@ fn test_unified_error_handling() {
     }
 
     // Test codegen error codes
-    let program = parse("fn main() { let x = unknown_var }").unwrap();
-    let result = generate_object_code(&program);
+    let source = "fn main() { let x = unknown_var }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
     match result {
         Err(err) => {
             assert_eq!(err.error_code(), "COD001"); // UndefinedVariable
