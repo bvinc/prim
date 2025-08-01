@@ -571,11 +571,7 @@ mod tests {
             Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
                 assert_eq!(name, "unsupported_func");
             }
-            _ => assert!(
-                false,
-                "Expected UnsupportedFunctionCall error, got {:?}",
-                result
-            ),
+            _ => panic!("Expected UnsupportedFunctionCall error, got {:?}", result),
         }
     }
 }

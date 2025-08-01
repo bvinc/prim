@@ -346,11 +346,7 @@ mod tests {
                 assert_eq!(ch, '@');
                 assert_eq!(position, 8);
             }
-            _ => assert!(
-                false,
-                "Expected UnexpectedCharacter error, got {:?}",
-                result
-            ),
+            _ => panic!("Expected UnexpectedCharacter error, got {:?}", result),
         }
     }
 }
