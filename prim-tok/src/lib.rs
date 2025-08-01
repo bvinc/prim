@@ -36,6 +36,7 @@ pub enum TokenKind {
     Plus,         // +
     Minus,        // -
     Star,         // *
+    Slash,        // /
     Equals,       // =
     DoubleEquals, // ==
     Arrow,        // ->
@@ -125,6 +126,7 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             '*' => self.make_simple_token(TokenKind::Star, start_pos),
+            '/' => self.make_simple_token(TokenKind::Slash, start_pos),
             '=' => {
                 self.advance();
                 if self.current_char() == '=' {

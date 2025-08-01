@@ -43,6 +43,7 @@ pub enum BinaryOp {
     Add,
     Subtract,
     Multiply,
+    Divide,
     Equals,
 }
 
@@ -376,12 +377,22 @@ impl<'a> Parser<'a> {
 
         loop {
             self.skip_whitespace();
-            if !matches!(self.peek().kind, TokenKind::Star) {
+            if !matches!(self.peek().kind, TokenKind::Star | TokenKind::Slash) {
                 break;
             }
 
-            let op = BinaryOp::Multiply;
-            self.advance();
+            let token = self.advance();
+            let op = match token.kind {
+                TokenKind::Star => BinaryOp::Multiply,
+                TokenKind::Slash => BinaryOp::Divide,
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "binary operator".to_string(),
+                        found: token.kind,
+                        position: token.position,
+                    });
+                }
+            };
             self.skip_whitespace();
             let right = self.parse_primary()?;
             expr = Expr::Binary {
@@ -743,6 +754,575 @@ mod tests {
         match result {
             Err(ParseError::StatementsOutsideFunction) => {}
             _ => panic!("Expected StatementsOutsideFunction error, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_parse_parentheses_basic() {
+        let source = "fn main() { let result = (2 + 3) * 4 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Multiply);
+                    // Left side should be the parenthesized expression (2 + 3)
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Add);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (2 + 3), got {:?}", left),
+                    }
+                    // Right side should be 4
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_parentheses_nested() {
+        let source = "fn main() { let result = ((2 + 3) * 4) + 5 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Add);
+                    // Left side should be ((2 + 3) * 4)
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Multiply);
+                            // Inner left should be (2 + 3)
+                            match left.as_ref() {
+                                Expr::Binary { left, op, right } => {
+                                    assert_eq!(op, &BinaryOp::Add);
+                                    match left.as_ref() {
+                                        Expr::IntLiteral(span) => {
+                                            assert_eq!(span.text(source), "2")
+                                        }
+                                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                                    }
+                                    match right.as_ref() {
+                                        Expr::IntLiteral(span) => {
+                                            assert_eq!(span.text(source), "3")
+                                        }
+                                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                                    }
+                                }
+                                _ => {
+                                    panic!("Expected binary expression for (2 + 3), got {:?}", left)
+                                }
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!(
+                            "Expected binary expression for ((2 + 3) * 4), got {:?}",
+                            left
+                        ),
+                    }
+                    // Right side should be 5
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_parentheses_with_all_operators() {
+        let source = "fn main() { let result = (x + y) * (a - b) }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Multiply);
+                    // Left side: (x + y)
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Add);
+                            match left.as_ref() {
+                                Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                                _ => panic!("Expected Identifier, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::Identifier(span) => assert_eq!(span.text(source), "y"),
+                                _ => panic!("Expected Identifier, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (x + y), got {:?}", left),
+                    }
+                    // Right side: (a - b)
+                    match right.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Subtract);
+                            match left.as_ref() {
+                                Expr::Identifier(span) => assert_eq!(span.text(source), "a"),
+                                _ => panic!("Expected Identifier, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::Identifier(span) => assert_eq!(span.text(source), "b"),
+                                _ => panic!("Expected Identifier, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (a - b), got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_parentheses_function_call_args() {
+        let source = "fn main() { println((2 + 3) * 4) }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Expr(Expr::FunctionCall { name, args }) => {
+                assert_eq!(name.text(source), "println");
+                assert_eq!(args.len(), 1);
+                // Argument should be (2 + 3) * 4
+                match &args[0] {
+                    Expr::Binary { left, op, right } => {
+                        assert_eq!(op, &BinaryOp::Multiply);
+                        match left.as_ref() {
+                            Expr::Binary { left, op, right } => {
+                                assert_eq!(op, &BinaryOp::Add);
+                                match left.as_ref() {
+                                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                                }
+                                match right.as_ref() {
+                                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                                }
+                            }
+                            _ => panic!("Expected binary expression for (2 + 3), got {:?}", left),
+                        }
+                        match right.as_ref() {
+                            Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        }
+                    }
+                    _ => panic!("Expected binary expression, got {:?}", &args[0]),
+                }
+            }
+            _ => panic!("Expected println call, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_mismatched_parentheses_missing_close() {
+        let result = parse("fn main() { let x = (2 + 3 }");
+
+        match result {
+            Err(ParseError::UnexpectedToken {
+                expected, found, ..
+            }) => {
+                assert_eq!(expected, "Expected ')'");
+                assert_eq!(found, TokenKind::RightBrace);
+            }
+            _ => panic!(
+                "Expected UnexpectedToken error for missing ')', got {:?}",
+                result
+            ),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_mismatched_parentheses_missing_open() {
+        let result = parse("fn main() { let x = 2 + 3) }");
+
+        match result {
+            Err(ParseError::UnexpectedToken {
+                expected, found, ..
+            }) => {
+                assert_eq!(expected, "expression");
+                assert_eq!(found, TokenKind::RightParen);
+            }
+            _ => panic!(
+                "Expected UnexpectedToken error for unexpected ')', got {:?}",
+                result
+            ),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_parentheses_error() {
+        let result = parse("fn main() { let x = () }");
+
+        match result {
+            Err(ParseError::UnexpectedToken { expected, .. }) => {
+                assert_eq!(expected, "expression");
+            }
+            _ => panic!(
+                "Expected UnexpectedToken error for empty parentheses, got {:?}",
+                result
+            ),
+        }
+    }
+
+    #[test]
+    fn test_parse_subtraction_basic() {
+        let source = "fn main() { let result = 10 - 3 }";
+        let program = parse(source).unwrap();
+        let debug_str = format!("{:#?}", program);
+
+        assert!(debug_str.contains("Subtract"));
+        assert!(debug_str.contains("IntLiteral"));
+    }
+
+    #[test]
+    fn test_parse_subtraction_with_identifiers() {
+        let source = "fn main() { let result = x - y }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Subtract);
+                    match left.as_ref() {
+                        Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                        _ => panic!("Expected Identifier, got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::Identifier(span) => assert_eq!(span.text(source), "y"),
+                        _ => panic!("Expected Identifier, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_subtraction_precedence() {
+        let source = "fn main() { let result = 10 - 3 * 2 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Subtract);
+                    match left.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                    }
+                    // Right side should be 3 * 2 (multiplication has higher precedence)
+                    match right.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Multiply);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for 3 * 2, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_subtraction_chained() {
+        let source = "fn main() { let result = 20 - 5 - 3 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Subtract);
+                    // Left side should be (20 - 5) due to left associativity
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Subtract);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (20 - 5), got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_subtraction_with_parentheses() {
+        let source = "fn main() { let result = 20 - (5 + 3) }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Subtract);
+                    match left.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                    }
+                    // Right side should be (5 + 3)
+                    match right.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Add);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (5 + 3), got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_basic() {
+        let source = "fn main() { let result = 20 / 4 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Divide);
+                    match left.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_with_identifiers() {
+        let source = "fn main() { let result = numerator / denominator }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Divide);
+                    match left.as_ref() {
+                        Expr::Identifier(span) => assert_eq!(span.text(source), "numerator"),
+                        _ => panic!("Expected Identifier, got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::Identifier(span) => assert_eq!(span.text(source), "denominator"),
+                        _ => panic!("Expected Identifier, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_precedence_with_addition() {
+        let source = "fn main() { let result = 10 + 20 / 4 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Add);
+                    match left.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                    }
+                    // Right side should be 20 / 4 (division has higher precedence)
+                    match right.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Divide);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for 20 / 4, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_chained() {
+        let source = "fn main() { let result = 100 / 5 / 2 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Divide);
+                    // Left side should be (100 / 5) due to left associativity
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Divide);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "100"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (100 / 5), got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_with_multiplication() {
+        let source = "fn main() { let result = 8 * 6 / 3 }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Divide);
+                    // Left side should be (8 * 6) due to left associativity
+                    match left.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Multiply);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "8"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "6"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (8 * 6), got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_division_with_parentheses() {
+        let source = "fn main() { let result = 100 / (10 + 5) }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Let { value, .. } => match value {
+                Expr::Binary { left, op, right } => {
+                    assert_eq!(op, &BinaryOp::Divide);
+                    match left.as_ref() {
+                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "100"),
+                        _ => panic!("Expected IntLiteral, got {:?}", left),
+                    }
+                    // Right side should be (10 + 5)
+                    match right.as_ref() {
+                        Expr::Binary { left, op, right } => {
+                            assert_eq!(op, &BinaryOp::Add);
+                            match left.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                            }
+                            match right.as_ref() {
+                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                            }
+                        }
+                        _ => panic!("Expected binary expression for (10 + 5), got {:?}", right),
+                    }
+                }
+                _ => panic!("Expected binary expression, got {:?}", value),
+            },
+            _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
 }

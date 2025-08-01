@@ -252,3 +252,172 @@ fn test_unified_error_handling() {
         Ok(_) => panic!("Expected error for undefined variable"),
     }
 }
+
+#[test]
+fn test_parentheses_precedence_override() {
+    let source = "fn main() { let result = (2 + 3) * 4\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of parentheses expression, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_nested_parentheses_compilation() {
+    let source = "fn main() { let result = ((1 + 2) * (3 + 4)) + 5\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of nested parentheses, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_parentheses_in_function_calls() {
+    let source = "fn main() { println((10 + 5) * 2) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of parentheses in function calls, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_complex_parentheses_expression() {
+    let source = "fn main() { let x = 2\nlet y = 3\nlet result = (x + y) * (x - y) + (x * y)\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of complex parentheses expression, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_subtraction_basic_compilation() {
+    let source = "fn main() { let result = 10 - 3\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of subtraction, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_subtraction_with_variables_compilation() {
+    let source = "fn main() { let x = 15\nlet y = 5\nlet result = x - y\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of subtraction with variables, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_subtraction_precedence_compilation() {
+    let source = "fn main() { let result = 20 - 3 * 2\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of subtraction with precedence, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_subtraction_chained_compilation() {
+    let source = "fn main() { let result = 50 - 20 - 10\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of chained subtraction, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_division_basic_compilation() {
+    let source = "fn main() { let result = 20 / 4\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of division, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_division_with_variables_compilation() {
+    let source = "fn main() { let numerator = 100\nlet denominator = 5\nlet result = numerator / denominator\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of division with variables, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_division_precedence_compilation() {
+    let source = "fn main() { let result = 10 + 20 / 4\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of division with precedence, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_division_chained_compilation() {
+    let source = "fn main() { let result = 100 / 5 / 2\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of chained division, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_mixed_operations_compilation() {
+    let source = "fn main() { let result = 20 - 10 / 2 + 3 * 4\nprintln(result) }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of mixed operations, got {:?}",
+        result
+    );
+}

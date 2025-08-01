@@ -362,6 +362,7 @@ impl CraneliftCodeGenerator {
                     BinaryOp::Add => builder.ins().iadd(left_val, right_val),
                     BinaryOp::Subtract => builder.ins().isub(left_val, right_val),
                     BinaryOp::Multiply => builder.ins().imul(left_val, right_val),
+                    BinaryOp::Divide => builder.ins().sdiv(left_val, right_val),
                     BinaryOp::Equals => {
                         let cmp = builder.ins().icmp(IntCC::Equal, left_val, right_val);
                         builder.ins().uextend(types::I64, cmp)
