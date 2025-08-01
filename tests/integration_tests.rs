@@ -421,3 +421,133 @@ fn test_mixed_operations_compilation() {
         result
     );
 }
+
+#[test]
+fn test_chained_function_calls_compilation() {
+    let source = r#"
+fn level4() -> i64 {
+    println(4)
+    42
+}
+
+fn level3() -> i64 {
+    println(3)
+    let result = level4()
+    println(300 + result)
+    result
+}
+
+fn level2() -> i64 {
+    println(2)
+    let result = level3()
+    println(200 + result)
+    result
+}
+
+fn level1() -> i64 {
+    println(1)
+    let result = level2()
+    println(100 + result)
+    result
+}
+
+fn main() {
+    println(0)
+    let final_result = level1()
+    println(final_result)
+}
+"#;
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+
+    assert!(
+        result.is_ok(),
+        "Expected successful compilation of chained function calls, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_chained_function_calls_execution() {
+    use std::fs;
+    use std::process::Command;
+
+    // Create the chained function calls program
+    let test_program = r#"
+fn level4() -> i64 {
+    println(4)
+    42
+}
+
+fn level3() -> i64 {
+    println(3)
+    let result = level4()
+    println(300 + result)
+    result
+}
+
+fn level2() -> i64 {
+    println(2)
+    let result = level3()
+    println(200 + result)
+    result
+}
+
+fn level1() -> i64 {
+    println(1)
+    let result = level2()
+    println(100 + result)
+    result
+}
+
+fn main() {
+    println(0)
+    let final_result = level1()
+    println(final_result)
+}
+"#;
+    let test_file = "test_chained_function_calls.prim";
+    fs::write(test_file, test_program).expect("Failed to write test file");
+
+    // Test run command
+    let output = Command::new("cargo")
+        .args(["run", "--", "run", test_file])
+        .output()
+        .expect("Failed to execute run command");
+
+    assert!(
+        output.status.success(),
+        "Run command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Check the output contains the expected sequence
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+
+    // Should print: 0, 1, 2, 3, 4, 342, 242, 142, 42
+    assert!(lines.contains(&"0"), "Should print 0 from main");
+    assert!(lines.contains(&"1"), "Should print 1 from level1");
+    assert!(lines.contains(&"2"), "Should print 2 from level2");
+    assert!(lines.contains(&"3"), "Should print 3 from level3");
+    assert!(lines.contains(&"4"), "Should print 4 from level4");
+    assert!(
+        lines.contains(&"342"),
+        "Should print 342 (300+42) from level3"
+    );
+    assert!(
+        lines.contains(&"242"),
+        "Should print 242 (200+42) from level2"
+    );
+    assert!(
+        lines.contains(&"142"),
+        "Should print 142 (100+42) from level1"
+    );
+    assert!(
+        lines.contains(&"42"),
+        "Should print final result 42 from main"
+    );
+
+    // Clean up
+    let _ = fs::remove_file(test_file);
+}

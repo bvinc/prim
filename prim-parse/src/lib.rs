@@ -1325,4 +1325,88 @@ mod tests {
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
         }
     }
+
+    #[test]
+    fn test_chained_function_calls() {
+        let source = r#"
+fn level4() -> i64 {
+    println(4)
+    42
+}
+
+fn level3() -> i64 {
+    println(3)
+    let result = level4()
+    println(300 + result)
+    result
+}
+
+fn level2() -> i64 {
+    println(2)
+    let result = level3()
+    println(200 + result)
+    result
+}
+
+fn level1() -> i64 {
+    println(1)
+    let result = level2()
+    println(100 + result)
+    result
+}
+
+fn main() {
+    println(0)
+    let final_result = level1()
+    println(final_result)
+}
+"#;
+        let program = parse(source).unwrap();
+
+        // Check that we have all 5 functions
+        assert_eq!(program.functions.len(), 5);
+
+        // Check function names
+        let function_names: Vec<&str> = program
+            .functions
+            .iter()
+            .map(|f| f.name.text(source))
+            .collect();
+        assert!(function_names.contains(&"level4"));
+        assert!(function_names.contains(&"level3"));
+        assert!(function_names.contains(&"level2"));
+        assert!(function_names.contains(&"level1"));
+        assert!(function_names.contains(&"main"));
+
+        // Check that main function has function calls
+        let main_func = program
+            .functions
+            .iter()
+            .find(|f| f.name.text(source) == "main")
+            .expect("main function should exist");
+
+        // Verify main has statements
+        assert!(!main_func.body.is_empty());
+
+        // Quick check that we have function calls in the AST
+        let debug_str = format!("{:#?}", program);
+        assert!(debug_str.contains("FunctionCall"));
+
+        // Check that level1 function calls level2
+        let level1_func = program
+            .functions
+            .iter()
+            .find(|f| f.name.text(source) == "level1")
+            .expect("level1 function should exist");
+
+        // Find the function call to level2 in level1
+        let has_level2_call = level1_func.body.iter().any(|stmt| match stmt {
+            Stmt::Let {
+                value: Expr::FunctionCall { name, .. },
+                ..
+            } => name.text(source) == "level2",
+            _ => false,
+        });
+        assert!(has_level2_call, "level1 should call level2");
+    }
 }

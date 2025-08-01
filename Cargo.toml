@@ -18,6 +18,7 @@ prim-codegen = { path = "prim-codegen" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"
+too_many_arguments = "allow"
 
 [lints]
 workspace = true

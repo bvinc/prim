@@ -60,9 +60,25 @@ impl CraneliftCodeGenerator {
         // Create println function first
         let println_func_id = self.create_println_function()?;
 
-        // Generate all functions
+        // First pass: declare all functions
+        let mut function_ids = HashMap::new();
         for function in &program.functions {
-            self.generate_function(function, println_func_id, source)?;
+            let sig = self.create_function_signature(function, source);
+            let linkage = self.determine_linkage(function, source);
+
+            let func_id = self
+                .module
+                .declare_function(function.name.text(source), linkage, &sig)
+                .map_err(|e| CodegenError::CraneliftError {
+                    message: e.to_string(),
+                })?;
+
+            function_ids.insert(function.name.text(source).to_string(), func_id);
+        }
+
+        // Second pass: generate function bodies
+        for function in &program.functions {
+            self.generate_function(function, println_func_id, &function_ids, source)?;
         }
 
         // Finalize the object
@@ -76,19 +92,13 @@ impl CraneliftCodeGenerator {
         &mut self,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
+        function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
     ) -> Result<(), CodegenError> {
         let sig = self.create_function_signature(function, source);
-        let linkage = self.determine_linkage(function, source);
+        let func_id = function_ids[function.name.text(source)];
 
-        let func_id = self
-            .module
-            .declare_function(function.name.text(source), linkage, &sig)
-            .map_err(|e| CodegenError::CraneliftError {
-                message: e.to_string(),
-            })?;
-
-        self.generate_function_body(function, println_func_id, sig, source)?;
+        self.generate_function_body(function, println_func_id, function_ids, sig, source)?;
 
         // Define the function
         self.module
@@ -131,6 +141,7 @@ impl CraneliftCodeGenerator {
         &mut self,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
+        function_ids: &HashMap<String, cranelift_module::FuncId>,
         sig: Signature,
         source: &str,
     ) -> Result<(), CodegenError> {
@@ -151,6 +162,7 @@ impl CraneliftCodeGenerator {
             &mut builder,
             function,
             println_func_id,
+            function_ids,
             source,
         )?;
         Self::generate_function_return(&mut builder, function, last_expr_value, source);
@@ -188,6 +200,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         function: &Function,
         println_func_id: cranelift_module::FuncId,
+        function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
     ) -> Result<Option<Value>, CodegenError> {
         let mut variables = variables;
@@ -202,6 +215,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         expr,
                         println_func_id,
+                        function_ids,
                         source,
                     )?);
                 }
@@ -213,6 +227,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         stmt,
                         println_func_id,
+                        function_ids,
                         source,
                     )?;
                     last_expr_value = None;
@@ -255,6 +270,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
         println_func_id: cranelift_module::FuncId,
+        function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
     ) -> Result<(), CodegenError> {
         match stmt {
@@ -275,6 +291,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     value,
                     println_func_id,
+                    function_ids,
                     source,
                 )?;
 
@@ -291,6 +308,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     expr,
                     println_func_id,
+                    function_ids,
                     source,
                 )?;
                 Ok(())
@@ -304,6 +322,7 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         expr: &Expr,
         println_func_id: cranelift_module::FuncId,
+        function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
     ) -> Result<Value, CodegenError> {
         match expr {
@@ -347,6 +366,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     left,
                     println_func_id,
+                    function_ids,
                     source,
                 )?;
                 let right_val = Self::generate_expression_impl(
@@ -355,6 +375,7 @@ impl CraneliftCodeGenerator {
                     builder,
                     right,
                     println_func_id,
+                    function_ids,
                     source,
                 )?;
 
@@ -371,7 +392,9 @@ impl CraneliftCodeGenerator {
                 Ok(result)
             }
             Expr::FunctionCall { name, args } => {
-                if name.text(source) == "println" && args.len() == 1 {
+                let func_name = name.text(source);
+
+                if func_name == "println" && args.len() == 1 {
                     // Generate the argument
                     let arg_val = Self::generate_expression_impl(
                         variables,
@@ -379,6 +402,7 @@ impl CraneliftCodeGenerator {
                         builder,
                         &args[0],
                         println_func_id,
+                        function_ids,
                         source,
                     )?;
 
@@ -391,9 +415,38 @@ impl CraneliftCodeGenerator {
 
                     // Return void value (0)
                     Ok(builder.ins().iconst(types::I64, 0))
+                } else if let Some(&func_id) = function_ids.get(func_name) {
+                    // User-defined function call
+                    let mut arg_vals = Vec::new();
+                    for arg in args {
+                        let arg_val = Self::generate_expression_impl(
+                            variables,
+                            module,
+                            builder,
+                            arg,
+                            println_func_id,
+                            function_ids,
+                            source,
+                        )?;
+                        arg_vals.push(arg_val);
+                    }
+
+                    // Get function reference
+                    let local_func = module.declare_func_in_func(func_id, builder.func);
+
+                    // Call the function
+                    let call = builder.ins().call(local_func, &arg_vals);
+                    let results = builder.inst_results(call);
+
+                    // Return the result (or 0 if void function)
+                    if results.is_empty() {
+                        Ok(builder.ins().iconst(types::I64, 0))
+                    } else {
+                        Ok(results[0])
+                    }
                 } else {
                     Err(CodegenError::UnsupportedFunctionCall {
-                        name: name.text(source).to_string(),
+                        name: func_name.to_string(),
                         context: "function call".to_string(),
                     })
                 }
