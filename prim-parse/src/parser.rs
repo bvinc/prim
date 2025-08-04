@@ -33,12 +33,17 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
 
+        // Skip leading newlines
+        self.skip_newlines();
+
         while !self.is_at_end() {
             // Only allow function definitions at the top level
             match self.peek().kind {
                 TokenKind::Fn => {
                     let function = self.parse_function()?;
                     functions.push(function);
+                    // Skip newlines between functions
+                    self.skip_newlines();
                 }
                 _ => {
                     return Err(ParseError::StatementsOutsideFunction);
@@ -181,23 +186,28 @@ impl<'a> Parser<'a> {
     fn parse_function(&mut self) -> Result<Function, ParseError> {
         // Consume 'fn' keyword
         self.consume(TokenKind::Fn, "Expected 'fn'")?;
+        self.skip_newlines();
 
         // Parse function name
         let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
         let name = Self::token_span(name_token);
+        self.skip_newlines();
 
         // Parse parameter list
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
         let parameters = self.parse_parameter_list()?;
         self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
+        self.skip_newlines();
 
         // Parse optional return type
         let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
             self.advance(); // consume '->'
+            self.skip_newlines();
             Some(self.parse_type()?)
         } else {
             None
         };
+        self.skip_newlines();
 
         // Parse function body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
@@ -215,6 +225,8 @@ impl<'a> Parser<'a> {
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
 
+        self.skip_newlines();
+
         // Handle empty parameter list
         if matches!(self.peek().kind, TokenKind::RightParen) {
             return Ok(parameters);
@@ -224,19 +236,26 @@ impl<'a> Parser<'a> {
         parameters.push(self.parse_parameter()?);
 
         // Parse remaining parameters
-        while matches!(self.peek().kind, TokenKind::Comma) {
+        while {
+            self.skip_newlines();
+            matches!(self.peek().kind, TokenKind::Comma)
+        } {
             self.advance(); // consume ','
+            self.skip_newlines();
             parameters.push(self.parse_parameter()?);
         }
 
+        self.skip_newlines();
         Ok(parameters)
     }
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected parameter name")?;
         let name = Self::token_span(name_token);
+        self.skip_newlines();
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
+        self.skip_newlines();
         let type_annotation = self.parse_type()?;
 
         Ok(Parameter {
@@ -306,8 +325,17 @@ impl<'a> Parser<'a> {
     fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut statements = Vec::new();
 
+        // Skip leading newlines
+        self.skip_newlines();
+
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
             statements.push(self.parse_statement()?);
+
+            // After each statement, require a terminator or end of block
+            self.consume_statement_terminator()?;
+
+            // Skip any additional newlines
+            self.skip_newlines();
         }
 
         Ok(statements)
@@ -326,21 +354,26 @@ impl<'a> Parser<'a> {
 
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
         self.consume(TokenKind::Let, "Expected 'let'")?;
+        self.skip_newlines();
 
         let name_token = self.consume(TokenKind::Identifier, "identifier")?;
         let name = Self::token_span(name_token);
+        self.skip_newlines();
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance(); // consume ':'
+            self.skip_newlines();
             Some(self.parse_type()?)
         } else {
             None
         };
+        self.skip_newlines();
 
         self.consume(TokenKind::Equals, "Expected '=' in let statement")?;
+        self.skip_newlines();
         let value = self.parse_expression(Precedence::NONE)?;
-        // No semicolon required for let statements
+        // Terminator will be handled by parse_statement_list
 
         Ok(Stmt::Let {
             name,
@@ -386,6 +419,36 @@ impl<'a> Parser<'a> {
 
     fn span_text(&self, span: &Span) -> &str {
         span.text(self.source)
+    }
+
+    /// Skip newline tokens (used when newlines are not significant)
+    fn skip_newlines(&mut self) {
+        while matches!(self.peek().kind, TokenKind::Newline) {
+            self.advance();
+        }
+    }
+
+    /// Consume a statement terminator (semicolon, newline, or end of block)
+    fn consume_statement_terminator(&mut self) -> Result<(), ParseError> {
+        match self.peek().kind {
+            TokenKind::Semicolon => {
+                self.advance();
+                Ok(())
+            }
+            TokenKind::Newline => {
+                self.advance();
+                Ok(())
+            }
+            TokenKind::RightBrace | TokenKind::Eof => {
+                // End of block terminates statement
+                Ok(())
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "';', newline, or '}' after statement".to_string(),
+                found: self.peek().kind,
+                position: self.peek().position,
+            }),
+        }
     }
 }
 

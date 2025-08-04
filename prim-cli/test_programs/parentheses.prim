@@ -1,0 +1,4 @@
+fn main() {
+    let result = (2 + 3) * 4
+    println(result)
+}

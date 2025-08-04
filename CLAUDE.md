@@ -26,11 +26,12 @@ println(result)  // outputs: 25
 The compiler is structured as a Rust workspace with four main components:
 
 ```
-prim/                    # Main compiler binary
+prim/                    # Workspace root
+├── prim-cli/           # Main compiler binary crate
 ├── prim-tok/           # Tokenizer/lexer crate
-├── prim-parse/         # Recursive descent parser crate
+├── prim-parse/         # Parser crate
 ├── prim-codegen/       # Cranelift code generation crate
-└── tests/data/         # Test Prim programs
+└── prim-cli/test_programs/  # Test Prim programs
 ```
 
 ### Compilation Pipeline
@@ -73,22 +74,23 @@ cargo fmt --all
 ### Using the Compiler
 ```bash
 # Build a Prim program to executable
-cargo run -- build tests/data/example.prim
-# Creates executable: tests/data/example
+cargo run -p prim -- build prim-cli/test_programs/basic_hello.prim
+# Creates executable: prim-cli/test_programs/basic_hello
 
 # Compile and run a Prim program
-cargo run -- run tests/data/example.prim
+cargo run -p prim -- run prim-cli/test_programs/basic_hello.prim
 # Compiles and immediately runs the program
 
 # Show help
-cargo run -- help
+cargo run -p prim -- help
 ```
 
 ### Test Programs
-All example Prim programs are in `tests/data/`:
-- `example.prim` - Complex expression (outputs 25)
-- `add_test.prim` - Simple addition (outputs 5) 
-- `simple.prim` - Basic test case
+All example Prim programs are in `prim-cli/test_programs/`:
+- `basic_hello.prim` - Simple println with literal (outputs 42)
+- `arithmetic.prim` - Arithmetic with precedence (outputs 20)
+- `precedence.prim` - Operator precedence test (outputs 14)
+- `semicolon_termination.prim` - Multiple statements with semicolons
 - And several others for various language features
 
 ## Code Quality

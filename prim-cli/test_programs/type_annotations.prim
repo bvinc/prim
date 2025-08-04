@@ -1,0 +1,6 @@
+fn main() {
+    let x: u32 = 100
+    let y: u32 = 50
+    let result: u32 = x - y
+    println(result)
+}

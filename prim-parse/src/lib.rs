@@ -524,7 +524,7 @@ mod tests {
             Err(ParseError::UnexpectedToken {
                 expected, found, ..
             }) => {
-                assert_eq!(expected, "expression");
+                assert_eq!(expected, "';', newline, or '}' after statement");
                 assert_eq!(found, TokenKind::RightParen);
             }
             _ => panic!(

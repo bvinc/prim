@@ -162,15 +162,27 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     let object_code = generate_object_code(&program, &source)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
-    // Write object code to temporary file
-    let obj_filename = "temp_output.o";
-    let executable_name = "temp_output";
+    // Create temporary files for object code and executable
+    let temp_obj = tempfile::Builder::new()
+        .suffix(".o")
+        .tempfile()
+        .map_err(MainError::IoError)?;
+    let obj_filename = temp_obj.path().to_string_lossy().to_string();
 
-    fs::write(obj_filename, &object_code)?;
+    // Create a unique temporary file path for the executable
+    // We use tempfile to get a unique name, then convert to a persistent path
+    let temp_exe_file = tempfile::Builder::new()
+        .tempfile()
+        .map_err(MainError::IoError)?;
+    let temp_exe_path = temp_exe_file.into_temp_path();
+    let executable_name = temp_exe_path.to_string_lossy().to_string();
+
+    // Write object code to temporary file
+    fs::write(&obj_filename, &object_code)?;
 
     // Link with GCC to get C runtime library
     let link_output = Command::new("gcc")
-        .args([obj_filename, "-o", executable_name])
+        .args([&obj_filename, "-o", &executable_name])
         .output()
         .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
@@ -183,7 +195,7 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     }
 
     // Run the program immediately
-    let run_result = Command::new(format!("./{}", executable_name))
+    let run_result = Command::new(&executable_name)
         .output()
         .map_err(|err| MainError::ExecutionError(format!("Error running program: {}", err)))?;
 
@@ -193,9 +205,7 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
         eprint!("{}", String::from_utf8_lossy(&run_result.stderr));
     }
 
-    // Clean up temporary files
-    let _ = fs::remove_file(obj_filename);
-    let _ = fs::remove_file(executable_name);
+    // Temporary files will be automatically cleaned up when temp_obj and temp_exe_path drop
 
     // Return the same exit code as the executed program
     Ok(run_result.status.code().unwrap_or(0))

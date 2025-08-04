@@ -52,6 +52,7 @@ pub enum TokenKind {
     Ampersand,  // &
 
     // Special
+    Newline,
     Eof,
 }
 
@@ -85,8 +86,8 @@ impl<'a> Tokenizer<'a> {
         let mut tokens = Vec::new();
 
         while self.current.is_some() {
-            // Skip whitespace and newlines
-            if matches!(self.current_char(), ' ' | '\t' | '\n' | '\r') {
+            // Skip whitespace (but not newlines)
+            if matches!(self.current_char(), ' ' | '\t') {
                 self.advance();
                 continue;
             }
@@ -109,6 +110,7 @@ impl<'a> Tokenizer<'a> {
         let ch = self.current_char();
 
         match ch {
+            '\n' | '\r' => self.make_simple_token(TokenKind::Newline, start_pos),
             '+' => self.make_simple_token(TokenKind::Plus, start_pos),
             '-' => {
                 self.advance();
