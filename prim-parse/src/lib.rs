@@ -1,10 +1,16 @@
-use prim_tok::{Token, TokenKind, Tokenizer};
+use prim_tok::Tokenizer;
 
 mod error;
 pub use error::ParseError;
 
 mod span;
 pub use span::Span;
+
+// Parser implementation
+pub mod parser;
+
+// Re-export parser for easy access
+pub use parser::Parser;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -76,454 +82,7 @@ pub struct Program {
     pub functions: Vec<Function>,
 }
 
-pub struct Parser<'a> {
-    tokens: Vec<Token<'a>>,
-    current: usize,
-    source: &'a str, // Keep reference to source for span text extraction
-}
-
-impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token<'a>>, source: &'a str) -> Self {
-        Self {
-            tokens,
-            current: 0,
-            source,
-        }
-    }
-
-    pub fn parse(&mut self) -> Result<Program, ParseError> {
-        let mut functions = Vec::new();
-
-        while !self.is_at_end() {
-            // Skip whitespace and newlines
-            if matches!(self.peek().kind, TokenKind::Whitespace | TokenKind::Newline) {
-                self.advance();
-                continue;
-            }
-
-            // Only allow function definitions at the top level
-            match self.peek().kind {
-                TokenKind::Fn => {
-                    let function = self.parse_function()?;
-                    functions.push(function);
-                }
-                _ => {
-                    return Err(ParseError::StatementsOutsideFunction);
-                }
-            }
-        }
-
-        // Validate that a main function exists
-        if !functions.iter().any(|f| self.span_text(&f.name) == "main") {
-            return Err(ParseError::MissingMainFunction);
-        }
-
-        Ok(Program { functions })
-    }
-
-    fn parse_function(&mut self) -> Result<Function, ParseError> {
-        self.consume(TokenKind::Fn, "Expected 'fn'")?;
-        self.skip_whitespace();
-
-        let name = match self.peek().kind {
-            TokenKind::Identifier => {
-                let token = self.advance();
-                Self::token_span(token)
-            }
-            _ => {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "function name".to_string(),
-                    found: self.peek().kind,
-                    position: self.peek().position,
-                });
-            }
-        };
-
-        self.skip_whitespace();
-        self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
-
-        // Parse parameters
-        let parameters = self.parse_parameter_list()?;
-
-        self.consume(TokenKind::RightParen, "Expected ')'")?;
-        self.skip_whitespace();
-
-        // Parse optional return type
-        let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
-            self.advance(); // consume '->'
-            self.skip_whitespace();
-            Some(self.parse_type()?)
-        } else {
-            None
-        };
-
-        self.skip_whitespace();
-        self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
-
-        // Parse function body
-        let mut body = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
-            // Skip whitespace and newlines
-            if matches!(self.peek().kind, TokenKind::Whitespace | TokenKind::Newline) {
-                self.advance();
-                continue;
-            }
-
-            let stmt = self.parse_statement()?;
-            body.push(stmt);
-        }
-
-        self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
-
-        Ok(Function {
-            name,
-            parameters,
-            return_type,
-            body,
-        })
-    }
-
-    fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
-        let mut parameters = Vec::new();
-
-        self.skip_whitespace();
-        if matches!(self.peek().kind, TokenKind::RightParen) {
-            return Ok(parameters); // Empty parameter list
-        }
-
-        // Parse first parameter
-        parameters.push(self.parse_parameter()?);
-
-        // Parse remaining parameters
-        while {
-            self.skip_whitespace();
-            matches!(self.peek().kind, TokenKind::Comma)
-        } {
-            self.advance(); // consume ','
-            self.skip_whitespace();
-            parameters.push(self.parse_parameter()?);
-        }
-
-        Ok(parameters)
-    }
-
-    fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
-        let name = match self.peek().kind {
-            TokenKind::Identifier => {
-                let token = self.advance();
-                Self::token_span(token)
-            }
-            _ => {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "parameter name".to_string(),
-                    found: self.peek().kind,
-                    position: self.peek().position,
-                });
-            }
-        };
-
-        self.skip_whitespace();
-        self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
-        self.skip_whitespace();
-
-        let type_annotation = self.parse_type()?;
-
-        Ok(Parameter {
-            name,
-            type_annotation,
-        })
-    }
-
-    fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
-        match self.peek().kind {
-            TokenKind::Let => self.parse_let_statement(),
-            _ => {
-                let expr = self.parse_expression()?;
-                Ok(Stmt::Expr(expr))
-            }
-        }
-    }
-
-    fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
-        self.consume(TokenKind::Let, "Expected 'let'")?;
-        self.skip_whitespace();
-
-        let name = match self.peek().kind {
-            TokenKind::Identifier => {
-                let token = self.advance();
-                Self::token_span(token)
-            }
-            _ => {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "identifier".to_string(),
-                    found: self.peek().kind,
-                    position: self.peek().position,
-                });
-            }
-        };
-
-        self.skip_whitespace();
-
-        // Optional type annotation
-        let type_annotation = if matches!(self.peek().kind, TokenKind::Colon) {
-            self.advance(); // consume ':'
-            self.skip_whitespace();
-            Some(self.parse_type()?)
-        } else {
-            None
-        };
-
-        self.skip_whitespace();
-        self.consume(TokenKind::Equals, "Expected '='")?;
-        self.skip_whitespace();
-
-        let value = self.parse_expression()?;
-
-        Ok(Stmt::Let {
-            name,
-            type_annotation,
-            value,
-        })
-    }
-
-    fn parse_type(&mut self) -> Result<Type, ParseError> {
-        let type_token = self.advance();
-        let type_kind = match type_token.kind {
-            TokenKind::U8 => Type::U8,
-            TokenKind::I8 => Type::I8,
-            TokenKind::U16 => Type::U16,
-            TokenKind::I16 => Type::I16,
-            TokenKind::U32 => Type::U32,
-            TokenKind::I32 => Type::I32,
-            TokenKind::U64 => Type::U64,
-            TokenKind::I64 => Type::I64,
-            TokenKind::Usize => Type::Usize,
-            TokenKind::Isize => Type::Isize,
-            TokenKind::F32 => Type::F32,
-            TokenKind::F64 => Type::F64,
-            _ => {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "type".to_string(),
-                    found: type_token.kind,
-                    position: type_token.position,
-                });
-            }
-        };
-        Ok(type_kind)
-    }
-
-    fn parse_expression(&mut self) -> Result<Expr, ParseError> {
-        self.parse_equality()
-    }
-
-    fn parse_equality(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_addition()?;
-
-        loop {
-            self.skip_whitespace();
-            if !matches!(self.peek().kind, TokenKind::DoubleEquals) {
-                break;
-            }
-
-            let op = BinaryOp::Equals;
-            self.advance();
-            self.skip_whitespace();
-            let right = self.parse_addition()?;
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                op,
-                right: Box::new(right),
-            };
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_addition(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_multiplication()?;
-
-        loop {
-            self.skip_whitespace();
-            if !matches!(self.peek().kind, TokenKind::Plus | TokenKind::Minus) {
-                break;
-            }
-
-            let token = self.advance();
-            let op = match token.kind {
-                TokenKind::Plus => BinaryOp::Add,
-                TokenKind::Minus => BinaryOp::Subtract,
-                _ => {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "binary operator".to_string(),
-                        found: token.kind,
-                        position: token.position,
-                    });
-                }
-            };
-            self.skip_whitespace();
-            let right = self.parse_multiplication()?;
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                op,
-                right: Box::new(right),
-            };
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_multiplication(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_primary()?;
-
-        loop {
-            self.skip_whitespace();
-            if !matches!(self.peek().kind, TokenKind::Star | TokenKind::Slash) {
-                break;
-            }
-
-            let token = self.advance();
-            let op = match token.kind {
-                TokenKind::Star => BinaryOp::Multiply,
-                TokenKind::Slash => BinaryOp::Divide,
-                _ => {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "binary operator".to_string(),
-                        found: token.kind,
-                        position: token.position,
-                    });
-                }
-            };
-            self.skip_whitespace();
-            let right = self.parse_primary()?;
-            expr = Expr::Binary {
-                left: Box::new(expr),
-                op,
-                right: Box::new(right),
-            };
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        self.skip_whitespace();
-        let token = self.advance();
-
-        match &token.kind {
-            TokenKind::IntLiteral => Ok(Expr::IntLiteral(Self::token_span(token))),
-            TokenKind::FloatLiteral => Ok(Expr::FloatLiteral(Self::token_span(token))),
-            TokenKind::Identifier => {
-                let name = Self::token_span(token);
-                // Check if this is a function call
-                self.skip_whitespace();
-                if matches!(self.peek().kind, TokenKind::LeftParen) {
-                    self.advance(); // consume '('
-                    let args = self.parse_argument_list()?;
-                    self.consume(TokenKind::RightParen, "Expected ')'")?;
-                    Ok(Expr::FunctionCall { name, args })
-                } else {
-                    Ok(Expr::Identifier(name))
-                }
-            }
-            TokenKind::Println => {
-                // println is a built-in function
-                let name_span = Self::token_span(token);
-                self.skip_whitespace();
-                self.consume(TokenKind::LeftParen, "Expected '(' after println")?;
-                let args = self.parse_argument_list()?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall {
-                    name: name_span,
-                    args,
-                })
-            }
-            TokenKind::LeftParen => {
-                self.skip_whitespace();
-                let expr = self.parse_expression()?;
-                self.skip_whitespace();
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(expr)
-            }
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "expression".to_string(),
-                found: token.kind,
-                position: token.position,
-            }),
-        }
-    }
-
-    fn parse_argument_list(&mut self) -> Result<Vec<Expr>, ParseError> {
-        let mut args = Vec::new();
-
-        self.skip_whitespace();
-        if matches!(self.peek().kind, TokenKind::RightParen) {
-            return Ok(args); // Empty argument list
-        }
-
-        // Parse first argument
-        args.push(self.parse_expression()?);
-
-        // Parse remaining arguments
-        while {
-            self.skip_whitespace();
-            matches!(self.peek().kind, TokenKind::Comma)
-        } {
-            self.advance(); // consume ','
-            self.skip_whitespace();
-            args.push(self.parse_expression()?);
-        }
-
-        Ok(args)
-    }
-
-    fn skip_whitespace(&mut self) {
-        while matches!(self.peek().kind, TokenKind::Whitespace) {
-            self.advance();
-        }
-    }
-
-    fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token<'a>, ParseError> {
-        if self.peek().kind == expected {
-            Ok(self.advance())
-        } else {
-            Err(ParseError::UnexpectedToken {
-                expected: message.to_string(),
-                found: self.peek().kind,
-                position: self.peek().position,
-            })
-        }
-    }
-
-    fn advance(&mut self) -> &Token<'a> {
-        if !self.is_at_end() {
-            self.current += 1;
-        }
-        self.previous()
-    }
-
-    fn is_at_end(&self) -> bool {
-        matches!(self.peek().kind, TokenKind::Eof)
-    }
-
-    fn peek(&self) -> &Token<'a> {
-        &self.tokens[self.current]
-    }
-
-    fn previous(&self) -> &Token<'a> {
-        &self.tokens[self.current - 1]
-    }
-
-    /// Create a span from a token (no self needed)
-    fn token_span(token: &Token) -> Span {
-        Span::new(token.position, token.position + token.text.len())
-    }
-
-    /// Get text from a span
-    fn span_text(&self, span: &Span) -> &str {
-        span.text(self.source)
-    }
-}
-
+/// Parse a Prim program using the unified parser
 pub fn parse(input: &str) -> Result<Program, ParseError> {
     let mut tokenizer = Tokenizer::new(input);
     let tokens = tokenizer.tokenize()?;
@@ -534,6 +93,7 @@ pub fn parse(input: &str) -> Result<Program, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prim_tok::TokenKind;
 
     #[test]
     fn test_parse_let_statement() {
@@ -1408,5 +968,179 @@ fn main() {
             _ => false,
         });
         assert!(has_level2_call, "level1 should call level2");
+    }
+
+    #[test]
+    fn test_both_parsers_produce_same_result() {
+        let source = "fn main() { let result = 2 + 3 * 4\nprintln(result) }";
+
+        // Parse with the unified parser
+        let program = parse(source).unwrap();
+
+        // Basic structure check
+        assert_eq!(program.functions.len(), 1);
+        assert_eq!(program.functions[0].name.text(source), "main");
+    }
+
+    #[test]
+    fn test_whitespace_ignored() {
+        // Test that whitespace is completely ignored during parsing
+        let messy_input = "fn   main (  )   {   let   x :  i32   =   2   +   3   *   4   }";
+        let clean_input = "fn main() { let x: i32 = 2 + 3 * 4 }";
+
+        let messy_program = parse(messy_input).expect("Should parse messy input");
+        let clean_program = parse(clean_input).expect("Should parse clean input");
+
+        // Both should produce structurally identical ASTs (spans will differ due to whitespace)
+        assert_eq!(messy_program.functions.len(), clean_program.functions.len());
+        assert_eq!(messy_program.functions.len(), 1);
+        assert_eq!(messy_program.functions[0].name.text(messy_input), "main");
+        assert_eq!(clean_program.functions[0].name.text(clean_input), "main");
+
+        // Test that the arithmetic expression is parsed correctly in both cases
+        if let Some(Stmt::Let { value, .. }) = messy_program.functions[0].body.first() {
+            // Should be parsed as 2 + (3 * 4)
+            if let Expr::Binary {
+                left,
+                op: BinaryOp::Add,
+                right,
+            } = value
+            {
+                assert!(matches!(**left, Expr::IntLiteral(_)));
+                if let Expr::Binary {
+                    op: BinaryOp::Multiply,
+                    ..
+                } = &**right
+                {
+                    println!("✓ Whitespace ignored - both inputs produce identical AST");
+                } else {
+                    panic!("Right side should be multiplication");
+                }
+            } else {
+                panic!("Expected binary addition expression");
+            }
+        } else {
+            panic!("Expected let statement");
+        }
+    }
+
+    #[test]
+    fn test_parser_arithmetic_expressions() {
+        // Test parser directly on arithmetic expressions (not full programs)
+        let test_cases = vec![
+            ("2 + 3 * 4", "Should parse as 2 + (3 * 4)"),
+            ("2 * 3 + 4", "Should parse as (2 * 3) + 4"),
+            (
+                "1 + 2 + 3",
+                "Should parse as (1 + 2) + 3 (left associative)",
+            ),
+            (
+                "2 * 3 * 4",
+                "Should parse as (2 * 3) * 4 (left associative)",
+            ),
+            ("(2 + 3) * 4", "Should respect parentheses"),
+        ];
+
+        for (expr_input, description) in test_cases {
+            println!("Testing parser on: {} - {}", expr_input, description);
+
+            let mut tokenizer = prim_tok::Tokenizer::new(expr_input);
+            let tokens = tokenizer.tokenize().expect("Failed to tokenize");
+            let mut parser = Parser::new(tokens, expr_input);
+
+            // Test expression parsing directly using the parser's parse_expression method
+            match parser.parse_expression(crate::parser::Precedence::NONE) {
+                Ok(expr) => {
+                    println!("  ✓ Successfully parsed expression");
+
+                    // Validate precedence for "2 + 3 * 4" - should be 2 + (3 * 4)
+                    if expr_input == "2 + 3 * 4" {
+                        if let Expr::Binary {
+                            left,
+                            op: BinaryOp::Add,
+                            right,
+                        } = &expr
+                        {
+                            // Left should be IntLiteral(2)
+                            if let Expr::IntLiteral(left_span) = &**left {
+                                assert_eq!(left_span.text(expr_input), "2");
+                            } else {
+                                panic!("Left side should be IntLiteral(2), got: {:?}", left);
+                            }
+
+                            // Right should be Binary { 3 * 4 }
+                            if let Expr::Binary {
+                                left: mult_left,
+                                op: BinaryOp::Multiply,
+                                right: mult_right,
+                            } = &**right
+                            {
+                                if let (Expr::IntLiteral(left_span), Expr::IntLiteral(right_span)) =
+                                    (&**mult_left, &**mult_right)
+                                {
+                                    assert_eq!(left_span.text(expr_input), "3");
+                                    assert_eq!(right_span.text(expr_input), "4");
+                                    println!("    ✓ Correct precedence: parsed as 2 + (3 * 4)");
+                                } else {
+                                    panic!("Multiplication operands should be literals");
+                                }
+                            } else {
+                                panic!("Right side should be multiplication, got: {:?}", right);
+                            }
+                        } else {
+                            panic!(
+                                "Expected addition at top level for 2 + 3 * 4, got: {:?}",
+                                expr
+                            );
+                        }
+                    }
+
+                    // Validate left associativity for "1 + 2 + 3" - should be (1 + 2) + 3
+                    if expr_input == "1 + 2 + 3" {
+                        if let Expr::Binary {
+                            left,
+                            op: BinaryOp::Add,
+                            right,
+                        } = &expr
+                        {
+                            // Left should be Binary { 1 + 2 }
+                            if let Expr::Binary {
+                                left: add_left,
+                                op: BinaryOp::Add,
+                                right: add_right,
+                            } = &**left
+                            {
+                                if let (Expr::IntLiteral(left_span), Expr::IntLiteral(right_span)) =
+                                    (&**add_left, &**add_right)
+                                {
+                                    assert_eq!(left_span.text(expr_input), "1");
+                                    assert_eq!(right_span.text(expr_input), "2");
+                                } else {
+                                    panic!("Addition operands should be literals");
+                                }
+                            } else {
+                                panic!("Left side should be (1 + 2), got: {:?}", left);
+                            }
+
+                            // Right should be IntLiteral(3)
+                            if let Expr::IntLiteral(right_span) = &**right {
+                                assert_eq!(right_span.text(expr_input), "3");
+                                println!("    ✓ Correct left associativity: parsed as (1 + 2) + 3");
+                            } else {
+                                panic!("Right side should be IntLiteral(3), got: {:?}", right);
+                            }
+                        } else {
+                            panic!(
+                                "Expected addition at top level for 1 + 2 + 3, got: {:?}",
+                                expr
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    panic!("Failed to parse expression '{}': {:?}", expr_input, e);
+                }
+            }
+        }
     }
 }

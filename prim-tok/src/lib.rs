@@ -52,8 +52,6 @@ pub enum TokenKind {
     Ampersand,  // &
 
     // Special
-    Whitespace,
-    Newline,
     Eof,
 }
 
@@ -87,6 +85,12 @@ impl<'a> Tokenizer<'a> {
         let mut tokens = Vec::new();
 
         while self.current.is_some() {
+            // Skip whitespace and newlines
+            if matches!(self.current_char(), ' ' | '\t' | '\n' | '\r') {
+                self.advance();
+                continue;
+            }
+
             let token = self.next_token()?;
             tokens.push(token);
         }
@@ -105,8 +109,6 @@ impl<'a> Tokenizer<'a> {
         let ch = self.current_char();
 
         match ch {
-            ' ' | '\t' => self.make_simple_token(TokenKind::Whitespace, start_pos),
-            '\n' | '\r' => self.make_simple_token(TokenKind::Newline, start_pos),
             '+' => self.make_simple_token(TokenKind::Plus, start_pos),
             '-' => {
                 self.advance();
@@ -284,12 +286,12 @@ mod tests {
 
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
-        assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(tokens[2].text, "x");
-        assert_eq!(tokens[4].kind, TokenKind::Equals);
-        assert_eq!(tokens[4].text, "=");
-        assert_eq!(tokens[6].kind, TokenKind::IntLiteral);
-        assert_eq!(tokens[6].text, "42");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "x");
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[2].text, "=");
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[3].text, "42");
     }
 
     #[test]
@@ -299,12 +301,16 @@ mod tests {
 
         assert_eq!(tokens[0].kind, TokenKind::Let);
         assert_eq!(tokens[0].text, "let");
-        assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(tokens[2].text, "x");
-        assert_eq!(tokens[3].kind, TokenKind::Colon);
-        assert_eq!(tokens[3].text, ":");
-        assert_eq!(tokens[5].kind, TokenKind::U32);
-        assert_eq!(tokens[5].text, "u32");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "x");
+        assert_eq!(tokens[2].kind, TokenKind::Colon);
+        assert_eq!(tokens[2].text, ":");
+        assert_eq!(tokens[3].kind, TokenKind::U32);
+        assert_eq!(tokens[3].text, "u32");
+        assert_eq!(tokens[4].kind, TokenKind::Equals);
+        assert_eq!(tokens[4].text, "=");
+        assert_eq!(tokens[5].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[5].text, "0u32");
     }
 
     #[test]
@@ -312,30 +318,25 @@ mod tests {
         let mut tokenizer = Tokenizer::new("fn double(x: u32) -> u32");
         let tokens = tokenizer.tokenize().unwrap();
 
-        // Filter out whitespace for easier testing
-        let non_whitespace: Vec<_> = tokens
-            .into_iter()
-            .filter(|t| !matches!(t.kind, TokenKind::Whitespace))
-            .collect();
-
-        assert_eq!(non_whitespace[0].kind, TokenKind::Fn);
-        assert_eq!(non_whitespace[0].text, "fn");
-        assert_eq!(non_whitespace[1].kind, TokenKind::Identifier);
-        assert_eq!(non_whitespace[1].text, "double");
-        assert_eq!(non_whitespace[2].kind, TokenKind::LeftParen);
-        assert_eq!(non_whitespace[2].text, "(");
-        assert_eq!(non_whitespace[3].kind, TokenKind::Identifier);
-        assert_eq!(non_whitespace[3].text, "x");
-        assert_eq!(non_whitespace[4].kind, TokenKind::Colon);
-        assert_eq!(non_whitespace[4].text, ":");
-        assert_eq!(non_whitespace[5].kind, TokenKind::U32);
-        assert_eq!(non_whitespace[5].text, "u32");
-        assert_eq!(non_whitespace[6].kind, TokenKind::RightParen);
-        assert_eq!(non_whitespace[6].text, ")");
-        assert_eq!(non_whitespace[7].kind, TokenKind::Arrow);
-        assert_eq!(non_whitespace[7].text, "->");
-        assert_eq!(non_whitespace[8].kind, TokenKind::U32);
-        assert_eq!(non_whitespace[8].text, "u32");
+        // Whitespace is now automatically filtered out during tokenization
+        assert_eq!(tokens[0].kind, TokenKind::Fn);
+        assert_eq!(tokens[0].text, "fn");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "double");
+        assert_eq!(tokens[2].kind, TokenKind::LeftParen);
+        assert_eq!(tokens[2].text, "(");
+        assert_eq!(tokens[3].kind, TokenKind::Identifier);
+        assert_eq!(tokens[3].text, "x");
+        assert_eq!(tokens[4].kind, TokenKind::Colon);
+        assert_eq!(tokens[4].text, ":");
+        assert_eq!(tokens[5].kind, TokenKind::U32);
+        assert_eq!(tokens[5].text, "u32");
+        assert_eq!(tokens[6].kind, TokenKind::RightParen);
+        assert_eq!(tokens[6].text, ")");
+        assert_eq!(tokens[7].kind, TokenKind::Arrow);
+        assert_eq!(tokens[7].text, "->");
+        assert_eq!(tokens[8].kind, TokenKind::U32);
+        assert_eq!(tokens[8].text, "u32");
     }
 
     #[test]
