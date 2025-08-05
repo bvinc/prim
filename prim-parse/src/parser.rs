@@ -23,6 +23,12 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: Vec<Token<'a>>, source: &'a str) -> Self {
+        // Filter out comment tokens so the parser never sees them
+        let tokens = tokens
+            .into_iter()
+            .filter(|token| token.kind != TokenKind::Comment)
+            .collect();
+
         Self {
             tokens,
             current: 0,

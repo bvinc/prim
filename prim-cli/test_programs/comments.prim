@@ -1,0 +1,8 @@
+// This is a line comment at the top
+fn main() {
+    let x = 42 // inline comment
+    /* This is a block comment
+       that spans multiple lines */
+    let y = /* inline block */ 10
+    println(x + y) // prints 52
+}

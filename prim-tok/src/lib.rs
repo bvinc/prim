@@ -52,6 +52,7 @@ pub enum TokenKind {
     Ampersand,  // &
 
     // Special
+    Comment,
     Newline,
     Eof,
 }
@@ -86,12 +87,6 @@ impl<'a> Tokenizer<'a> {
         let mut tokens = Vec::new();
 
         while self.current.is_some() {
-            // Skip whitespace (but not newlines)
-            if matches!(self.current_char(), ' ' | '\t') {
-                self.advance();
-                continue;
-            }
-
             let token = self.next_token()?;
             tokens.push(token);
         }
@@ -106,6 +101,11 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
+        // Skip whitespace (but not newlines - they're significant)
+        while matches!(self.current_char(), ' ' | '\t') {
+            self.advance();
+        }
+
         let start_pos = self.position;
         let ch = self.current_char();
 
@@ -130,7 +130,18 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             '*' => self.make_simple_token(TokenKind::Star, start_pos),
-            '/' => self.make_simple_token(TokenKind::Slash, start_pos),
+            '/' => {
+                self.advance();
+                match self.current_char() {
+                    '/' => self.read_line_comment(start_pos),
+                    '*' => self.read_block_comment(start_pos),
+                    _ => Ok(Token {
+                        kind: TokenKind::Slash,
+                        text: &self.input[start_pos..self.position],
+                        position: start_pos,
+                    }),
+                }
+            }
             '=' => {
                 self.advance();
                 if self.current_char() == '=' {
@@ -263,6 +274,54 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    fn read_line_comment(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
+        // We've already consumed the first '/', now consume the second '/'
+        self.advance();
+
+        // Read until newline or end of input
+        while self.current.is_some() && !matches!(self.current_char(), '\n' | '\r') {
+            self.advance();
+        }
+
+        Ok(Token {
+            kind: TokenKind::Comment,
+            text: &self.input[start_pos..self.position],
+            position: start_pos,
+        })
+    }
+
+    fn read_block_comment(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
+        // We've already consumed the '/', now consume the '*'
+        self.advance();
+
+        // Read until we find '*/' or end of input
+        while self.current.is_some() {
+            if self.current_char() == '*' {
+                self.advance();
+                if self.current_char() == '/' {
+                    self.advance();
+                    break;
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        // Check if we reached end of input without closing the comment
+        let text = &self.input[start_pos..self.position];
+        if !text.ends_with("*/") {
+            return Err(TokenError::UnterminatedComment {
+                position: start_pos,
+            });
+        }
+
+        Ok(Token {
+            kind: TokenKind::Comment,
+            text,
+            position: start_pos,
+        })
+    }
+
     fn make_simple_token(
         &mut self,
         kind: TokenKind,
@@ -339,6 +398,106 @@ mod tests {
         assert_eq!(tokens[7].text, "->");
         assert_eq!(tokens[8].kind, TokenKind::U32);
         assert_eq!(tokens[8].text, "u32");
+    }
+
+    #[test]
+    fn test_line_comments() {
+        let mut tokenizer = Tokenizer::new("let x = 42 // this is a comment");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].kind, TokenKind::Comment);
+        assert_eq!(tokens[4].text, "// this is a comment");
+        assert_eq!(tokens[5].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_line_comment_at_end_with_newline() {
+        let mut tokenizer = Tokenizer::new("let x = 42 // comment\nlet y = 5");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].kind, TokenKind::Comment);
+        assert_eq!(tokens[4].text, "// comment");
+        assert_eq!(tokens[5].kind, TokenKind::Newline);
+        assert_eq!(tokens[6].kind, TokenKind::Let);
+        assert_eq!(tokens[7].kind, TokenKind::Identifier);
+        assert_eq!(tokens[8].kind, TokenKind::Equals);
+        assert_eq!(tokens[9].kind, TokenKind::IntLiteral);
+    }
+
+    #[test]
+    fn test_block_comments() {
+        let mut tokenizer = Tokenizer::new("let x = /* block comment */ 42");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::Comment);
+        assert_eq!(tokens[3].text, "/* block comment */");
+        assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].text, "42");
+        assert_eq!(tokens[5].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_multiline_block_comment() {
+        let mut tokenizer = Tokenizer::new("let x = /* multi\nline\ncomment */ 42");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::Comment);
+        assert_eq!(tokens[3].text, "/* multi\nline\ncomment */");
+        assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].text, "42");
+    }
+
+    #[test]
+    fn test_block_comment_with_slash_star_inside() {
+        // Block comments end at the first */ - no nesting support
+        let mut tokenizer = Tokenizer::new("/* outer /* inner */ remaining");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Comment);
+        assert_eq!(tokens[0].text, "/* outer /* inner */");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "remaining");
+        assert_eq!(tokens[2].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_unterminated_block_comment() {
+        let mut tokenizer = Tokenizer::new("let x = /* unterminated comment");
+        let result = tokenizer.tokenize();
+
+        match result {
+            Err(TokenError::UnterminatedComment { position }) => {
+                assert_eq!(position, 8); // Position of /*
+            }
+            _ => panic!("Expected UnterminatedComment error, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_division_vs_comments() {
+        let mut tokenizer = Tokenizer::new("let x = a / b");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::Identifier);
+        assert_eq!(tokens[4].kind, TokenKind::Slash);
+        assert_eq!(tokens[5].kind, TokenKind::Identifier);
     }
 
     #[test]

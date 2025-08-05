@@ -62,6 +62,11 @@ mod test_programs {
         "test_programs/parentheses.prim",
         "test_programs/parentheses.expected"
     );
+    test_program!(
+        comments,
+        "test_programs/comments.prim",
+        "test_programs/comments.expected"
+    );
 }
 
 fn run_test_program(prim_file: &str, expected_file: &str) {

@@ -56,7 +56,9 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 ### Whitespace and Comments
 - Whitespace (spaces, tabs) is ignored except for token separation
 - Newlines are significant as statement terminators
-- Comments are not yet supported
+- **Line comments**: `// comment text` - from `//` to end of line
+- **Block comments**: `/* comment text */` - can span multiple lines
+- Comments are completely ignored by the parser
 
 ## Semantic Rules
 
