@@ -1,4 +1,11 @@
+fn test_const_ptr(ptr: *const u8) -> i32 {
+    42
+}
+
+fn test_mut_ptr(ptr: *mut i32) -> i32 {
+    24
+}
+
 fn main() {
-    let x: i32 = 42
-    println(x)
+    println(42)
 }
