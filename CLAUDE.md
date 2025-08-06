@@ -7,18 +7,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 **Prim** is a programming language compiler implemented in Rust with a complete toolchain that compiles Prim source code to native x86-64 executables. The compiler uses the Cranelift code generation backend for professional-quality optimized machine code output.
 
 ### Language Features
-- **Primitive types**: Integers (u8, u16, u32, u64, i8, i16, i32, i64), floats
+- **Primitive types**: Integers (u8, u16, u32, u64, i8, i16, i32, i64), floats, booleans
 - **Variables**: `let` bindings with optional type annotations
-- **Expressions**: Arithmetic operations (+, -, *, ==), literals, variables
+- **Expressions**: Arithmetic operations (+, -, *, ==), literals, variables, field access
+- **Structs**: User-defined types with named fields and struct literals
 - **Functions**: `println()` function for output
 - **Type inference**: Basic type inference for unspecified types
 
 ### Example Prim Program
 ```prim
-let x: u32 = 5
-let y: u32 = 10
-let result = x + y * 2
-println(result)  // outputs: 25
+struct Point {
+    x: i32,
+    y: i32
+}
+
+fn main() {
+    let p = Point { x = 10, y = 20 }
+    println(p.x)  // outputs: 10
+    println(p.y)  // outputs: 20
+}
 ```
 
 ## Architecture
@@ -91,6 +98,8 @@ All example Prim programs are in `prim-cli/test_programs/`:
 - `arithmetic.prim` - Arithmetic with precedence (outputs 20)
 - `precedence.prim` - Operator precedence test (outputs 14)
 - `semicolon_termination.prim` - Multiple statements with semicolons
+- `struct_basic.prim` - Struct definition and field access (outputs 10, 20)
+- `struct_access.prim` - Simple struct instantiation and field access
 - And several others for various language features
 
 ## Code Quality

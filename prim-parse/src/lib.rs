@@ -1063,7 +1063,7 @@ struct Point {
 }
 
 fn main() {
-    let p = Point { x: 10, y: 20 }
+    let p = Point { x = 10, y = 20 }
     println(p.x)
 }
 "#;
@@ -1145,7 +1145,7 @@ fn main() {
 
     #[test]
     fn test_parse_struct_literal() {
-        let source = r#"fn main() { let p = Point { x: 10, y: 20 } }"#;
+        let source = r#"fn main() { let p = Point { x = 10, y = 20 } }"#;
         let program = parse(source).unwrap();
 
         let main_func = &program.functions[0];

@@ -363,7 +363,7 @@ impl<'a> Parser<'a> {
         let name = Self::token_span(name_token);
         self.skip_newlines();
 
-        self.consume(TokenKind::Colon, "Expected ':' after field name")?;
+        self.consume(TokenKind::Equals, "Expected '=' after field name")?;
         self.skip_newlines();
         let value = self.parse_expression(Precedence::NONE)?;
 
