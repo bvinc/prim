@@ -11,7 +11,7 @@ use prim_tok::TokenError;
 ///
 /// This trait ensures that all errors in the Prim compiler have consistent
 /// capabilities for error reporting and debugging.
-pub trait PrimError: std::error::Error + std::fmt::Debug + Clone {
+pub trait PrimError: std::error::Error + std::fmt::Debug {
     /// Get an error code for programmatic handling
     fn error_code(&self) -> &'static str;
 
@@ -26,7 +26,7 @@ pub trait PrimError: std::error::Error + std::fmt::Debug + Clone {
 }
 
 /// A top-level error type that can represent any compiler error
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum CompilerError {
     Token(TokenError),
     Parse(ParseError),

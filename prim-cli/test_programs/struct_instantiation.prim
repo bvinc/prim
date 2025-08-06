@@ -1,0 +1,8 @@
+struct Point {
+    x: i32
+}
+
+fn main() {
+    let p = Point { x: 42 }
+    println(42)
+}

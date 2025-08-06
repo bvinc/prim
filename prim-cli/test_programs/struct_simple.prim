@@ -1,0 +1,7 @@
+struct Point {
+    x: i32
+}
+
+fn main() {
+    println(42)
+}

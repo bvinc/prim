@@ -67,6 +67,11 @@ mod test_programs {
         "test_programs/comments.prim",
         "test_programs/comments.expected"
     );
+    test_program!(
+        struct_basic,
+        "test_programs/struct_basic.prim",
+        "test_programs/struct_basic.expected"
+    );
 }
 
 fn run_test_program(prim_file: &str, expected_file: &str) {

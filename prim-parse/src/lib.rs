@@ -26,12 +26,15 @@ pub enum Type {
     Isize,
     F32,
     F64,
+    Bool,
+    Struct(Span), // struct name reference
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     IntLiteral(Span),
     FloatLiteral(Span),
+    BoolLiteral(bool),
     Identifier(Span),
     Binary {
         left: Box<Expr>,
@@ -42,6 +45,14 @@ pub enum Expr {
         name: Span,
         args: Vec<Expr>,
     },
+    StructLiteral {
+        name: Span,
+        fields: Vec<StructField>,
+    },
+    FieldAccess {
+        object: Box<Expr>,
+        field: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +62,24 @@ pub enum BinaryOp {
     Multiply,
     Divide,
     Equals,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub name: Span,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDefinition {
+    pub name: Span,
+    pub fields: Vec<StructFieldDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructFieldDefinition {
+    pub name: Span,
+    pub field_type: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +108,7 @@ pub struct Parameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
 }
 
@@ -1021,6 +1051,146 @@ fn main() {
             }
         } else {
             panic!("Expected let statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_definition() {
+        let source = r#"
+struct Point {
+    x: i32,
+    y: i32
+}
+
+fn main() {
+    let p = Point { x: 10, y: 20 }
+    println(p.x)
+}
+"#;
+        let program = parse(source).unwrap();
+
+        // Check that we have one struct and one function
+        assert_eq!(program.structs.len(), 1);
+        assert_eq!(program.functions.len(), 1);
+
+        // Check struct definition
+        let point_struct = &program.structs[0];
+        assert_eq!(point_struct.name.text(source), "Point");
+        assert_eq!(point_struct.fields.len(), 2);
+
+        // Check first field
+        assert_eq!(point_struct.fields[0].name.text(source), "x");
+        assert_eq!(point_struct.fields[0].field_type, Type::I32);
+
+        // Check second field
+        assert_eq!(point_struct.fields[1].name.text(source), "y");
+        assert_eq!(point_struct.fields[1].field_type, Type::I32);
+
+        // Check main function has struct literal and field access
+        let main_func = &program.functions[0];
+        assert_eq!(main_func.body.len(), 2);
+
+        // Check struct literal in let statement
+        if let Stmt::Let {
+            value: Expr::StructLiteral { name, fields },
+            ..
+        } = &main_func.body[0]
+        {
+            assert_eq!(name.text(source), "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name.text(source), "x");
+            assert_eq!(fields[1].name.text(source), "y");
+        } else {
+            panic!("Expected struct literal in let statement");
+        }
+
+        // Check field access in println
+        if let Stmt::Expr(Expr::FunctionCall { args, .. }) = &main_func.body[1] {
+            if let Expr::FieldAccess { object, field } = &args[0] {
+                assert_eq!(field.text(source), "x");
+                if let Expr::Identifier(id) = object.as_ref() {
+                    assert_eq!(id.text(source), "p");
+                } else {
+                    panic!("Expected identifier in field access");
+                }
+            } else {
+                panic!("Expected field access in println");
+            }
+        } else {
+            panic!("Expected println call");
+        }
+    }
+
+    #[test]
+    fn test_parse_field_access() {
+        let source = "fn main() { let x = point.x }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        if let Stmt::Let {
+            value: Expr::FieldAccess { object, field },
+            ..
+        } = &main_func.body[0]
+        {
+            assert_eq!(field.text(source), "x");
+            if let Expr::Identifier(obj_name) = object.as_ref() {
+                assert_eq!(obj_name.text(source), "point");
+            } else {
+                panic!("Expected identifier in field access object");
+            }
+        } else {
+            panic!("Expected field access expression");
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_literal() {
+        let source = r#"fn main() { let p = Point { x: 10, y: 20 } }"#;
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        if let Stmt::Let {
+            value: Expr::StructLiteral { name, fields },
+            ..
+        } = &main_func.body[0]
+        {
+            assert_eq!(name.text(source), "Point");
+            assert_eq!(fields.len(), 2);
+
+            // Check first field
+            assert_eq!(fields[0].name.text(source), "x");
+            if let Expr::IntLiteral(val) = &fields[0].value {
+                assert_eq!(val.text(source), "10");
+            } else {
+                panic!("Expected integer literal for x field");
+            }
+
+            // Check second field
+            assert_eq!(fields[1].name.text(source), "y");
+            if let Expr::IntLiteral(val) = &fields[1].value {
+                assert_eq!(val.text(source), "20");
+            } else {
+                panic!("Expected integer literal for y field");
+            }
+        } else {
+            panic!("Expected struct literal");
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_type_annotation() {
+        let source = "fn main() { let p: Point = get_point() }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        if let Stmt::Let {
+            type_annotation: Some(Type::Struct(name)),
+            ..
+        } = &main_func.body[0]
+        {
+            assert_eq!(name.text(source), "Point");
+        } else {
+            panic!("Expected struct type annotation");
         }
     }
 

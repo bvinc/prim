@@ -31,25 +31,28 @@ addition       → multiplication ( ( "+" | "-" ) multiplication )*
 multiplication → unary ( ( "*" | "/" ) unary )*
 unary          → ( "-" ) unary | call
 call           → primary ( "(" arguments? ")" )*
-primary        → INT_LITERAL | FLOAT_LITERAL | IDENTIFIER | "(" expression ")"
+primary        → INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL | IDENTIFIER | "(" expression ")"
 arguments      → expression ( "," expression )*
 ```
 
 ### Types
 ```
 type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" 
-               | "usize" | "isize" | "f32" | "f64"
+               | "usize" | "isize" | "f32" | "f64" | "bool"
 ```
 
 ## Lexical Rules
 
 ### Tokens
-- **Keywords**: `fn`, `let`
-- **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`
+- **Keywords**: `fn`, `let`, `if`, `true`, `false`
+- **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`, `bool`
 - **Operators**: `+`, `-`, `*`, `/`, `=`, `==`, `->`, `(`, `)`, `{`, `}`, `,`, `:`, `;`
 - **Literals**: 
   - Integer: `42`, `0`, `123u32` 
   - Float: `3.14`, `2.0f32`
+  - String: `"hello world"`, `"with\nescapes"`
+  - Character: `'a'`, `'\n'`, `'\''`
+  - Boolean: `true`, `false`
 - **Identifiers**: `[a-zA-Z_][a-zA-Z0-9_]*`
 - **Built-ins**: `println` (special function)
 
@@ -59,6 +62,16 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - **Line comments**: `// comment text` - from `//` to end of line
 - **Block comments**: `/* comment text */` - can span multiple lines
 - Comments are completely ignored by the parser
+
+### String and Character Literals
+- **String literals**: Enclosed in double quotes `"text"`
+  - Support escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`
+  - Can span multiple lines (if escaped properly)
+  - Empty strings allowed: `""`
+- **Character literals**: Enclosed in single quotes `'c'`
+  - Exactly one character (or escape sequence)
+  - Support escape sequences: `\n`, `\t`, `\r`, `\\`, `\'`
+  - Examples: `'a'`, `'\n'`, `'\''`
 
 ## Semantic Rules
 
@@ -77,7 +90,8 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 
 ### Type System
 - Integer types: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`
-- Floating-point types: `f32`, `f64`  
+- Floating-point types: `f32`, `f64`
+- Boolean type: `bool` (values: `true`, `false`)
 - No implicit type conversions
 - Type inference for `let` bindings without explicit types
 
@@ -133,6 +147,15 @@ The compiler provides clear error messages for:
 fn main() {
     let x = 42
     println(x)
+}
+```
+
+### Boolean Usage
+```prim
+fn main() {
+    let flag: bool = true
+    let active = false
+    println(flag)
 }
 ```
 

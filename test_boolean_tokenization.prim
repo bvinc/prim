@@ -1,0 +1,6 @@
+fn main() {
+    // Test boolean tokenization
+    let flag: bool = true
+    let active = false
+    println(flag)
+}

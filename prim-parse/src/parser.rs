@@ -1,4 +1,7 @@
-use crate::{BinaryOp, Expr, Function, Parameter, ParseError, Program, Span, Stmt, Type};
+use crate::{
+    BinaryOp, Expr, Function, Parameter, ParseError, Program, Span, Stmt, StructDefinition,
+    StructField, StructFieldDefinition, Type,
+};
 use prim_tok::{Token, TokenKind};
 
 /// Precedence levels for operators (higher = tighter binding)
@@ -37,14 +40,21 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
+        let mut structs = Vec::new();
         let mut functions = Vec::new();
 
         // Skip leading newlines
         self.skip_newlines();
 
         while !self.is_at_end() {
-            // Only allow function definitions at the top level
+            // Allow struct definitions and function definitions at the top level
             match self.peek().kind {
+                TokenKind::Struct => {
+                    let struct_def = self.parse_struct()?;
+                    structs.push(struct_def);
+                    // Skip newlines between definitions
+                    self.skip_newlines();
+                }
                 TokenKind::Fn => {
                     let function = self.parse_function()?;
                     functions.push(function);
@@ -62,7 +72,7 @@ impl<'a> Parser<'a> {
             return Err(ParseError::MissingMainFunction);
         }
 
-        Ok(Program { functions })
+        Ok(Program { structs, functions })
     }
 
     /// Parse an expression with minimum precedence
@@ -89,6 +99,14 @@ impl<'a> Parser<'a> {
                 let token = self.advance();
                 Ok(Expr::FloatLiteral(Self::token_span(token)))
             }
+            TokenKind::True => {
+                self.advance();
+                Ok(Expr::BoolLiteral(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Expr::BoolLiteral(false))
+            }
             TokenKind::Identifier => {
                 let token = self.advance();
                 let name = Self::token_span(token);
@@ -99,6 +117,12 @@ impl<'a> Parser<'a> {
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
                     Ok(Expr::FunctionCall { name, args })
+                } else if matches!(self.peek().kind, TokenKind::LeftBrace) {
+                    // This is a struct literal
+                    self.advance(); // consume '{'
+                    let fields = self.parse_struct_literal_fields()?;
+                    self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                    Ok(Expr::StructLiteral { name, fields })
                 } else {
                     Ok(Expr::Identifier(name))
                 }
@@ -164,6 +188,16 @@ impl<'a> Parser<'a> {
                     position: self.peek().position,
                 })
             }
+        } else if matches!(self.peek().kind, TokenKind::Dot) {
+            // Field access: expr.field
+            self.advance(); // consume '.'
+            let field_token =
+                self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
+            let field = Self::token_span(field_token);
+            Ok(Expr::FieldAccess {
+                object: Box::new(left),
+                field,
+            })
         } else {
             Ok(left) // No infix operator, return left as-is
         }
@@ -226,6 +260,114 @@ impl<'a> Parser<'a> {
             return_type,
             body,
         })
+    }
+
+    fn parse_struct(&mut self) -> Result<StructDefinition, ParseError> {
+        // Consume 'struct' keyword
+        self.consume(TokenKind::Struct, "Expected 'struct'")?;
+        self.skip_newlines();
+
+        // Parse struct name
+        let name_token = self.consume(TokenKind::Identifier, "Expected struct name")?;
+        let name = Self::token_span(name_token);
+        self.skip_newlines();
+
+        // Parse struct body
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
+        let fields = self.parse_struct_field_list()?;
+        self.consume(TokenKind::RightBrace, "Expected '}' to end struct body")?;
+
+        Ok(StructDefinition { name, fields })
+    }
+
+    fn parse_struct_field_list(&mut self) -> Result<Vec<StructFieldDefinition>, ParseError> {
+        let mut fields = Vec::new();
+
+        self.skip_newlines();
+
+        // Handle empty field list
+        if matches!(self.peek().kind, TokenKind::RightBrace) {
+            return Ok(fields);
+        }
+
+        // Parse first field
+        fields.push(self.parse_struct_field_definition()?);
+
+        // Parse remaining fields
+        while {
+            self.skip_newlines();
+            matches!(self.peek().kind, TokenKind::Comma)
+        } {
+            self.advance(); // consume ','
+            self.skip_newlines();
+
+            // Allow trailing comma
+            if matches!(self.peek().kind, TokenKind::RightBrace) {
+                break;
+            }
+
+            fields.push(self.parse_struct_field_definition()?);
+        }
+
+        self.skip_newlines();
+        Ok(fields)
+    }
+
+    fn parse_struct_field_definition(&mut self) -> Result<StructFieldDefinition, ParseError> {
+        let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
+        let name = Self::token_span(name_token);
+        self.skip_newlines();
+
+        self.consume(TokenKind::Colon, "Expected ':' after field name")?;
+        self.skip_newlines();
+        let field_type = self.parse_type()?;
+
+        Ok(StructFieldDefinition { name, field_type })
+    }
+
+    fn parse_struct_literal_fields(&mut self) -> Result<Vec<StructField>, ParseError> {
+        let mut fields = Vec::new();
+
+        self.skip_newlines();
+
+        // Handle empty field list
+        if matches!(self.peek().kind, TokenKind::RightBrace) {
+            return Ok(fields);
+        }
+
+        // Parse first field
+        fields.push(self.parse_struct_literal_field()?);
+
+        // Parse remaining fields
+        while {
+            self.skip_newlines();
+            matches!(self.peek().kind, TokenKind::Comma)
+        } {
+            self.advance(); // consume ','
+            self.skip_newlines();
+
+            // Allow trailing comma
+            if matches!(self.peek().kind, TokenKind::RightBrace) {
+                break;
+            }
+
+            fields.push(self.parse_struct_literal_field()?);
+        }
+
+        self.skip_newlines();
+        Ok(fields)
+    }
+
+    fn parse_struct_literal_field(&mut self) -> Result<StructField, ParseError> {
+        let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
+        let name = Self::token_span(name_token);
+        self.skip_newlines();
+
+        self.consume(TokenKind::Colon, "Expected ':' after field name")?;
+        self.skip_newlines();
+        let value = self.parse_expression(Precedence::NONE)?;
+
+        Ok(StructField { name, value })
     }
 
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
@@ -319,6 +461,15 @@ impl<'a> Parser<'a> {
             TokenKind::F64 => {
                 self.advance();
                 Ok(Type::F64)
+            }
+            TokenKind::Bool => {
+                self.advance();
+                Ok(Type::Bool)
+            }
+            TokenKind::Identifier => {
+                // This could be a struct type reference
+                let token = self.advance();
+                Ok(Type::Struct(Self::token_span(token)))
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
@@ -477,6 +628,7 @@ fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
         TokenKind::Plus | TokenKind::Minus => Precedence::ADDITION,
         TokenKind::Star | TokenKind::Slash => Precedence::MULTIPLICATION,
         TokenKind::LeftParen => Precedence::CALL,
+        TokenKind::Dot => Precedence::CALL, // Field access has same precedence as function calls
         _ => Precedence::NONE,
     }
 }

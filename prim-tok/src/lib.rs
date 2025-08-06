@@ -6,6 +6,9 @@ pub enum TokenKind {
     // Literals
     IntLiteral,
     FloatLiteral,
+    StringLiteral,
+    CharLiteral,
+    BoolLiteral,
 
     // Keywords
     Let,
@@ -14,6 +17,8 @@ pub enum TokenKind {
     Impl,
     If,
     Println,
+    True,
+    False,
 
     // Types
     U8,
@@ -28,6 +33,7 @@ pub enum TokenKind {
     Isize,
     F32,
     F64,
+    Bool,
 
     // Identifiers
     Identifier,
@@ -50,6 +56,7 @@ pub enum TokenKind {
     Colon,      // :
     Semicolon,  // ;
     Ampersand,  // &
+    Dot,        // .
 
     // Special
     Comment,
@@ -174,6 +181,17 @@ impl<'a> Tokenizer<'a> {
                     position: start_pos,
                 })
             }
+            '.' => {
+                // Check if this is a standalone dot (for field access) or part of a number
+                if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
+                    self.make_simple_token(TokenKind::Dot, start_pos)
+                } else {
+                    // This is likely the start of a floating point number like .5
+                    self.read_number(start_pos)
+                }
+            }
+            '"' => self.read_string_literal(start_pos),
+            '\'' => self.read_char_literal(start_pos),
             _ if ch.is_ascii_digit() => self.read_number(start_pos),
             _ if ch.is_ascii_alphabetic() || ch == '_' => self.read_identifier(start_pos),
             _ => Err(TokenError::UnexpectedCharacter {
@@ -241,6 +259,8 @@ impl<'a> Tokenizer<'a> {
             "impl" => TokenKind::Impl,
             "if" => TokenKind::If,
             "println" => TokenKind::Println,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
             "u8" => TokenKind::U8,
             "i8" => TokenKind::I8,
             "u16" => TokenKind::U16,
@@ -253,6 +273,7 @@ impl<'a> Tokenizer<'a> {
             "isize" => TokenKind::Isize,
             "f32" => TokenKind::F32,
             "f64" => TokenKind::F64,
+            "bool" => TokenKind::Bool,
             _ => TokenKind::Identifier,
         };
 
@@ -272,6 +293,14 @@ impl<'a> Tokenizer<'a> {
             self.position += ch.len_utf8();
             self.current = self.chars.next();
         }
+    }
+
+    fn peek_ahead(&self, n: usize) -> Option<char> {
+        let mut temp_chars = self.chars.clone();
+        for _ in 1..n {
+            temp_chars.next();
+        }
+        temp_chars.next()
     }
 
     fn read_line_comment(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
@@ -318,6 +347,72 @@ impl<'a> Tokenizer<'a> {
         Ok(Token {
             kind: TokenKind::Comment,
             text,
+            position: start_pos,
+        })
+    }
+
+    fn read_string_literal(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
+        self.advance(); // consume opening quote
+
+        while self.current.is_some() {
+            match self.current_char() {
+                '"' => {
+                    self.advance(); // consume closing quote
+                    return Ok(Token {
+                        kind: TokenKind::StringLiteral,
+                        text: &self.input[start_pos..self.position],
+                        position: start_pos,
+                    });
+                }
+                '\\' => {
+                    self.advance(); // consume backslash
+                    if self.current.is_some() {
+                        self.advance(); // consume escaped character
+                    }
+                }
+                _ => self.advance(),
+            }
+        }
+
+        // Reached end of input without closing quote
+        Err(TokenError::UnterminatedString {
+            position: start_pos,
+        })
+    }
+
+    fn read_char_literal(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
+        self.advance(); // consume opening quote
+
+        if self.current.is_none() {
+            return Err(TokenError::UnterminatedString {
+                position: start_pos,
+            });
+        }
+
+        // Handle escaped characters
+        if self.current_char() == '\\' {
+            self.advance(); // consume backslash
+            if self.current.is_none() {
+                return Err(TokenError::UnterminatedString {
+                    position: start_pos,
+                });
+            }
+            self.advance(); // consume escaped character
+        } else {
+            self.advance(); // consume regular character
+        }
+
+        // Expect closing quote
+        if self.current_char() != '\'' {
+            return Err(TokenError::UnterminatedString {
+                position: start_pos,
+            });
+        }
+
+        self.advance(); // consume closing quote
+        Ok(Token {
+            kind: TokenKind::CharLiteral,
+            text: &self.input[start_pos..self.position],
             position: start_pos,
         })
     }
@@ -501,6 +596,263 @@ mod tests {
     }
 
     #[test]
+    fn test_string_literals() {
+        let mut tokenizer = Tokenizer::new(r#"let s = "hello world""#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[3].text, r#""hello world""#);
+        assert_eq!(tokens[4].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_string_with_escapes() {
+        let mut tokenizer = Tokenizer::new(r#"let s = "hello\nworld\t!""#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[3].text, r#""hello\nworld\t!""#);
+    }
+
+    #[test]
+    fn test_string_with_escaped_quote() {
+        let mut tokenizer = Tokenizer::new(r#"let s = "say \"hello\"""#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[3].text, r#""say \"hello\"""#);
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let mut tokenizer = Tokenizer::new(r#"let s = """#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[3].text, r#""""#);
+    }
+
+    #[test]
+    fn test_unterminated_string() {
+        let mut tokenizer = Tokenizer::new(r#"let s = "unterminated"#);
+        let result = tokenizer.tokenize();
+
+        match result {
+            Err(TokenError::UnterminatedString { position }) => {
+                assert_eq!(position, 8); // Position of opening quote
+            }
+            _ => panic!("Expected UnterminatedString error, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_char_literals() {
+        let mut tokenizer = Tokenizer::new("let c = 'a'");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::CharLiteral);
+        assert_eq!(tokens[3].text, "'a'");
+        assert_eq!(tokens[4].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_escaped_char_literals() {
+        let test_cases = vec![
+            ("'\\n'", r"'\n'"),
+            ("'\\t'", r"'\t'"),
+            ("'\\''", r"'\''"),
+            ("'\\\\'", r"'\\'"),
+        ];
+
+        for (input, expected) in test_cases {
+            let input_string = format!("let c = {}", input);
+            let mut tokenizer = Tokenizer::new(&input_string);
+            let tokens = tokenizer.tokenize().unwrap();
+
+            assert_eq!(tokens[3].kind, TokenKind::CharLiteral);
+            assert_eq!(tokens[3].text, expected, "Failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_unterminated_char_literal() {
+        let mut tokenizer = Tokenizer::new("let c = 'a");
+        let result = tokenizer.tokenize();
+
+        match result {
+            Err(TokenError::UnterminatedString { position }) => {
+                assert_eq!(position, 8); // Position of opening quote
+            }
+            _ => panic!("Expected UnterminatedString error, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_if_keyword() {
+        let mut tokenizer = Tokenizer::new("if x == 42");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::If);
+        assert_eq!(tokens[0].text, "if");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::DoubleEquals);
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+    }
+
+    #[test]
+    fn test_mixed_literals() {
+        let mut tokenizer = Tokenizer::new(r#"let x = 42; let s = "hello"; let c = 'a'"#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        // First assignment: let x = 42
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].kind, TokenKind::Semicolon);
+
+        // Second assignment: let s = "hello"
+        assert_eq!(tokens[5].kind, TokenKind::Let);
+        assert_eq!(tokens[6].kind, TokenKind::Identifier);
+        assert_eq!(tokens[7].kind, TokenKind::Equals);
+        assert_eq!(tokens[8].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[8].text, r#""hello""#);
+        assert_eq!(tokens[9].kind, TokenKind::Semicolon);
+
+        // Third assignment: let c = 'a'
+        assert_eq!(tokens[10].kind, TokenKind::Let);
+        assert_eq!(tokens[11].kind, TokenKind::Identifier);
+        assert_eq!(tokens[12].kind, TokenKind::Equals);
+        assert_eq!(tokens[13].kind, TokenKind::CharLiteral);
+        assert_eq!(tokens[13].text, "'a'");
+    }
+
+    #[test]
+    fn test_boolean_literals() {
+        let mut tokenizer = Tokenizer::new("let flag = true");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::True);
+        assert_eq!(tokens[3].text, "true");
+        assert_eq!(tokens[4].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_false_literal() {
+        let mut tokenizer = Tokenizer::new("let flag = false");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[3].kind, TokenKind::False);
+        assert_eq!(tokens[3].text, "false");
+    }
+
+    #[test]
+    fn test_bool_type() {
+        let mut tokenizer = Tokenizer::new("let flag: bool = true");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Colon);
+        assert_eq!(tokens[3].kind, TokenKind::Bool);
+        assert_eq!(tokens[3].text, "bool");
+        assert_eq!(tokens[4].kind, TokenKind::Equals);
+        assert_eq!(tokens[5].kind, TokenKind::True);
+    }
+
+    #[test]
+    fn test_boolean_expressions() {
+        let mut tokenizer = Tokenizer::new("if flag == true");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::If);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::DoubleEquals);
+        assert_eq!(tokens[3].kind, TokenKind::True);
+    }
+
+    #[test]
+    fn test_mixed_boolean_and_other_literals() {
+        let mut tokenizer = Tokenizer::new(r#"let x = 42; let flag = true; let name = "test""#);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        // First: let x = 42
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::Equals);
+        assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].kind, TokenKind::Semicolon);
+
+        // Second: let flag = true
+        assert_eq!(tokens[5].kind, TokenKind::Let);
+        assert_eq!(tokens[6].kind, TokenKind::Identifier);
+        assert_eq!(tokens[7].kind, TokenKind::Equals);
+        assert_eq!(tokens[8].kind, TokenKind::True);
+        assert_eq!(tokens[9].kind, TokenKind::Semicolon);
+
+        // Third: let name = "test"
+        assert_eq!(tokens[10].kind, TokenKind::Let);
+        assert_eq!(tokens[11].kind, TokenKind::Identifier);
+        assert_eq!(tokens[12].kind, TokenKind::Equals);
+        assert_eq!(tokens[13].kind, TokenKind::StringLiteral);
+    }
+
+    #[test]
+    fn test_boolean_in_function_parameters() {
+        let mut tokenizer = Tokenizer::new("fn test(active: bool, count: u32)");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Fn);
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].kind, TokenKind::LeftParen);
+        assert_eq!(tokens[3].kind, TokenKind::Identifier);
+        assert_eq!(tokens[4].kind, TokenKind::Colon);
+        assert_eq!(tokens[5].kind, TokenKind::Bool);
+        assert_eq!(tokens[6].kind, TokenKind::Comma);
+        assert_eq!(tokens[7].kind, TokenKind::Identifier);
+        assert_eq!(tokens[8].kind, TokenKind::Colon);
+        assert_eq!(tokens[9].kind, TokenKind::U32);
+        assert_eq!(tokens[10].kind, TokenKind::RightParen);
+    }
+
+    #[test]
+    fn test_boolean_keywords_case_sensitive() {
+        // Should tokenize as identifiers, not boolean keywords
+        let mut tokenizer = Tokenizer::new("True False BOOL");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].text, "True");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "False");
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].text, "BOOL");
+    }
+
+    #[test]
+    fn test_boolean_as_part_of_identifier() {
+        // Should tokenize as identifiers, not split into keywords
+        let mut tokenizer = Tokenizer::new("truthy falsey boolean");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].text, "truthy");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "falsey");
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].text, "boolean");
+    }
+
+    #[test]
     fn test_error_unexpected_character() {
         let mut tokenizer = Tokenizer::new("let x = @");
         let result = tokenizer.tokenize();
@@ -512,5 +864,91 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedCharacter error, got {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_dot_token() {
+        let mut tokenizer = Tokenizer::new("point.x");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].text, "point");
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+        assert_eq!(tokens[1].text, ".");
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].text, "x");
+        assert_eq!(tokens[3].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_dot_vs_float() {
+        // Test that standalone dots are tokenized as dots
+        let mut tokenizer = Tokenizer::new("x.field");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+
+        // Test that dots in numbers are part of float literals
+        let mut tokenizer = Tokenizer::new("3.14");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, "3.14");
+    }
+
+    #[test]
+    fn test_struct_tokens() {
+        let mut tokenizer = Tokenizer::new("struct Point { x: i32, y: i32 }");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Struct);
+        assert_eq!(tokens[0].text, "struct");
+        assert_eq!(tokens[1].kind, TokenKind::Identifier);
+        assert_eq!(tokens[1].text, "Point");
+        assert_eq!(tokens[2].kind, TokenKind::LeftBrace);
+        assert_eq!(tokens[3].kind, TokenKind::Identifier);
+        assert_eq!(tokens[3].text, "x");
+        assert_eq!(tokens[4].kind, TokenKind::Colon);
+        assert_eq!(tokens[5].kind, TokenKind::I32);
+        assert_eq!(tokens[6].kind, TokenKind::Comma);
+        assert_eq!(tokens[7].kind, TokenKind::Identifier);
+        assert_eq!(tokens[7].text, "y");
+        assert_eq!(tokens[8].kind, TokenKind::Colon);
+        assert_eq!(tokens[9].kind, TokenKind::I32);
+        assert_eq!(tokens[10].kind, TokenKind::RightBrace);
+    }
+
+    #[test]
+    fn test_field_access_tokens() {
+        let mut tokenizer = Tokenizer::new("p.x");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].text, "p");
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+        assert_eq!(tokens[1].text, ".");
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].text, "x");
+        assert_eq!(tokens[3].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_struct_literal_tokens() {
+        let mut tokenizer = Tokenizer::new("Point { x: 10, y: 20 }");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].text, "Point");
+        assert_eq!(tokens[1].kind, TokenKind::LeftBrace);
+        assert_eq!(tokens[2].kind, TokenKind::Identifier);
+        assert_eq!(tokens[2].text, "x");
+        assert_eq!(tokens[3].kind, TokenKind::Colon);
+        assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[4].text, "10");
+        assert_eq!(tokens[5].kind, TokenKind::Comma);
+        assert_eq!(tokens[6].kind, TokenKind::Identifier);
+        assert_eq!(tokens[6].text, "y");
+        assert_eq!(tokens[7].kind, TokenKind::Colon);
+        assert_eq!(tokens[8].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[8].text, "20");
+        assert_eq!(tokens[9].kind, TokenKind::RightBrace);
     }
 }
