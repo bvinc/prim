@@ -1,6 +1,6 @@
 use crate::{
-    BinaryOp, Expr, Function, Parameter, ParseError, Program, Span, Stmt, StructDefinition,
-    StructField, StructFieldDefinition, Type,
+    BinaryOp, Expr, Function, Parameter, ParseError, PointerMutability, Program, Span, Stmt,
+    StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -470,6 +470,34 @@ impl<'a> Parser<'a> {
                 // This could be a struct type reference
                 let token = self.advance();
                 Ok(Type::Struct(Self::token_span(token)))
+            }
+            TokenKind::Star => {
+                // Parse pointer type: *const T or *mut T
+                self.advance(); // consume '*'
+
+                let mutability = match self.peek().kind {
+                    TokenKind::Const => {
+                        self.advance(); // consume 'const'
+                        PointerMutability::Const
+                    }
+                    TokenKind::Mut => {
+                        self.advance(); // consume 'mut'
+                        PointerMutability::Mutable
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "'const' or 'mut' after '*'".to_string(),
+                            found: self.peek().kind,
+                            position: self.peek().position,
+                        });
+                    }
+                };
+
+                let pointee = Box::new(self.parse_type()?);
+                Ok(Type::Pointer {
+                    mutability,
+                    pointee,
+                })
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),

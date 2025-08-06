@@ -19,6 +19,8 @@ pub enum TokenKind {
     Println,
     True,
     False,
+    Const,
+    Mut,
 
     // Types
     U8,
@@ -261,6 +263,8 @@ impl<'a> Tokenizer<'a> {
             "println" => TokenKind::Println,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "const" => TokenKind::Const,
+            "mut" => TokenKind::Mut,
             "u8" => TokenKind::U8,
             "i8" => TokenKind::I8,
             "u16" => TokenKind::U16,
@@ -593,6 +597,25 @@ mod tests {
         assert_eq!(tokens[3].kind, TokenKind::Identifier);
         assert_eq!(tokens[4].kind, TokenKind::Slash);
         assert_eq!(tokens[5].kind, TokenKind::Identifier);
+    }
+
+    #[test]
+    fn test_pointer_keywords() {
+        let mut tokenizer = Tokenizer::new("*const u8 *mut i32");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Star);
+        assert_eq!(tokens[0].text, "*");
+        assert_eq!(tokens[1].kind, TokenKind::Const);
+        assert_eq!(tokens[1].text, "const");
+        assert_eq!(tokens[2].kind, TokenKind::U8);
+        assert_eq!(tokens[2].text, "u8");
+        assert_eq!(tokens[3].kind, TokenKind::Star);
+        assert_eq!(tokens[3].text, "*");
+        assert_eq!(tokens[4].kind, TokenKind::Mut);
+        assert_eq!(tokens[4].text, "mut");
+        assert_eq!(tokens[5].kind, TokenKind::I32);
+        assert_eq!(tokens[5].text, "i32");
     }
 
     #[test]

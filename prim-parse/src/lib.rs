@@ -13,6 +13,12 @@ pub mod parser;
 pub use parser::Parser;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum PointerMutability {
+    Const,
+    Mutable,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     U8,
     I8,
@@ -28,6 +34,10 @@ pub enum Type {
     F64,
     Bool,
     Struct(Span), // struct name reference
+    Pointer {
+        mutability: PointerMutability,
+        pointee: Box<Type>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1191,6 +1201,57 @@ fn main() {
             assert_eq!(name.text(source), "Point");
         } else {
             panic!("Expected struct type annotation");
+        }
+    }
+
+    #[test]
+    fn test_parse_pointer_types() {
+        // Test const pointer
+        let source = "fn main() { let ptr: *const u8 = get_ptr() }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        if let Stmt::Let {
+            type_annotation:
+                Some(Type::Pointer {
+                    mutability,
+                    pointee,
+                }),
+            ..
+        } = &main_func.body[0]
+        {
+            assert_eq!(*mutability, PointerMutability::Const);
+            if let Type::U8 = **pointee {
+                // Expected
+            } else {
+                panic!("Expected u8 pointee type");
+            }
+        } else {
+            panic!("Expected const pointer type annotation");
+        }
+
+        // Test mutable pointer
+        let source_mut = "fn main() { let ptr: *mut i32 = get_ptr() }";
+        let program_mut = parse(source_mut).unwrap();
+
+        let main_func_mut = &program_mut.functions[0];
+        if let Stmt::Let {
+            type_annotation:
+                Some(Type::Pointer {
+                    mutability,
+                    pointee,
+                }),
+            ..
+        } = &main_func_mut.body[0]
+        {
+            assert_eq!(*mutability, PointerMutability::Mutable);
+            if let Type::I32 = **pointee {
+                // Expected
+            } else {
+                panic!("Expected i32 pointee type");
+            }
+        } else {
+            panic!("Expected mutable pointer type annotation");
         }
     }
 

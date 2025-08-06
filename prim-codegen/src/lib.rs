@@ -113,6 +113,7 @@ impl CraneliftCodeGenerator {
         for param in &function.parameters {
             let param_type = match param.type_annotation {
                 prim_parse::Type::Bool => types::I8,
+                prim_parse::Type::Pointer { .. } => types::I64, // All pointers are 64-bit
                 _ => types::I64,
             };
             sig.params.push(AbiParam::new(param_type));
@@ -206,6 +207,7 @@ impl CraneliftCodeGenerator {
         for (i, param) in function.parameters.iter().enumerate() {
             let param_type = match param.type_annotation {
                 prim_parse::Type::Bool => types::I8,
+                prim_parse::Type::Pointer { .. } => types::I64, // All pointers are 64-bit
                 _ => types::I64,
             };
             let var = builder.declare_var(param_type);
@@ -850,6 +852,7 @@ impl CraneliftCodeGenerator {
             Type::F64 => (8, types::F64),
             Type::Bool => (1, types::I8),
             Type::Struct(_) => (8, types::I64), // Struct references are pointers, 8 bytes on 64-bit systems
+            Type::Pointer { .. } => (8, types::I64), // All pointers are 8 bytes on 64-bit systems
         }
     }
 }
