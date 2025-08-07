@@ -63,6 +63,9 @@ pub enum Expr {
         object: Box<Expr>,
         field: Span,
     },
+    Dereference {
+        operand: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1252,6 +1255,27 @@ fn main() {
             }
         } else {
             panic!("Expected mutable pointer type annotation");
+        }
+    }
+
+    #[test]
+    fn test_parse_dereference() {
+        let source = "fn main() { let value = *ptr }";
+        let program = parse(source).unwrap();
+
+        let main_func = &program.functions[0];
+        if let Stmt::Let {
+            value: Expr::Dereference { operand },
+            ..
+        } = &main_func.body[0]
+        {
+            if let Expr::Identifier(name) = &**operand {
+                assert_eq!(name.text(source), "ptr");
+            } else {
+                panic!("Expected identifier in dereference operand");
+            }
+        } else {
+            panic!("Expected let statement with dereference expression");
         }
     }
 

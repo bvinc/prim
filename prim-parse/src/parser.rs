@@ -154,6 +154,13 @@ impl<'a> Parser<'a> {
                     right: Box::new(operand),
                 })
             }
+            TokenKind::Star => {
+                self.advance(); // consume '*'
+                let operand = self.parse_expression(Precedence::UNARY)?;
+                Ok(Expr::Dereference {
+                    operand: Box::new(operand),
+                })
+            }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: self.peek().kind,

@@ -596,6 +596,24 @@ impl CraneliftCodeGenerator {
                     })
                 }
             }
+            Expr::Dereference { operand } => {
+                // Generate the pointer expression
+                let ptr_val = Self::generate_expression_impl_static(
+                    struct_layouts,
+                    variables,
+                    module,
+                    builder,
+                    operand,
+                    println_func_id,
+                    function_ids,
+                    source,
+                )?;
+
+                // For now, assume we're dereferencing an i64 pointer
+                // In a full implementation, we'd need type information to determine the load size
+                let loaded_val = builder.ins().load(types::I64, MemFlags::new(), ptr_val, 0);
+                Ok(loaded_val)
+            }
         }
     }
 
