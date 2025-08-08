@@ -261,7 +261,7 @@ impl CraneliftCodeGenerator {
             } => {
                 // Determine the type based on the value expression
                 let var_type = match value {
-                    Expr::BoolLiteral(_) => types::I8,
+                    Expr::BoolLiteral { .. } => types::I8,
                     _ => types::I64,
                 };
                 let var = builder.declare_var(var_type);
@@ -311,7 +311,7 @@ impl CraneliftCodeGenerator {
         source: &str,
     ) -> Result<Value, CodegenError> {
         match expr {
-            Expr::IntLiteral(value) => {
+            Expr::IntLiteral { span: value, .. } => {
                 // Parse the literal (handle type suffixes like 42u32)
                 let value_text = value.text(source);
                 let num_part = value_text
@@ -326,18 +326,18 @@ impl CraneliftCodeGenerator {
                     })?;
                 Ok(builder.ins().iconst(types::I64, num))
             }
-            Expr::FloatLiteral(value) => Err(CodegenError::InvalidExpression {
+            Expr::FloatLiteral { span: value, .. } => Err(CodegenError::InvalidExpression {
                 message: format!(
                     "Float literals are not yet supported: {}",
                     value.text(source)
                 ),
                 context: "float literal evaluation".to_string(),
             }),
-            Expr::BoolLiteral(value) => {
+            Expr::BoolLiteral { value, .. } => {
                 let bool_val = if *value { 1 } else { 0 };
                 Ok(builder.ins().iconst(types::I8, bool_val))
             }
-            Expr::Identifier(name) => {
+            Expr::Identifier { span: name, .. } => {
                 let name_text = name.text(source);
                 if let Some(&var) = variables.get(name_text) {
                     Ok(builder.use_var(var))
@@ -348,7 +348,9 @@ impl CraneliftCodeGenerator {
                     })
                 }
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary {
+                left, op, right, ..
+            } => {
                 let left_val = Self::generate_expression_impl_static(
                     struct_layouts,
                     variables,
@@ -382,7 +384,7 @@ impl CraneliftCodeGenerator {
                 };
                 Ok(result)
             }
-            Expr::StructLiteral { name, fields } => {
+            Expr::StructLiteral { name, fields, .. } => {
                 let struct_name = name.text(source);
                 let layout = struct_layouts.get(struct_name).ok_or_else(|| {
                     CodegenError::InvalidExpression {
@@ -467,7 +469,7 @@ impl CraneliftCodeGenerator {
                 // Return pointer to the struct
                 Ok(builder.ins().stack_addr(types::I64, slot, 0))
             }
-            Expr::FieldAccess { object, field } => {
+            Expr::FieldAccess { object, field, .. } => {
                 // Generate the object expression (should be a struct pointer)
                 let object_val = Self::generate_expression_impl_static(
                     struct_layouts,
@@ -513,7 +515,7 @@ impl CraneliftCodeGenerator {
 
                 Ok(field_value)
             }
-            Expr::FunctionCall { name, args } => {
+            Expr::FunctionCall { name, args, .. } => {
                 let func_name = name.text(source);
 
                 if func_name == "println" && args.len() == 1 {
@@ -596,7 +598,7 @@ impl CraneliftCodeGenerator {
                     })
                 }
             }
-            Expr::Dereference { operand } => {
+            Expr::Dereference { operand, .. } => {
                 // Generate the pointer expression
                 let ptr_val = Self::generate_expression_impl_static(
                     struct_layouts,
@@ -609,8 +611,14 @@ impl CraneliftCodeGenerator {
                     source,
                 )?;
 
-                // For now, assume we're dereferencing an i64 pointer
-                // In a full implementation, we'd need type information to determine the load size
+                // LIMITATION: Always loads 8 bytes (i64) regardless of pointee type
+                //
+                // Examples of incorrect behavior:
+                //   *ptr_u8   loads 8 bytes instead of 1 byte
+                //   *ptr_i32  loads 8 bytes instead of 4 bytes
+                //
+                // This can cause memory safety issues and incorrect values.
+                // To fix: implement type tracking for expressions or require explicit type annotations.
                 let loaded_val = builder.ins().load(types::I64, MemFlags::new(), ptr_val, 0);
                 Ok(loaded_val)
             }
@@ -871,6 +879,9 @@ impl CraneliftCodeGenerator {
             Type::Bool => (1, types::I8),
             Type::Struct(_) => (8, types::I64), // Struct references are pointers, 8 bytes on 64-bit systems
             Type::Pointer { .. } => (8, types::I64), // All pointers are 8 bytes on 64-bit systems
+            Type::Undetermined => panic!(
+                "Cannot determine size for undetermined type - type checking should have resolved all types"
+            ),
         }
     }
 }

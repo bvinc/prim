@@ -93,19 +93,31 @@ impl<'a> Parser<'a> {
         match self.peek().kind {
             TokenKind::IntLiteral => {
                 let token = self.advance();
-                Ok(Expr::IntLiteral(Self::token_span(token)))
+                Ok(Expr::IntLiteral {
+                    span: Self::token_span(token),
+                    ty: Type::Undetermined,
+                })
             }
             TokenKind::FloatLiteral => {
                 let token = self.advance();
-                Ok(Expr::FloatLiteral(Self::token_span(token)))
+                Ok(Expr::FloatLiteral {
+                    span: Self::token_span(token),
+                    ty: Type::Undetermined,
+                })
             }
             TokenKind::True => {
                 self.advance();
-                Ok(Expr::BoolLiteral(true))
+                Ok(Expr::BoolLiteral {
+                    value: true,
+                    ty: Type::Undetermined,
+                })
             }
             TokenKind::False => {
                 self.advance();
-                Ok(Expr::BoolLiteral(false))
+                Ok(Expr::BoolLiteral {
+                    value: false,
+                    ty: Type::Undetermined,
+                })
             }
             TokenKind::Identifier => {
                 let token = self.advance();
@@ -116,15 +128,26 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume '('
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
-                    Ok(Expr::FunctionCall { name, args })
+                    Ok(Expr::FunctionCall {
+                        name,
+                        args,
+                        ty: Type::Undetermined,
+                    })
                 } else if matches!(self.peek().kind, TokenKind::LeftBrace) {
                     // This is a struct literal
                     self.advance(); // consume '{'
                     let fields = self.parse_struct_literal_fields()?;
                     self.consume(TokenKind::RightBrace, "Expected '}'")?;
-                    Ok(Expr::StructLiteral { name, fields })
+                    Ok(Expr::StructLiteral {
+                        name,
+                        fields,
+                        ty: Type::Undetermined,
+                    })
                 } else {
-                    Ok(Expr::Identifier(name))
+                    Ok(Expr::Identifier {
+                        span: name,
+                        ty: Type::Undetermined,
+                    })
                 }
             }
             TokenKind::Println => {
@@ -136,6 +159,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::FunctionCall {
                     name: name_span,
                     args,
+                    ty: Type::Undetermined,
                 })
             }
             TokenKind::LeftParen => {
@@ -149,9 +173,13 @@ impl<'a> Parser<'a> {
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 // Represent unary minus as 0 - operand
                 Ok(Expr::Binary {
-                    left: Box::new(Expr::IntLiteral(Span::new(0, 1))), // placeholder "0"
+                    left: Box::new(Expr::IntLiteral {
+                        span: Span::new(0, 1),
+                        ty: Type::Undetermined,
+                    }), // placeholder "0"
                     op: BinaryOp::Subtract,
                     right: Box::new(operand),
+                    ty: Type::Undetermined,
                 })
             }
             TokenKind::Star => {
@@ -159,6 +187,7 @@ impl<'a> Parser<'a> {
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 Ok(Expr::Dereference {
                     operand: Box::new(operand),
+                    ty: Type::Undetermined,
                 })
             }
             _ => Err(ParseError::UnexpectedToken {
@@ -180,14 +209,19 @@ impl<'a> Parser<'a> {
                 left: Box::new(left),
                 op: binary_op,
                 right: Box::new(right),
+                ty: Type::Undetermined,
             })
         } else if matches!(self.peek().kind, TokenKind::LeftParen) {
             // Function call: identifier(args)
-            if let Expr::Identifier(name) = left {
+            if let Expr::Identifier { span: name, .. } = left {
                 self.advance(); // consume '('
                 let args = self.parse_argument_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall { name, args })
+                Ok(Expr::FunctionCall {
+                    name,
+                    args,
+                    ty: Type::Undetermined,
+                })
             } else {
                 Err(ParseError::UnexpectedToken {
                     expected: "function name".to_string(),
@@ -204,6 +238,7 @@ impl<'a> Parser<'a> {
             Ok(Expr::FieldAccess {
                 object: Box::new(left),
                 field,
+                ty: Type::Undetermined,
             })
         } else {
             Ok(left) // No infix operator, return left as-is
@@ -701,6 +736,7 @@ mod tests {
                             left: _,
                             op: BinaryOp::Add,
                             right,
+                            ..
                         } = &expr
                         {
                             if let Expr::Binary {

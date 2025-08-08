@@ -9,8 +9,14 @@ pub use span::Span;
 // Parser implementation
 pub mod parser;
 
+// Type checker implementation
+pub mod typecheck;
+
 // Re-export parser for easy access
 pub use parser::Parser;
+
+// Re-export type checker
+pub use typecheck::{TypeCheckError, type_check};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerMutability {
@@ -38,33 +44,51 @@ pub enum Type {
         mutability: PointerMutability,
         pointee: Box<Type>,
     },
+    Undetermined, // Type not yet determined during parsing
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    IntLiteral(Span),
-    FloatLiteral(Span),
-    BoolLiteral(bool),
-    Identifier(Span),
+    IntLiteral {
+        span: Span,
+        ty: Type,
+    },
+    FloatLiteral {
+        span: Span,
+        ty: Type,
+    },
+    BoolLiteral {
+        value: bool,
+        ty: Type,
+    },
+    Identifier {
+        span: Span,
+        ty: Type,
+    },
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
+        ty: Type,
     },
     FunctionCall {
         name: Span,
         args: Vec<Expr>,
+        ty: Type,
     },
     StructLiteral {
         name: Span,
         fields: Vec<StructField>,
+        ty: Type,
     },
     FieldAccess {
         object: Box<Expr>,
         field: Span,
+        ty: Type,
     },
     Dereference {
         operand: Box<Expr>,
+        ty: Type,
     },
 }
 
@@ -156,7 +180,7 @@ mod tests {
                 assert_eq!(name.text(source), "x");
                 assert_eq!(type_annotation, &Some(Type::U32));
                 match value {
-                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
                     _ => panic!("Expected IntLiteral, got {:?}", value),
                 }
             }
@@ -179,7 +203,7 @@ mod tests {
                 assert_eq!(name.text(source), "x");
                 assert_eq!(type_annotation, &None);
                 match value {
-                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
                     _ => panic!("Expected IntLiteral, got {:?}", value),
                 }
             }
@@ -195,21 +219,25 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Add);
                     match left.as_ref() {
-                        Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
                         _ => panic!("Expected Identifier, got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Multiply);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -230,21 +258,25 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Add);
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Multiply);
                             match left.as_ref() {
-                                Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                                Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
                                 _ => panic!("Expected Identifier, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -264,11 +296,11 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args }) => {
+            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
                 assert_eq!(name.text(source), "println");
                 assert_eq!(args.len(), 1);
                 match &args[0] {
-                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "42"),
+                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
                     _ => panic!("Expected IntLiteral, got {:?}", &args[0]),
                 }
             }
@@ -286,18 +318,20 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args }) => {
+            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
                 assert_eq!(name.text(source), "println");
                 assert_eq!(args.len(), 1);
                 match &args[0] {
-                    Expr::Binary { left, op, right } => {
+                    Expr::Binary {
+                        left, op, right, ..
+                    } => {
                         assert_eq!(op, &BinaryOp::Add);
                         match left.as_ref() {
-                            Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
                             _ => panic!("Expected Identifier, got {:?}", left),
                         }
                         match right.as_ref() {
-                            Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                             _ => panic!("Expected IntLiteral, got {:?}", right),
                         }
                     }
@@ -368,18 +402,22 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Multiply);
                     // Left side should be the parenthesized expression (2 + 3)
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Add);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -387,7 +425,7 @@ mod tests {
                     }
                     // Right side should be 4
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -405,24 +443,30 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Add);
                     // Left side should be ((2 + 3) * 4)
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Multiply);
                             // Inner left should be (2 + 3)
                             match left.as_ref() {
-                                Expr::Binary { left, op, right } => {
+                                Expr::Binary {
+                                    left, op, right, ..
+                                } => {
                                     assert_eq!(op, &BinaryOp::Add);
                                     match left.as_ref() {
-                                        Expr::IntLiteral(span) => {
+                                        Expr::IntLiteral { span, .. } => {
                                             assert_eq!(span.text(source), "2")
                                         }
                                         _ => panic!("Expected IntLiteral, got {:?}", left),
                                     }
                                     match right.as_ref() {
-                                        Expr::IntLiteral(span) => {
+                                        Expr::IntLiteral { span, .. } => {
                                             assert_eq!(span.text(source), "3")
                                         }
                                         _ => panic!("Expected IntLiteral, got {:?}", right),
@@ -433,7 +477,7 @@ mod tests {
                                 }
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -444,7 +488,7 @@ mod tests {
                     }
                     // Right side should be 5
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -462,18 +506,22 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Multiply);
                     // Left side: (x + y)
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Add);
                             match left.as_ref() {
-                                Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                                Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
                                 _ => panic!("Expected Identifier, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::Identifier(span) => assert_eq!(span.text(source), "y"),
+                                Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
                                 _ => panic!("Expected Identifier, got {:?}", right),
                             }
                         }
@@ -481,14 +529,16 @@ mod tests {
                     }
                     // Right side: (a - b)
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Subtract);
                             match left.as_ref() {
-                                Expr::Identifier(span) => assert_eq!(span.text(source), "a"),
+                                Expr::Identifier { span, .. } => assert_eq!(span.text(source), "a"),
                                 _ => panic!("Expected Identifier, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::Identifier(span) => assert_eq!(span.text(source), "b"),
+                                Expr::Identifier { span, .. } => assert_eq!(span.text(source), "b"),
                                 _ => panic!("Expected Identifier, got {:?}", right),
                             }
                         }
@@ -508,29 +558,37 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args }) => {
+            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
                 assert_eq!(name.text(source), "println");
                 assert_eq!(args.len(), 1);
                 // Argument should be (2 + 3) * 4
                 match &args[0] {
-                    Expr::Binary { left, op, right } => {
+                    Expr::Binary {
+                        left, op, right, ..
+                    } => {
                         assert_eq!(op, &BinaryOp::Multiply);
                         match left.as_ref() {
-                            Expr::Binary { left, op, right } => {
+                            Expr::Binary {
+                                left, op, right, ..
+                            } => {
                                 assert_eq!(op, &BinaryOp::Add);
                                 match left.as_ref() {
-                                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                    Expr::IntLiteral { span, .. } => {
+                                        assert_eq!(span.text(source), "2")
+                                    }
                                     _ => panic!("Expected IntLiteral, got {:?}", left),
                                 }
                                 match right.as_ref() {
-                                    Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                    Expr::IntLiteral { span, .. } => {
+                                        assert_eq!(span.text(source), "3")
+                                    }
                                     _ => panic!("Expected IntLiteral, got {:?}", right),
                                 }
                             }
                             _ => panic!("Expected binary expression for (2 + 3), got {:?}", left),
                         }
                         match right.as_ref() {
-                            Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
                             _ => panic!("Expected IntLiteral, got {:?}", right),
                         }
                     }
@@ -610,14 +668,16 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Subtract);
                     match left.as_ref() {
-                        Expr::Identifier(span) => assert_eq!(span.text(source), "x"),
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
                         _ => panic!("Expected Identifier, got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::Identifier(span) => assert_eq!(span.text(source), "y"),
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
                         _ => panic!("Expected Identifier, got {:?}", right),
                     }
                 }
@@ -635,22 +695,26 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Subtract);
                     match left.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "10"),
                         _ => panic!("Expected IntLiteral, got {:?}", left),
                     }
                     // Right side should be 3 * 2 (multiplication has higher precedence)
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Multiply);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -671,25 +735,31 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Subtract);
                     // Left side should be (20 - 5) due to left associativity
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Subtract);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                                Expr::IntLiteral { span, .. } => {
+                                    assert_eq!(span.text(source), "20")
+                                }
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
                         _ => panic!("Expected binary expression for (20 - 5), got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -707,22 +777,26 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Subtract);
                     match left.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "20"),
                         _ => panic!("Expected IntLiteral, got {:?}", left),
                     }
                     // Right side should be (5 + 3)
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Add);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -743,14 +817,16 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Divide);
                     match left.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "20"),
                         _ => panic!("Expected IntLiteral, got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -768,14 +844,18 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Divide);
                     match left.as_ref() {
-                        Expr::Identifier(span) => assert_eq!(span.text(source), "numerator"),
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "numerator"),
                         _ => panic!("Expected Identifier, got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::Identifier(span) => assert_eq!(span.text(source), "denominator"),
+                        Expr::Identifier { span, .. } => {
+                            assert_eq!(span.text(source), "denominator")
+                        }
                         _ => panic!("Expected Identifier, got {:?}", right),
                     }
                 }
@@ -793,22 +873,28 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Add);
                     match left.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "10"),
                         _ => panic!("Expected IntLiteral, got {:?}", left),
                     }
                     // Right side should be 20 / 4 (division has higher precedence)
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Divide);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "20"),
+                                Expr::IntLiteral { span, .. } => {
+                                    assert_eq!(span.text(source), "20")
+                                }
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "4"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -829,25 +915,31 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Divide);
                     // Left side should be (100 / 5) due to left associativity
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Divide);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "100"),
+                                Expr::IntLiteral { span, .. } => {
+                                    assert_eq!(span.text(source), "100")
+                                }
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
                         _ => panic!("Expected binary expression for (100 / 5), got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "2"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -865,25 +957,29 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Divide);
                     // Left side should be (8 * 6) due to left associativity
                     match left.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Multiply);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "8"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "8"),
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "6"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "6"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
                         _ => panic!("Expected binary expression for (8 * 6), got {:?}", left),
                     }
                     match right.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "3"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
                         _ => panic!("Expected IntLiteral, got {:?}", right),
                     }
                 }
@@ -901,22 +997,28 @@ mod tests {
         let main_func = &program.functions[0];
         match &main_func.body[0] {
             Stmt::Let { value, .. } => match value {
-                Expr::Binary { left, op, right } => {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
                     assert_eq!(op, &BinaryOp::Divide);
                     match left.as_ref() {
-                        Expr::IntLiteral(span) => assert_eq!(span.text(source), "100"),
+                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "100"),
                         _ => panic!("Expected IntLiteral, got {:?}", left),
                     }
                     // Right side should be (10 + 5)
                     match right.as_ref() {
-                        Expr::Binary { left, op, right } => {
+                        Expr::Binary {
+                            left, op, right, ..
+                        } => {
                             assert_eq!(op, &BinaryOp::Add);
                             match left.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "10"),
+                                Expr::IntLiteral { span, .. } => {
+                                    assert_eq!(span.text(source), "10")
+                                }
                                 _ => panic!("Expected IntLiteral, got {:?}", left),
                             }
                             match right.as_ref() {
-                                Expr::IntLiteral(span) => assert_eq!(span.text(source), "5"),
+                                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
                                 _ => panic!("Expected IntLiteral, got {:?}", right),
                             }
                         }
@@ -1047,9 +1149,10 @@ fn main() {
                 left,
                 op: BinaryOp::Add,
                 right,
+                ..
             } = value
             {
-                assert!(matches!(**left, Expr::IntLiteral(_)));
+                assert!(matches!(**left, Expr::IntLiteral { .. }));
                 if let Expr::Binary {
                     op: BinaryOp::Multiply,
                     ..
@@ -1105,7 +1208,7 @@ fn main() {
 
         // Check struct literal in let statement
         if let Stmt::Let {
-            value: Expr::StructLiteral { name, fields },
+            value: Expr::StructLiteral { name, fields, .. },
             ..
         } = &main_func.body[0]
         {
@@ -1119,9 +1222,9 @@ fn main() {
 
         // Check field access in println
         if let Stmt::Expr(Expr::FunctionCall { args, .. }) = &main_func.body[1] {
-            if let Expr::FieldAccess { object, field } = &args[0] {
+            if let Expr::FieldAccess { object, field, .. } = &args[0] {
                 assert_eq!(field.text(source), "x");
-                if let Expr::Identifier(id) = object.as_ref() {
+                if let Expr::Identifier { span: id, .. } = object.as_ref() {
                     assert_eq!(id.text(source), "p");
                 } else {
                     panic!("Expected identifier in field access");
@@ -1141,12 +1244,12 @@ fn main() {
 
         let main_func = &program.functions[0];
         if let Stmt::Let {
-            value: Expr::FieldAccess { object, field },
+            value: Expr::FieldAccess { object, field, .. },
             ..
         } = &main_func.body[0]
         {
             assert_eq!(field.text(source), "x");
-            if let Expr::Identifier(obj_name) = object.as_ref() {
+            if let Expr::Identifier { span: obj_name, .. } = object.as_ref() {
                 assert_eq!(obj_name.text(source), "point");
             } else {
                 panic!("Expected identifier in field access object");
@@ -1163,7 +1266,7 @@ fn main() {
 
         let main_func = &program.functions[0];
         if let Stmt::Let {
-            value: Expr::StructLiteral { name, fields },
+            value: Expr::StructLiteral { name, fields, .. },
             ..
         } = &main_func.body[0]
         {
@@ -1172,7 +1275,7 @@ fn main() {
 
             // Check first field
             assert_eq!(fields[0].name.text(source), "x");
-            if let Expr::IntLiteral(val) = &fields[0].value {
+            if let Expr::IntLiteral { span: val, .. } = &fields[0].value {
                 assert_eq!(val.text(source), "10");
             } else {
                 panic!("Expected integer literal for x field");
@@ -1180,7 +1283,7 @@ fn main() {
 
             // Check second field
             assert_eq!(fields[1].name.text(source), "y");
-            if let Expr::IntLiteral(val) = &fields[1].value {
+            if let Expr::IntLiteral { span: val, .. } = &fields[1].value {
                 assert_eq!(val.text(source), "20");
             } else {
                 panic!("Expected integer literal for y field");
@@ -1265,11 +1368,11 @@ fn main() {
 
         let main_func = &program.functions[0];
         if let Stmt::Let {
-            value: Expr::Dereference { operand },
+            value: Expr::Dereference { operand, .. },
             ..
         } = &main_func.body[0]
         {
-            if let Expr::Identifier(name) = &**operand {
+            if let Expr::Identifier { span: name, .. } = &**operand {
                 assert_eq!(name.text(source), "ptr");
             } else {
                 panic!("Expected identifier in dereference operand");
@@ -1314,10 +1417,14 @@ fn main() {
                             left,
                             op: BinaryOp::Add,
                             right,
+                            ..
                         } = &expr
                         {
                             // Left should be IntLiteral(2)
-                            if let Expr::IntLiteral(left_span) = &**left {
+                            if let Expr::IntLiteral {
+                                span: left_span, ..
+                            } = &**left
+                            {
                                 assert_eq!(left_span.text(expr_input), "2");
                             } else {
                                 panic!("Left side should be IntLiteral(2), got: {:?}", left);
@@ -1328,10 +1435,17 @@ fn main() {
                                 left: mult_left,
                                 op: BinaryOp::Multiply,
                                 right: mult_right,
+                                ..
                             } = &**right
                             {
-                                if let (Expr::IntLiteral(left_span), Expr::IntLiteral(right_span)) =
-                                    (&**mult_left, &**mult_right)
+                                if let (
+                                    Expr::IntLiteral {
+                                        span: left_span, ..
+                                    },
+                                    Expr::IntLiteral {
+                                        span: right_span, ..
+                                    },
+                                ) = (&**mult_left, &**mult_right)
                                 {
                                     assert_eq!(left_span.text(expr_input), "3");
                                     assert_eq!(right_span.text(expr_input), "4");
@@ -1356,6 +1470,7 @@ fn main() {
                             left,
                             op: BinaryOp::Add,
                             right,
+                            ..
                         } = &expr
                         {
                             // Left should be Binary { 1 + 2 }
@@ -1363,10 +1478,17 @@ fn main() {
                                 left: add_left,
                                 op: BinaryOp::Add,
                                 right: add_right,
+                                ..
                             } = &**left
                             {
-                                if let (Expr::IntLiteral(left_span), Expr::IntLiteral(right_span)) =
-                                    (&**add_left, &**add_right)
+                                if let (
+                                    Expr::IntLiteral {
+                                        span: left_span, ..
+                                    },
+                                    Expr::IntLiteral {
+                                        span: right_span, ..
+                                    },
+                                ) = (&**add_left, &**add_right)
                                 {
                                     assert_eq!(left_span.text(expr_input), "1");
                                     assert_eq!(right_span.text(expr_input), "2");
@@ -1378,7 +1500,10 @@ fn main() {
                             }
 
                             // Right should be IntLiteral(3)
-                            if let Expr::IntLiteral(right_span) = &**right {
+                            if let Expr::IntLiteral {
+                                span: right_span, ..
+                            } = &**right
+                            {
                                 assert_eq!(right_span.text(expr_input), "3");
                                 println!("    ✓ Correct left associativity: parsed as (1 + 2) + 3");
                             } else {
