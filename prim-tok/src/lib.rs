@@ -227,8 +227,8 @@ impl<'a> Tokenizer<'a> {
 
         let text = &self.input[start_pos..self.position];
 
-        // Basic validation - ensure we have at least one digit
-        if text.chars().next().is_none_or(|c| !c.is_ascii_digit()) {
+        // Basic validation - ensure we have at least one digit anywhere in the token
+        if !text.chars().any(|c| c.is_ascii_digit()) {
             return Err(TokenError::InvalidNumber {
                 text: text.to_string(),
                 position: start_pos,
@@ -915,6 +915,14 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
         assert_eq!(tokens[0].text, "3.14");
+    }
+
+    #[test]
+    fn test_leading_dot_float() {
+        let mut tokenizer = Tokenizer::new(".5");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, ".5");
     }
 
     #[test]
