@@ -111,19 +111,18 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
         // Skip whitespace (but not newlines - they're significant)
-        while matches!(self.current_char(), ' ' | '\t') {
+        while self.current_char().map_or(false, |c| c == ' ' || c == '\t') {
             self.advance();
         }
 
         let start_pos = self.position;
-        let ch = self.current_char();
 
-        match ch {
-            '\n' | '\r' => self.make_simple_token(TokenKind::Newline, start_pos),
-            '+' => self.make_simple_token(TokenKind::Plus, start_pos),
-            '-' => {
+        match self.current_char() {
+            Some('\n') | Some('\r') => self.make_simple_token(TokenKind::Newline, start_pos),
+            Some('+') => self.make_simple_token(TokenKind::Plus, start_pos),
+            Some('-') => {
                 self.advance();
-                if self.current_char() == '>' {
+                if self.current_char() == Some('>') {
                     self.advance();
                     Ok(Token {
                         kind: TokenKind::Arrow,
@@ -138,12 +137,12 @@ impl<'a> Tokenizer<'a> {
                     })
                 }
             }
-            '*' => self.make_simple_token(TokenKind::Star, start_pos),
-            '/' => {
+            Some('*') => self.make_simple_token(TokenKind::Star, start_pos),
+            Some('/') => {
                 self.advance();
                 match self.current_char() {
-                    '/' => self.read_line_comment(start_pos),
-                    '*' => self.read_block_comment(start_pos),
+                    Some('/') => self.read_line_comment(start_pos),
+                    Some('*') => self.read_block_comment(start_pos),
                     _ => Ok(Token {
                         kind: TokenKind::Slash,
                         text: &self.input[start_pos..self.position],
@@ -151,9 +150,9 @@ impl<'a> Tokenizer<'a> {
                     }),
                 }
             }
-            '=' => {
+            Some('=') => {
                 self.advance();
-                if self.current_char() == '=' {
+                if self.current_char() == Some('=') {
                     self.advance();
                     Ok(Token {
                         kind: TokenKind::DoubleEquals,
@@ -168,14 +167,14 @@ impl<'a> Tokenizer<'a> {
                     })
                 }
             }
-            '(' => self.make_simple_token(TokenKind::LeftParen, start_pos),
-            ')' => self.make_simple_token(TokenKind::RightParen, start_pos),
-            '{' => self.make_simple_token(TokenKind::LeftBrace, start_pos),
-            '}' => self.make_simple_token(TokenKind::RightBrace, start_pos),
-            ',' => self.make_simple_token(TokenKind::Comma, start_pos),
-            ':' => self.make_simple_token(TokenKind::Colon, start_pos),
-            ';' => self.make_simple_token(TokenKind::Semicolon, start_pos),
-            '&' => {
+            Some('(') => self.make_simple_token(TokenKind::LeftParen, start_pos),
+            Some(')') => self.make_simple_token(TokenKind::RightParen, start_pos),
+            Some('{') => self.make_simple_token(TokenKind::LeftBrace, start_pos),
+            Some('}') => self.make_simple_token(TokenKind::RightBrace, start_pos),
+            Some(',') => self.make_simple_token(TokenKind::Comma, start_pos),
+            Some(':') => self.make_simple_token(TokenKind::Colon, start_pos),
+            Some(';') => self.make_simple_token(TokenKind::Semicolon, start_pos),
+            Some('&') => {
                 self.advance();
                 Ok(Token {
                     kind: TokenKind::Ampersand,
@@ -183,33 +182,29 @@ impl<'a> Tokenizer<'a> {
                     position: start_pos,
                 })
             }
-            '.' => {
+            Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
-                if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
+                if self.peek_ahead(1).map_or(true, |c| !c.is_ascii_digit()) {
                     self.make_simple_token(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
                     self.read_number(start_pos)
                 }
             }
-            '"' => self.read_string_literal(start_pos),
-            '\'' => self.read_char_literal(start_pos),
-            _ if ch.is_ascii_digit() => self.read_number(start_pos),
-            _ if ch.is_ascii_alphabetic() || ch == '_' => self.read_identifier(start_pos),
-            _ => Err(TokenError::UnexpectedCharacter {
-                ch,
-                position: start_pos,
-            }),
+            Some('"') => self.read_string_literal(start_pos),
+            Some('\'') => self.read_char_literal(start_pos),
+            Some(c) if c.is_ascii_digit() => self.read_number(start_pos),
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => self.read_identifier(start_pos),
+            Some(c) => Err(TokenError::UnexpectedCharacter { ch: c, position: start_pos }),
+            None => Err(TokenError::UnexpectedCharacter { ch: '\0', position: start_pos }),
         }
     }
 
     fn read_number(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         let mut is_float = false;
 
-        while self.current.is_some()
-            && (self.current_char().is_ascii_digit() || self.current_char() == '.')
-        {
-            if self.current_char() == '.' {
+        while self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_digit() || c == '.') {
+            if self.current_char() == Some('.') {
                 if is_float {
                     break;
                 }
@@ -219,8 +214,8 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle type suffixes (e.g., 42u32, 3.14f64)
-        if self.current.is_some() && self.current_char().is_ascii_alphabetic() {
-            while self.current.is_some() && (self.current_char().is_ascii_alphanumeric()) {
+        if self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_alphabetic()) {
+            while self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_alphanumeric()) {
                 self.advance();
             }
         }
@@ -248,7 +243,7 @@ impl<'a> Tokenizer<'a> {
 
     fn read_identifier(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         while self.current.is_some()
-            && (self.current_char().is_ascii_alphanumeric() || self.current_char() == '_')
+            && self.current_char().map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
         {
             self.advance();
         }
@@ -288,8 +283,8 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
-    fn current_char(&self) -> char {
-        self.current.unwrap_or('\0')
+    fn current_char(&self) -> Option<char> {
+        self.current
     }
 
     fn advance(&mut self) {
@@ -312,7 +307,7 @@ impl<'a> Tokenizer<'a> {
         self.advance();
 
         // Read until newline or end of input
-        while self.current.is_some() && !matches!(self.current_char(), '\n' | '\r') {
+        while self.current.is_some() && !matches!(self.current_char(), Some('\n') | Some('\r')) {
             self.advance();
         }
 
@@ -329,9 +324,9 @@ impl<'a> Tokenizer<'a> {
 
         // Read until we find '*/' or end of input
         while self.current.is_some() {
-            if self.current_char() == '*' {
+            if self.current_char() == Some('*') {
                 self.advance();
-                if self.current_char() == '/' {
+                if self.current_char() == Some('/') {
                     self.advance();
                     break;
                 }
@@ -360,7 +355,7 @@ impl<'a> Tokenizer<'a> {
 
         while self.current.is_some() {
             match self.current_char() {
-                '"' => {
+                Some('"') => {
                     self.advance(); // consume closing quote
                     return Ok(Token {
                         kind: TokenKind::StringLiteral,
@@ -368,13 +363,14 @@ impl<'a> Tokenizer<'a> {
                         position: start_pos,
                     });
                 }
-                '\\' => {
+                Some('\\') => {
                     self.advance(); // consume backslash
                     if self.current.is_some() {
                         self.advance(); // consume escaped character
                     }
                 }
-                _ => self.advance(),
+                Some(_) => self.advance(),
+                None => break,
             }
         }
 
@@ -388,18 +384,14 @@ impl<'a> Tokenizer<'a> {
         self.advance(); // consume opening quote
 
         if self.current.is_none() {
-            return Err(TokenError::UnterminatedString {
-                position: start_pos,
-            });
+            return Err(TokenError::UnterminatedString { position: start_pos });
         }
 
         // Handle escaped characters
-        if self.current_char() == '\\' {
+        if self.current_char() == Some('\\') {
             self.advance(); // consume backslash
             if self.current.is_none() {
-                return Err(TokenError::UnterminatedString {
-                    position: start_pos,
-                });
+                return Err(TokenError::UnterminatedString { position: start_pos });
             }
             self.advance(); // consume escaped character
         } else {
@@ -407,10 +399,8 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Expect closing quote
-        if self.current_char() != '\'' {
-            return Err(TokenError::UnterminatedString {
-                position: start_pos,
-            });
+        if self.current_char() != Some('\'') {
+            return Err(TokenError::UnterminatedString { position: start_pos });
         }
 
         self.advance(); // consume closing quote
