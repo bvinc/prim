@@ -47,3 +47,18 @@ if x == 5 {
 }
 ```
 
+## Git Hooks
+
+To enforce formatting, linting, and tests on each commit, this repo includes a pre-commit hook under `.githooks/pre-commit` that runs:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --all-features -D warnings`
+- `cargo test --workspace --all-targets`
+
+Enable it for your local clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+Now `git commit` will fail if formatting or Clippy checks fail.

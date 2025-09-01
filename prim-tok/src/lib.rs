@@ -195,15 +195,25 @@ impl<'a> Tokenizer<'a> {
             Some('\'') => self.read_char_literal(start_pos),
             Some(c) if c.is_ascii_digit() => self.read_number(start_pos),
             Some(c) if c.is_ascii_alphabetic() || c == '_' => self.read_identifier(start_pos),
-            Some(c) => Err(TokenError::UnexpectedCharacter { ch: c, position: start_pos }),
-            None => Err(TokenError::UnexpectedCharacter { ch: '\0', position: start_pos }),
+            Some(c) => Err(TokenError::UnexpectedCharacter {
+                ch: c,
+                position: start_pos,
+            }),
+            None => Err(TokenError::UnexpectedCharacter {
+                ch: '\0',
+                position: start_pos,
+            }),
         }
     }
 
     fn read_number(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         let mut is_float = false;
 
-        while self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_digit() || c == '.') {
+        while self.current.is_some()
+            && self
+                .current_char()
+                .map_or(false, |c| c.is_ascii_digit() || c == '.')
+        {
             if self.current_char() == Some('.') {
                 if is_float {
                     break;
@@ -214,8 +224,16 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle type suffixes (e.g., 42u32, 3.14f64)
-        if self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_alphabetic()) {
-            while self.current.is_some() && self.current_char().map_or(false, |c| c.is_ascii_alphanumeric()) {
+        if self.current.is_some()
+            && self
+                .current_char()
+                .map_or(false, |c| c.is_ascii_alphabetic())
+        {
+            while self.current.is_some()
+                && self
+                    .current_char()
+                    .map_or(false, |c| c.is_ascii_alphanumeric())
+            {
                 self.advance();
             }
         }
@@ -243,7 +261,9 @@ impl<'a> Tokenizer<'a> {
 
     fn read_identifier(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
         while self.current.is_some()
-            && self.current_char().map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+            && self
+                .current_char()
+                .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
         {
             self.advance();
         }
@@ -384,14 +404,18 @@ impl<'a> Tokenizer<'a> {
         self.advance(); // consume opening quote
 
         if self.current.is_none() {
-            return Err(TokenError::UnterminatedString { position: start_pos });
+            return Err(TokenError::UnterminatedString {
+                position: start_pos,
+            });
         }
 
         // Handle escaped characters
         if self.current_char() == Some('\\') {
             self.advance(); // consume backslash
             if self.current.is_none() {
-                return Err(TokenError::UnterminatedString { position: start_pos });
+                return Err(TokenError::UnterminatedString {
+                    position: start_pos,
+                });
             }
             self.advance(); // consume escaped character
         } else {
@@ -400,7 +424,9 @@ impl<'a> Tokenizer<'a> {
 
         // Expect closing quote
         if self.current_char() != Some('\'') {
-            return Err(TokenError::UnterminatedString { position: start_pos });
+            return Err(TokenError::UnterminatedString {
+                position: start_pos,
+            });
         }
 
         self.advance(); // consume closing quote
