@@ -70,9 +70,14 @@ impl CraneliftCodeGenerator {
             let sig = self.create_function_signature(function, source);
             let linkage = self.determine_linkage(function, source);
 
-            let func_id =
-                self.module
-                    .declare_function(function.name.text(source), linkage, &sig)?;
+            // Export Prim's `main` under the symbol name `prim_main`.
+            let sym_name = if function.name.text(source) == "main" {
+                "prim_main".to_string()
+            } else {
+                function.name.text(source).to_string()
+            };
+
+            let func_id = self.module.declare_function(&sym_name, linkage, &sig)?;
 
             function_ids.insert(function.name.text(source).to_string(), func_id);
         }

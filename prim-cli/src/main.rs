@@ -2,6 +2,7 @@ use prim_codegen::generate_object_code;
 use prim_parse::parse;
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod error;
@@ -129,9 +130,10 @@ fn build_program(filename: &str) -> Result<(), MainError> {
     // Write object code to file
     fs::write(&obj_filename, &object_code)?;
 
-    // Link with GCC to get C runtime library
+    // Ensure runtime is built and link it so it provides the C `main` symbol
+    let rt_lib = ensure_runtime_staticlib()?;
     let link_output = Command::new("gcc")
-        .args([&obj_filename, "-o", executable_name])
+        .args([&obj_filename, rt_lib.to_string_lossy().as_ref(), "-o", executable_name])
         .output()
         .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
@@ -180,9 +182,10 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     // Write object code to temporary file
     fs::write(&obj_filename, &object_code)?;
 
-    // Link with GCC to get C runtime library
+    // Ensure runtime is built and link it so it provides the C `main` symbol
+    let rt_lib = ensure_runtime_staticlib()?;
     let link_output = Command::new("gcc")
-        .args([&obj_filename, "-o", &executable_name])
+        .args([&obj_filename, rt_lib.to_string_lossy().as_ref(), "-o", &executable_name])
         .output()
         .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
@@ -219,4 +222,58 @@ fn compile_source(filename: &str) -> Result<(prim_parse::Program, String), MainE
     let program =
         parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
     Ok((program, source_code))
+}
+
+// Build prim-rt (if needed) and return path to its static library.
+fn ensure_runtime_staticlib() -> Result<PathBuf, MainError> {
+    // Determine workspace root and cargo profile used to build this binary
+    // CARGO_MANIFEST_DIR points to prim-cli; workspace root is one level up
+    let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(cli_manifest_dir).parent().ok_or_else(|| {
+        MainError::IoError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "invalid workspace root",
+        ))
+    })?;
+    // Prefer runtime env var when available; default to "debug"
+    let profile_dir = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+
+    // Expected staticlib path
+    // Cargo normalizes crate name dashes to underscores in artifact names
+    let staticlib_name = if cfg!(target_os = "windows") {
+        "prim_rt.lib"
+    } else {
+        "libprim_rt.a"
+    };
+    let staticlib_path = workspace_root
+        .join("target")
+        .join(&profile_dir)
+        .join(staticlib_name);
+
+    if !staticlib_path.exists() {
+        // Build prim-rt in the appropriate profile
+        let mut args = vec!["build", "-p", "prim-rt", "--features", "rt-entry"]; // default dev (debug)
+        if profile_dir == "release" {
+            args.push("--release");
+        }
+        let status = Command::new("cargo")
+            .args(args)
+            .current_dir(workspace_root)
+            .status()
+            .map_err(|e| {
+                MainError::LinkingError(format!("failed to invoke cargo to build runtime: {}", e))
+            })?;
+        if !status.success() {
+            return Err(MainError::LinkingError("building prim-rt failed".into()));
+        }
+    }
+
+    if !staticlib_path.exists() {
+        return Err(MainError::LinkingError(format!(
+            "runtime static library not found at {}",
+            staticlib_path.display()
+        )));
+    }
+
+    Ok(staticlib_path)
 }

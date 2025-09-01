@@ -57,3 +57,16 @@ mod tests {
         }
     }
 }
+
+// C runtime entrypoint that calls into Prim's generated entry (`prim_main`).
+#[cfg(feature = "rt-entry")]
+#[unsafe(no_mangle)]
+pub extern "C" fn main(_argc: i32, _argv: *mut *mut u8) -> i32 {
+    unsafe {
+        unsafe extern "C" {
+            fn prim_main() -> i32;
+        }
+        // Safety: we trust codegen to export a correct `prim_main` symbol.
+        prim_main()
+    }
+}
