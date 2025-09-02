@@ -46,6 +46,25 @@ impl<'a> Parser<'a> {
         // Skip leading newlines
         self.skip_newlines();
 
+        // Optional module header: mod <identifier>
+        if matches!(self.peek().kind, TokenKind::Mod) {
+            self.advance(); // consume 'mod'
+            let _name_token =
+                self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
+            // terminate with newline/semicolon or end of block
+            let _ = self.consume_statement_terminator();
+            self.skip_newlines();
+        }
+
+        // Optional imports: import <identifier>
+        while matches!(self.peek().kind, TokenKind::Import) {
+            self.advance(); // consume 'import'
+            let _mod_token =
+                self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
+            let _ = self.consume_statement_terminator();
+            self.skip_newlines();
+        }
+
         while !self.is_at_end() {
             // Allow struct definitions and function definitions at the top level
             match self.peek().kind {
