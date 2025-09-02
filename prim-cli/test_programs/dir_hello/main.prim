@@ -1,0 +1,6 @@
+mod main
+
+fn main() {
+    println(77)
+}
+
