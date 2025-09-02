@@ -3,6 +3,5 @@ mod main
 import a
 
 fn main() {
-    println(run())
+    println(a.run())
 }
-

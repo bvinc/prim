@@ -167,21 +167,15 @@ impl TypeChecker {
                 var_type
             }
 
-            Expr::FunctionCall { name, args, ty } => {
-                let func_name = name.text(&self.source);
-                let func_name_string = func_name.to_string();
-
-                // Check function exists
+            Expr::FunctionCall { path, args, ty } => {
+                // Build function key: join path with double underscores (module__function)
+                let func_name_string = path.mangle(&self.source, "__");
                 if !self.functions.contains_key(&func_name_string) {
                     return Err(TypeCheckError::UndefinedFunction(func_name_string));
                 }
-
-                // Type check arguments
                 for arg in args {
                     self.check_expression(arg)?;
                 }
-
-                // Return the function's return type, or i64 for built-ins like println
                 let return_type = self
                     .functions
                     .get(&func_name_string)

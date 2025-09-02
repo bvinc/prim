@@ -3,6 +3,5 @@ mod a
 import b
 
 fn run() -> i64 {
-    inc(4)
+    b.inc(4)
 }
-

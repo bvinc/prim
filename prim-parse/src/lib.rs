@@ -73,7 +73,8 @@ pub enum Expr {
         ty: Type,
     },
     FunctionCall {
-        name: Span,
+        // Qualified name segments: e.g., module.function or just function
+        path: NamePath,
         args: Vec<Expr>,
         ty: Type,
     },
@@ -151,6 +152,7 @@ pub struct Parameter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub module_name: Option<Span>,
+    pub imports: Vec<NamePath>,
     pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
 }
@@ -310,8 +312,8 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
-                assert_eq!(name.text(source), "println");
+            Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+                assert_eq!(path.segments[0].text(source), "println");
                 assert_eq!(args.len(), 1);
                 match &args[0] {
                     Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
@@ -332,8 +334,8 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
-                assert_eq!(name.text(source), "println");
+            Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+                assert_eq!(path.segments[0].text(source), "println");
                 assert_eq!(args.len(), 1);
                 match &args[0] {
                     Expr::Binary {
@@ -572,8 +574,8 @@ mod tests {
 
         let main_func = &program.functions[0];
         match &main_func.body[0] {
-            Stmt::Expr(Expr::FunctionCall { name, args, .. }) => {
-                assert_eq!(name.text(source), "println");
+            Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+                assert_eq!(path.segments[0].text(source), "println");
                 assert_eq!(args.len(), 1);
                 // Argument should be (2 + 3) * 4
                 match &args[0] {
@@ -1121,9 +1123,9 @@ fn main() {
         // Find the function call to level2 in level1
         let has_level2_call = level1_func.body.iter().any(|stmt| match stmt {
             Stmt::Let {
-                value: Expr::FunctionCall { name, .. },
+                value: Expr::FunctionCall { path, .. },
                 ..
-            } => name.text(source) == "level2",
+            } => path.segments.len() == 1 && path.segments[0].text(source) == "level2",
             _ => false,
         });
         assert!(has_level2_call, "level1 should call level2");
@@ -1536,5 +1538,37 @@ fn main() {
                 }
             }
         }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamePath {
+    pub segments: Vec<Span>,
+}
+
+impl NamePath {
+    pub fn from_single(seg: Span) -> Self {
+        Self {
+            segments: vec![seg],
+        }
+    }
+
+    pub fn is_single(&self) -> bool {
+        self.segments.len() == 1
+    }
+
+    pub fn to_string<'a>(&self, source: &'a str) -> String {
+        self.segments
+            .iter()
+            .map(|s| s.text(source).to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    pub fn mangle<'a>(&self, source: &'a str, sep: &str) -> String {
+        self.segments
+            .iter()
+            .map(|s| s.text(source).to_string())
+            .collect::<Vec<_>>()
+            .join(sep)
     }
 }

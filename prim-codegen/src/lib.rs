@@ -619,11 +619,10 @@ impl CraneliftCodeGenerator {
 
                 Ok(field_value)
             }
-            Expr::FunctionCall { name, args, .. } => {
-                let func_name = name.text(source);
-
-                if func_name == "println" && args.len() == 1 {
-                    // Generate the argument
+            Expr::FunctionCall { path, args, .. } => {
+                let is_println =
+                    path.segments.len() == 1 && path.segments[0].text(source) == "println";
+                if is_println && args.len() == 1 {
                     let arg_val = Self::generate_expression_impl_static(
                         struct_layouts,
                         variables,
@@ -634,72 +633,56 @@ impl CraneliftCodeGenerator {
                         function_ids,
                         source,
                     )?;
-
-                    // Check if this is a boolean type based on value type
                     let value_type = builder.func.dfg.value_type(arg_val);
                     if value_type == types::I8 {
-                        // For boolean values, call boolean-specific println
                         let println_bool_func_id =
                             Self::get_or_create_println_bool_function(module)?;
                         let local_func =
                             module.declare_func_in_func(println_bool_func_id, builder.func);
-                        let call = builder.ins().call(local_func, &[arg_val]);
-                        let _results = builder.inst_results(call);
+                        let _ = builder.ins().call(local_func, &[arg_val]);
                     } else {
-                        // For integer values, convert to i64 if needed and use regular println
                         let i64_val = if value_type == types::I64 {
                             arg_val
+                        } else if value_type == types::I32 || value_type == types::I16 {
+                            builder.ins().sextend(types::I64, arg_val)
                         } else {
-                            // Convert to i64 (sign-extend for signed types, zero-extend for unsigned)
-                            if value_type == types::I32 || value_type == types::I16 {
-                                builder.ins().sextend(types::I64, arg_val)
-                            } else {
-                                // Default: zero-extend other types
-                                builder.ins().uextend(types::I64, arg_val)
-                            }
+                            builder.ins().uextend(types::I64, arg_val)
                         };
                         let local_func = module.declare_func_in_func(println_func_id, builder.func);
-                        let call = builder.ins().call(local_func, &[i64_val]);
-                        let _results = builder.inst_results(call);
+                        let _ = builder.ins().call(local_func, &[i64_val]);
                     }
-
-                    // Return void value (0)
                     Ok(builder.ins().iconst(types::I64, 0))
-                } else if let Some(&func_id) = function_ids.get(func_name) {
-                    // User-defined function call
-                    let mut arg_vals = Vec::new();
-                    for arg in args {
-                        let arg_val = Self::generate_expression_impl_static(
-                            struct_layouts,
-                            variables,
-                            module,
-                            builder,
-                            arg,
-                            println_func_id,
-                            function_ids,
-                            source,
-                        )?;
-                        arg_vals.push(arg_val);
-                    }
-
-                    // Get function reference
-                    let local_func = module.declare_func_in_func(func_id, builder.func);
-
-                    // Call the function
-                    let call = builder.ins().call(local_func, &arg_vals);
-                    let results = builder.inst_results(call);
-
-                    // Return the result (or 0 if void function)
-                    if results.is_empty() {
-                        Ok(builder.ins().iconst(types::I64, 0))
-                    } else {
-                        Ok(results[0])
-                    }
                 } else {
-                    Err(CodegenError::UnsupportedFunctionCall {
-                        name: func_name.to_string(),
-                        context: "function call".to_string(),
-                    })
+                    let sym = path.mangle(source, "__");
+                    if let Some(&func_id) = function_ids.get(&sym) {
+                        let mut arg_vals = Vec::new();
+                        for arg in args {
+                            let arg_val = Self::generate_expression_impl_static(
+                                struct_layouts,
+                                variables,
+                                module,
+                                builder,
+                                arg,
+                                println_func_id,
+                                function_ids,
+                                source,
+                            )?;
+                            arg_vals.push(arg_val);
+                        }
+                        let local_func = module.declare_func_in_func(func_id, builder.func);
+                        let call = builder.ins().call(local_func, &arg_vals);
+                        let results = builder.inst_results(call);
+                        if results.is_empty() {
+                            Ok(builder.ins().iconst(types::I64, 0))
+                        } else {
+                            Ok(results[0])
+                        }
+                    } else {
+                        Err(CodegenError::UnsupportedFunctionCall {
+                            name: sym,
+                            context: "function call".to_string(),
+                        })
+                    }
                 }
             }
             Expr::Dereference { operand, .. } => {

@@ -282,7 +282,10 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
             }
         }
         // Gather imports from this file
-        import_names.extend(extract_imports(&src)?);
+        // Pull imports from parsed unit and convert to string with '.' separator
+        for p in &program.imports {
+            import_names.push(p.mangle(&src, "."));
+        }
         stripped_sources.push(strip_module_and_imports(&src)?);
     }
 
@@ -374,52 +377,7 @@ fn strip_module_and_imports(src: &str) -> Result<String, MainError> {
     Ok(src[start..].to_string())
 }
 
-fn extract_imports(src: &str) -> Result<Vec<String>, MainError> {
-    use prim_tok::{TokenKind, Tokenizer};
-    let mut tokenizer = Tokenizer::new(src);
-    let tokens = tokenizer
-        .tokenize()
-        .map_err(|e| MainError::CompilationError(e.to_string()))?;
-
-    let mut imports = Vec::new();
-    let mut i = 0usize;
-    // Skip leading newlines
-    while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
-        i += 1;
-    }
-    // Optional mod header
-    if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Mod) {
-        i += 1; // mod
-        if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
-            i += 1;
-        }
-        while i < tokens.len()
-            && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
-        {
-            i += 1;
-        }
-    }
-    loop {
-        while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
-            i += 1;
-        }
-        if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Import) {
-            i += 1; // import
-            if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
-                imports.push(tokens[i].text.to_string());
-                i += 1;
-            }
-            while i < tokens.len()
-                && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
-            {
-                i += 1;
-            }
-        } else {
-            break;
-        }
-    }
-    Ok(imports)
-}
+// extract_imports removed: imports parsed by prim-parse
 
 fn resolve_module_recursive(
     module_root: &Path,
@@ -428,20 +386,25 @@ fn resolve_module_recursive(
     stack: &mut Vec<String>,
     out_sources: &mut Vec<String>,
 ) -> Result<(), MainError> {
-    if stack.contains(&name.to_string()) {
+    let qual_name = name.replace('.', "__");
+    if stack.contains(&qual_name) {
         let mut cycle = stack.clone();
-        cycle.push(name.to_string());
+        cycle.push(qual_name.clone());
         return Err(MainError::CompilationError(format!(
             "Import cycle detected: {}",
             cycle.join(" -> ")
         )));
     }
-    if !visited.insert(name.to_string()) {
+    if !visited.insert(qual_name.clone()) {
         return Ok(());
     }
-    stack.push(name.to_string());
+    stack.push(qual_name.clone());
 
-    let mod_dir = module_root.join(name);
+    // Compute module directory by joining segments
+    let mut mod_dir = module_root.to_path_buf();
+    for s in name.split('.') {
+        mod_dir = mod_dir.join(s);
+    }
     let mut files: Vec<PathBuf> = fs::read_dir(&mod_dir)
         .map_err(MainError::IoError)?
         .filter_map(|e| e.ok())
@@ -475,7 +438,7 @@ fn resolve_module_recursive(
                 ))
             })?;
         match &module_name {
-            None => module_name = Some(this_name),
+            None => module_name = Some(this_name.clone()),
             Some(prev) if prev == &this_name => {}
             Some(prev) => {
                 return Err(MainError::CompilationError(format!(
@@ -486,8 +449,13 @@ fn resolve_module_recursive(
                 )));
             }
         }
-        imports.extend(extract_imports(&src)?);
-        body_sources.push(strip_module_and_imports(&src)?);
+        // Pull imports from this imported module
+        for p in &program.imports {
+            imports.push(p.mangle(&src, "."));
+        }
+        // Strip headers then prefix using fully-qualified module name
+        let stripped = strip_module_and_imports(&src)?;
+        body_sources.push(prefix_functions_with_module(&stripped, &qual_name)?);
     }
     for imp in imports {
         resolve_module_recursive(module_root, &imp, visited, stack, out_sources)?;
@@ -495,6 +463,47 @@ fn resolve_module_recursive(
     out_sources.push(body_sources.join("\n"));
     stack.pop();
     Ok(())
+}
+
+fn prefix_functions_with_module(src: &str, module_name: &str) -> Result<String, MainError> {
+    use prim_tok::{TokenKind, Tokenizer};
+    let mut tokenizer = Tokenizer::new(src);
+    let tokens = tokenizer
+        .tokenize()
+        .map_err(|e| MainError::CompilationError(e.to_string()))?;
+
+    let mut out = String::with_capacity(src.len() + 32);
+    let mut i = 0usize;
+    let mut cursor = 0usize;
+    while i < tokens.len() {
+        let t = &tokens[i];
+        if matches!(t.kind, TokenKind::Fn) {
+            // emit up to 'fn'
+            out.push_str(&src[cursor..t.position]);
+            // emit 'fn'
+            out.push_str("fn");
+            cursor = t.position + t.text.len();
+            // skip whitespace between fn and name by copying as-is until next token
+            i += 1;
+            if i < tokens.len() {
+                let name_tok = &tokens[i];
+                if matches!(name_tok.kind, TokenKind::Identifier) {
+                    // emit whitespace between and then the prefixed name
+                    out.push_str(&src[cursor..name_tok.position]);
+                    out.push_str(module_name);
+                    out.push_str("__");
+                    out.push_str(name_tok.text);
+                    cursor = name_tok.position + name_tok.text.len();
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    // emit remainder
+    out.push_str(&src[cursor..]);
+    Ok(out)
 }
 
 // Build prim-rt (if needed) and return path to its static library.

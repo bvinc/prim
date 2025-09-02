@@ -52,6 +52,7 @@ impl<'a> Parser<'a> {
     fn parse_internal(&mut self, require_main: bool) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
+        let mut imports: Vec<crate::NamePath> = Vec::new();
 
         // Skip leading newlines
         self.skip_newlines();
@@ -67,11 +68,18 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        // Optional imports: import <identifier>
+        // Optional imports: import <identifier> ('.' <identifier>)*
         while matches!(self.peek().kind, TokenKind::Import) {
             self.advance(); // consume 'import'
-            let _mod_token =
+            let first =
                 self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
+            let mut segs = vec![Self::token_span(first)];
+            while matches!(self.peek().kind, TokenKind::Dot) {
+                self.advance();
+                let seg = self.consume(TokenKind::Identifier, "Expected identifier after '.'")?;
+                segs.push(Self::token_span(seg));
+            }
+            imports.push(crate::NamePath { segments: segs });
             let _ = self.consume_statement_terminator();
             self.skip_newlines();
         }
@@ -104,6 +112,7 @@ impl<'a> Parser<'a> {
 
         Ok(Program {
             module_name: self.module_name.clone(),
+            imports,
             structs,
             functions,
         })
@@ -163,7 +172,7 @@ impl<'a> Parser<'a> {
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
                     Ok(Expr::FunctionCall {
-                        name,
+                        path: crate::NamePath::from_single(name),
                         args,
                         ty: Type::Undetermined,
                     })
@@ -191,7 +200,7 @@ impl<'a> Parser<'a> {
                 let args = self.parse_argument_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(Expr::FunctionCall {
-                    name: name_span,
+                    path: crate::NamePath::from_single(name_span),
                     args,
                     ty: Type::Undetermined,
                 })
@@ -267,23 +276,36 @@ impl<'a> Parser<'a> {
                 ty: Type::Undetermined,
             })
         } else if matches!(self.peek().kind, TokenKind::LeftParen) {
-            // Function call: identifier(args)
-            if let Expr::Identifier { span: name, .. } = left {
-                self.advance(); // consume '('
-                let args = self.parse_argument_list()?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall {
-                    name,
-                    args,
-                    ty: Type::Undetermined,
-                })
-            } else {
-                Err(ParseError::UnexpectedToken {
-                    expected: "function name".to_string(),
-                    found: self.peek().kind,
-                    position: self.peek().position,
-                })
-            }
+            // Function call: identifier(args) or qualified: module.ident(args)
+            let path: Vec<Span> = match left {
+                Expr::Identifier { span: name, .. } => vec![name],
+                Expr::FieldAccess { object, field, .. } => {
+                    if let Expr::Identifier { span: module, .. } = *object {
+                        vec![module, field]
+                    } else {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "module name before '.'".to_string(),
+                            found: self.peek().kind,
+                            position: self.peek().position,
+                        });
+                    }
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "function name".to_string(),
+                        found: self.peek().kind,
+                        position: self.peek().position,
+                    });
+                }
+            };
+            self.advance(); // consume '('
+            let args = self.parse_argument_list()?;
+            self.consume(TokenKind::RightParen, "Expected ')'")?;
+            Ok(Expr::FunctionCall {
+                path: crate::NamePath { segments: path },
+                args,
+                ty: Type::Undetermined,
+            })
         } else if matches!(self.peek().kind, TokenKind::Dot) {
             // Field access: expr.field
             self.advance(); // consume '.'
