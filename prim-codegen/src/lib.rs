@@ -316,6 +316,77 @@ impl CraneliftCodeGenerator {
         source: &str,
     ) -> Result<Value, CodegenError> {
         match expr {
+            Expr::ArrayLiteral { elements, ty } => {
+                // Only implement for byte arrays for now: [u8]
+                // Determine element type
+                let elem_ty = match ty {
+                    Type::Array(inner) => inner.as_ref(),
+                    _ => &Type::I64,
+                };
+
+                // Local helper mapping
+                let (elem_size, elem_cl_ty) = match elem_ty {
+                    Type::U8 | Type::I8 | Type::Bool => (1u32, types::I8),
+                    Type::U16 | Type::I16 => (2u32, types::I16),
+                    Type::U32 | Type::I32 => (4u32, types::I32),
+                    _ => (8u32, types::I64),
+                };
+
+                // Compute total size and alignment
+                let count = elements.len() as i64;
+                let total_size = (elem_size as i64) * count;
+                let align = elem_size.max(1) as i64;
+
+                // Declare extern runtime alloc: prim_rt_alloc(size: usize, align: usize) -> *mut u8
+                let mut alloc_sig = module.make_signature();
+                alloc_sig.params.push(AbiParam::new(types::I64));
+                alloc_sig.params.push(AbiParam::new(types::I64));
+                alloc_sig.returns.push(AbiParam::new(types::I64));
+                let alloc_func_id =
+                    module.declare_function("prim_rt_alloc", Linkage::Import, &alloc_sig)?;
+                let alloc_local = module.declare_func_in_func(alloc_func_id, builder.func);
+
+                // Call allocator
+                let size_val = builder.ins().iconst(types::I64, total_size);
+                let align_val = builder.ins().iconst(types::I64, align);
+                let call = builder.ins().call(alloc_local, &[size_val, align_val]);
+                let results = builder.inst_results(call);
+                let base_ptr = results[0];
+
+                // Store elements sequentially
+                for (i, el) in elements.iter().enumerate() {
+                    let val = Self::generate_expression_impl_static(
+                        struct_layouts,
+                        variables,
+                        module,
+                        builder,
+                        el,
+                        println_func_id,
+                        function_ids,
+                        source,
+                    )?;
+                    // Convert to element CL type if needed
+                    let store_val = if builder.func.dfg.value_type(val) == elem_cl_ty {
+                        val
+                    } else {
+                        // Narrow or extend to match
+                        match elem_cl_ty {
+                            types::I8 => builder.ins().ireduce(types::I8, val),
+                            types::I16 => builder.ins().ireduce(types::I16, val),
+                            types::I32 => builder.ins().ireduce(types::I32, val),
+                            types::I64 => val,
+                            _ => val,
+                        }
+                    };
+                    let offset = (i as i64) * (elem_size as i64);
+                    let off_val = builder.ins().iconst(types::I64, offset);
+                    let addr = builder.ins().iadd(base_ptr, off_val);
+                    builder.ins().store(MemFlags::new(), store_val, addr, 0);
+                }
+
+                // Return pointer to start of array buffer
+                Ok(base_ptr)
+            }
             Expr::IntLiteral { span: value, .. } => {
                 // Parse the literal (handle type suffixes like 42u32)
                 let value_text = value.text(source);
@@ -882,6 +953,7 @@ impl CraneliftCodeGenerator {
             Type::F32 => (4, types::F32),
             Type::F64 => (8, types::F64),
             Type::Bool => (1, types::I8),
+            Type::Array(_) => (8, types::I64), // Arrays are represented as pointers for now
             Type::Struct(_) => (8, types::I64), // Struct references are pointers, 8 bytes on 64-bit systems
             Type::Pointer { .. } => (8, types::I64), // All pointers are 8 bytes on 64-bit systems
             Type::Undetermined => panic!(

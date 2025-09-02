@@ -168,6 +168,27 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(expr)
             }
+            TokenKind::LeftBracket => {
+                // Array literal: [expr, expr, ...]
+                self.advance(); // consume '['
+                let mut elements = Vec::new();
+                // Allow empty literal []
+                if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                    elements.push(self.parse_expression(Precedence::NONE)?);
+                    while matches!(self.peek().kind, TokenKind::Comma) {
+                        self.advance(); // consume ','
+                        elements.push(self.parse_expression(Precedence::NONE)?);
+                    }
+                }
+                self.consume(
+                    TokenKind::RightBracket,
+                    "Expected ']' to close array literal",
+                )?;
+                Ok(Expr::ArrayLiteral {
+                    elements,
+                    ty: Type::Undetermined,
+                })
+            }
             TokenKind::Minus => {
                 self.advance(); // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
@@ -507,6 +528,16 @@ impl<'a> Parser<'a> {
             TokenKind::Bool => {
                 self.advance();
                 Ok(Type::Bool)
+            }
+            TokenKind::LeftBracket => {
+                // Dynamic array type: [T]
+                self.advance(); // consume '['
+                let elem_ty = self.parse_type()?;
+                self.consume(
+                    TokenKind::RightBracket,
+                    "Expected ']' after array element type",
+                )?;
+                Ok(Type::Array(Box::new(elem_ty)))
             }
             TokenKind::Identifier => {
                 // This could be a struct type reference

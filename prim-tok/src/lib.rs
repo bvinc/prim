@@ -50,15 +50,17 @@ pub enum TokenKind {
     Arrow,        // ->
 
     // Punctuation
-    LeftParen,  // (
-    RightParen, // )
-    LeftBrace,  // {
-    RightBrace, // }
-    Comma,      // ,
-    Colon,      // :
-    Semicolon,  // ;
-    Ampersand,  // &
-    Dot,        // .
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Comma,        // ,
+    Colon,        // :
+    Semicolon,    // ;
+    Ampersand,    // &
+    Dot,          // .
 
     // Special
     Comment,
@@ -171,6 +173,8 @@ impl<'a> Tokenizer<'a> {
             Some(')') => self.make_simple_token(TokenKind::RightParen, start_pos),
             Some('{') => self.make_simple_token(TokenKind::LeftBrace, start_pos),
             Some('}') => self.make_simple_token(TokenKind::RightBrace, start_pos),
+            Some('[') => self.make_simple_token(TokenKind::LeftBracket, start_pos),
+            Some(']') => self.make_simple_token(TokenKind::RightBracket, start_pos),
             Some(',') => self.make_simple_token(TokenKind::Comma, start_pos),
             Some(':') => self.make_simple_token(TokenKind::Colon, start_pos),
             Some(';') => self.make_simple_token(TokenKind::Semicolon, start_pos),

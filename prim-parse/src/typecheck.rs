@@ -77,7 +77,7 @@ impl TypeChecker {
             } => {
                 // If there's a type annotation, use it to guide type checking
                 if let Some(annotated_type) = type_annotation {
-                    // First set the expected type on the expression if it's an integer literal
+                    // If the annotated type is an integer, set integer literal expectation
                     if let Expr::IntLiteral { ty, .. } = value {
                         if matches!(
                             annotated_type,
@@ -93,6 +93,16 @@ impl TypeChecker {
                                 | Type::Usize
                         ) {
                             *ty = annotated_type.clone();
+                        }
+                    }
+                    // If the annotated type is an array, push element expectations into array literal
+                    if let Type::Array(elem_ty) = annotated_type {
+                        if let Expr::ArrayLiteral { elements, .. } = value {
+                            for el in elements.iter_mut() {
+                                if let Expr::IntLiteral { ty, .. } = el {
+                                    *ty = *elem_ty.clone();
+                                }
+                            }
                         }
                     }
                 }
@@ -226,6 +236,33 @@ impl TypeChecker {
                 let placeholder_type = Type::I64; // TODO: implement field type checking
                 *ty = placeholder_type.clone();
                 placeholder_type
+            }
+            Expr::ArrayLiteral { elements, ty } => {
+                // Infer array element type from elements; default to i64 if empty
+                // Note: precise inference is limited; for now, use i64 unless prior expectation set
+                for el in elements.iter_mut() {
+                    self.check_expression(el)?;
+                }
+                // Use first element type if available, else default to i64
+                let elem_ty = if let Some(first) = elements.first() {
+                    match first.clone() {
+                        Expr::IntLiteral { ty, .. }
+                        | Expr::FloatLiteral { ty, .. }
+                        | Expr::BoolLiteral { ty, .. }
+                        | Expr::Identifier { ty, .. }
+                        | Expr::Binary { ty, .. }
+                        | Expr::FunctionCall { ty, .. }
+                        | Expr::StructLiteral { ty, .. }
+                        | Expr::FieldAccess { ty, .. }
+                        | Expr::Dereference { ty, .. }
+                        | Expr::ArrayLiteral { ty, .. } => ty,
+                    }
+                } else {
+                    Type::I64
+                };
+                let arr_ty = Type::Array(Box::new(elem_ty));
+                *ty = arr_ty.clone();
+                arr_ty
             }
         };
 

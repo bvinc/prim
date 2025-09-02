@@ -39,6 +39,7 @@ pub enum Type {
     F32,
     F64,
     Bool,
+    Array(Box<Type>),
     Struct(Span), // struct name reference
     Pointer {
         mutability: PointerMutability,
@@ -88,6 +89,10 @@ pub enum Expr {
     },
     Dereference {
         operand: Box<Expr>,
+        ty: Type,
+    },
+    ArrayLiteral {
+        elements: Vec<Expr>,
         ty: Type,
     },
 }
