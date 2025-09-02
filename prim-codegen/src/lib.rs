@@ -346,12 +346,16 @@ impl CraneliftCodeGenerator {
                     module.declare_function("prim_rt_alloc", Linkage::Import, &alloc_sig)?;
                 let alloc_local = module.declare_func_in_func(alloc_func_id, builder.func);
 
-                // Call allocator
-                let size_val = builder.ins().iconst(types::I64, total_size);
-                let align_val = builder.ins().iconst(types::I64, align);
-                let call = builder.ins().call(alloc_local, &[size_val, align_val]);
-                let results = builder.inst_results(call);
-                let base_ptr = results[0];
+                // Allocate data buffer (or null if empty)
+                let base_ptr = if total_size > 0 {
+                    let size_val = builder.ins().iconst(types::I64, total_size);
+                    let align_val = builder.ins().iconst(types::I64, align);
+                    let call = builder.ins().call(alloc_local, &[size_val, align_val]);
+                    let results = builder.inst_results(call);
+                    results[0]
+                } else {
+                    builder.ins().iconst(types::I64, 0)
+                };
 
                 // Store elements sequentially
                 for (i, el) in elements.iter().enumerate() {
@@ -384,8 +388,32 @@ impl CraneliftCodeGenerator {
                     builder.ins().store(MemFlags::new(), store_val, addr, 0);
                 }
 
-                // Return pointer to start of array buffer
-                Ok(base_ptr)
+                // Build header { ptr, len, cap } on the stack and return pointer to it
+                let header_size = 8 * 3; // 24 bytes (ptr, len, cap)
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    header_size as u32,
+                    3, // 8-byte alignment
+                ));
+                let header_ptr = builder.ins().stack_addr(types::I64, slot, 0);
+
+                let len_val = builder.ins().iconst(types::I64, count);
+                let cap_val = builder.ins().iconst(types::I64, count); // cap == len for literal
+
+                // Store ptr at offset 0
+                builder
+                    .ins()
+                    .store(MemFlags::new(), base_ptr, header_ptr, 0);
+                // Store len at offset 8
+                let len_off = builder.ins().iconst(types::I64, 8);
+                let len_addr = builder.ins().iadd(header_ptr, len_off);
+                builder.ins().store(MemFlags::new(), len_val, len_addr, 0);
+                // Store cap at offset 16
+                let cap_off = builder.ins().iconst(types::I64, 16);
+                let cap_addr = builder.ins().iadd(header_ptr, cap_off);
+                builder.ins().store(MemFlags::new(), cap_val, cap_addr, 0);
+
+                Ok(header_ptr)
             }
             Expr::IntLiteral { span: value, .. } => {
                 // Parse the literal (handle type suffixes like 42u32)
