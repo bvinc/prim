@@ -1,0 +1,8 @@
+mod a
+
+import b
+
+fn run() -> i64 {
+    inc(4)
+}
+

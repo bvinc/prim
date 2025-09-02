@@ -1,0 +1,9 @@
+mod main
+
+import utils
+
+fn main() {
+    let x = add2(5)
+    println(x)
+}
+

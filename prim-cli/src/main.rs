@@ -228,6 +228,13 @@ fn compile_source(path: &str) -> Result<(prim_parse::Program, String), MainError
 }
 
 fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainError> {
+    // Determine module root: if this is a cmd/ directory, the root is its parent
+    let module_root = if dir.file_name().map_or(false, |n| n == "cmd") {
+        dir.parent().unwrap_or(dir)
+    } else {
+        dir
+    };
+
     // Collect all .prim files (sorted for determinism)
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .map_err(MainError::IoError)?
@@ -246,6 +253,7 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
     // Verify all files declare the same module name and that it is `main` (binary)
     let mut module_name: Option<String> = None;
     let mut stripped_sources = Vec::new();
+    let mut import_names: Vec<String> = Vec::new();
 
     for file in &files {
         let src = fs::read_to_string(file).map_err(MainError::IoError)?;
@@ -273,6 +281,8 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
                 )));
             }
         }
+        // Gather imports from this file
+        import_names.extend(extract_imports(&src)?);
         stripped_sources.push(strip_module_and_imports(&src)?);
     }
 
@@ -284,8 +294,28 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
         )));
     }
 
-    // Concatenate stripped sources and parse as a single unit to produce final AST
-    let combined_source = stripped_sources.join("\n");
+    // Resolve imports recursively within module_root siblings, detect cycles, and concatenate
+    let mut visited = std::collections::HashSet::<String>::new();
+    let mut stack = Vec::<String>::new();
+    let mut dep_sources: Vec<String> = Vec::new();
+    for imp in import_names {
+        resolve_module_recursive(
+            module_root,
+            &imp,
+            &mut visited,
+            &mut stack,
+            &mut dep_sources,
+        )?;
+    }
+
+    // Concatenate dependency sources first, then this module's sources
+    let mut combined_source = String::new();
+    if !dep_sources.is_empty() {
+        combined_source.push_str(&dep_sources.join("\n"));
+        combined_source.push('\n');
+    }
+    combined_source.push_str(&stripped_sources.join("\n"));
+
     let program =
         parse(&combined_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
 
@@ -342,6 +372,129 @@ fn strip_module_and_imports(src: &str) -> Result<String, MainError> {
 
     let start = tokens.get(i).map(|t| t.position).unwrap_or(src.len());
     Ok(src[start..].to_string())
+}
+
+fn extract_imports(src: &str) -> Result<Vec<String>, MainError> {
+    use prim_tok::{TokenKind, Tokenizer};
+    let mut tokenizer = Tokenizer::new(src);
+    let tokens = tokenizer
+        .tokenize()
+        .map_err(|e| MainError::CompilationError(e.to_string()))?;
+
+    let mut imports = Vec::new();
+    let mut i = 0usize;
+    // Skip leading newlines
+    while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
+        i += 1;
+    }
+    // Optional mod header
+    if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Mod) {
+        i += 1; // mod
+        if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
+            i += 1;
+        }
+        while i < tokens.len()
+            && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
+        {
+            i += 1;
+        }
+    }
+    loop {
+        while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
+            i += 1;
+        }
+        if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Import) {
+            i += 1; // import
+            if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
+                imports.push(tokens[i].text.to_string());
+                i += 1;
+            }
+            while i < tokens.len()
+                && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
+            {
+                i += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    Ok(imports)
+}
+
+fn resolve_module_recursive(
+    module_root: &Path,
+    name: &str,
+    visited: &mut std::collections::HashSet<String>,
+    stack: &mut Vec<String>,
+    out_sources: &mut Vec<String>,
+) -> Result<(), MainError> {
+    if stack.contains(&name.to_string()) {
+        let mut cycle = stack.clone();
+        cycle.push(name.to_string());
+        return Err(MainError::CompilationError(format!(
+            "Import cycle detected: {}",
+            cycle.join(" -> ")
+        )));
+    }
+    if !visited.insert(name.to_string()) {
+        return Ok(());
+    }
+    stack.push(name.to_string());
+
+    let mod_dir = module_root.join(name);
+    let mut files: Vec<PathBuf> = fs::read_dir(&mod_dir)
+        .map_err(MainError::IoError)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |ext| ext == "prim"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(MainError::CompilationError(format!(
+            "Imported module '{}' not found at {}",
+            name,
+            mod_dir.display()
+        )));
+    }
+
+    let mut module_name: Option<String> = None;
+    let mut imports = Vec::new();
+    let mut body_sources = Vec::new();
+    for file in &files {
+        let src = fs::read_to_string(file).map_err(MainError::IoError)?;
+        let program = prim_parse::parse_unit(&src)
+            .map_err(|err| MainError::CompilationError(format!("{}: {}", file.display(), err)))?;
+        let this_name = program
+            .module_name
+            .as_ref()
+            .map(|span| span.text(&src).to_string())
+            .ok_or_else(|| {
+                MainError::CompilationError(format!(
+                    "{}: missing 'mod <name>' declaration at top of file",
+                    file.display()
+                ))
+            })?;
+        match &module_name {
+            None => module_name = Some(this_name),
+            Some(prev) if prev == &this_name => {}
+            Some(prev) => {
+                return Err(MainError::CompilationError(format!(
+                    "Module name mismatch: {} declares '{}', expected '{}'",
+                    file.display(),
+                    this_name,
+                    prev
+                )));
+            }
+        }
+        imports.extend(extract_imports(&src)?);
+        body_sources.push(strip_module_and_imports(&src)?);
+    }
+    for imp in imports {
+        resolve_module_recursive(module_root, &imp, visited, stack, out_sources)?;
+    }
+    out_sources.push(body_sources.join("\n"));
+    stack.pop();
+    Ok(())
 }
 
 // Build prim-rt (if needed) and return path to its static library.
