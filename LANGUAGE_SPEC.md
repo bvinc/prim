@@ -8,12 +8,21 @@ Prim is a statically-typed programming language with a focus on simplicity and c
 
 ### Program Structure
 ```
-program        → function*
+module_unit    → module_header? import* ( struct | function )*
+module_header  → "mod" IDENTIFIER terminator
+import         → "import" IDENTIFIER terminator
+
+program        → function*                    # single-file mode
 function       → "fn" IDENTIFIER "(" parameters? ")" ( "->" type )? block
 parameters     → parameter ( "," parameter )*
 parameter      → IDENTIFIER ":" type
 block          → "{" statement* "}"
 ```
+
+Notes:
+- In multi-file mode, a module is a directory of `.prim` files. Each file must begin with `mod <name>`.
+- `import name` pulls in another module located as a sibling directory (see Modules section).
+- The CLI accepts either a single file or a directory. When given a directory, files are merged after stripping the `mod` and `import` headers; `import`s are resolved first.
 
 ### Statements
 ```
@@ -44,7 +53,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 ## Lexical Rules
 
 ### Tokens
-- **Keywords**: `fn`, `let`, `if`, `true`, `false`
+- **Keywords**: `fn`, `let`, `if`, `true`, `false`, `mod`, `import`
 - **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`, `bool`
 - **Operators**: `+`, `-`, `*`, `/`, `=`, `==`, `->`, `(`, `)`, `{`, `}`, `,`, `:`, `;`
 - **Literals**: 
@@ -82,7 +91,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - Variable names must be unique within their scope
 
 ### Functions
-- Every program must have a `main` function with signature `fn main()`
+- Every binary must have a `main` function with signature `fn main()`
 - Functions can have parameters with required type annotations
 - Functions can have optional return types
 - Function calls require parentheses even with no arguments
@@ -139,6 +148,60 @@ The compiler provides clear error messages for:
 - No heap allocation or garbage collection
 - Function parameters are passed by value
 - No pointers or references
+
+## Modules
+
+- Definition: A module is a directory containing one or more `.prim` files. Each file starts with a header `mod <name>` declaring the module name used by that file.
+- Entry modules: For binaries, the entry module must be named `main` and must define `fn main()`.
+  - The CLI accepts a module directory or its `cmd/` subdirectory. When `cmd/` is used, imports are resolved relative to the parent directory.
+- Imports: Top-of-file `import <name>` lines declare dependencies on sibling modules located as `./<name>/` next to the entry module root.
+  - Imports must appear before any `struct` or `fn` definitions (after the `mod` header, if present).
+  - Import cycles are not allowed; the compiler reports an error on cycles.
+  - Resolution order: imported modules are compiled/merged before the current module.
+- Visibility and namespacing (current behavior): Imported symbols become available unqualified (merged compilation unit). Names across the combined modules must be unique.
+  - Future work may introduce explicit namespacing and `module::symbol` references.
+
+### Examples
+
+Single-file (no module header required):
+```prim
+fn main() {
+    println(1)
+}
+```
+
+Multi-file module in a directory `app/`:
+```prim
+// app/main.prim
+mod main
+import util
+
+fn main() {
+    println(add2(5))
+}
+```
+
+```prim
+// app/util/lib.prim
+mod util
+
+fn add2(x: i64) -> i64 { x + 2 }
+```
+
+Nested with cmd/ entry:
+```prim
+// tool/cmd/main.prim
+mod main
+import core
+
+fn main() { println(run()) }
+```
+
+```prim
+// tool/core/lib.prim
+mod core
+fn run() -> i64 { 42 }
+```
 
 ## Examples
 
