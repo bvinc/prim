@@ -22,6 +22,7 @@ pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     current: usize,
     source: &'a str,
+    module_name: Option<Span>,
 }
 
 impl<'a> Parser<'a> {
@@ -36,10 +37,19 @@ impl<'a> Parser<'a> {
             tokens,
             current: 0,
             source,
+            module_name: None,
         }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
+        self.parse_internal(true)
+    }
+
+    pub fn parse_without_main(&mut self) -> Result<Program, ParseError> {
+        self.parse_internal(false)
+    }
+
+    fn parse_internal(&mut self, require_main: bool) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
 
@@ -49,8 +59,9 @@ impl<'a> Parser<'a> {
         // Optional module header: mod <identifier>
         if matches!(self.peek().kind, TokenKind::Mod) {
             self.advance(); // consume 'mod'
-            let _name_token =
+            let name_token =
                 self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
+            self.module_name = Some(Self::token_span(name_token));
             // terminate with newline/semicolon or end of block
             let _ = self.consume_statement_terminator();
             self.skip_newlines();
@@ -87,11 +98,15 @@ impl<'a> Parser<'a> {
         }
 
         // Validate that a main function exists
-        if !functions.iter().any(|f| self.span_text(&f.name) == "main") {
+        if require_main && !functions.iter().any(|f| self.span_text(&f.name) == "main") {
             return Err(ParseError::MissingMainFunction);
         }
 
-        Ok(Program { structs, functions })
+        Ok(Program {
+            module_name: self.module_name.clone(),
+            structs,
+            functions,
+        })
     }
 
     /// Parse an expression with minimum precedence

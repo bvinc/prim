@@ -214,14 +214,134 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     Ok(run_result.status.code().unwrap_or(0))
 }
 
-fn compile_source(filename: &str) -> Result<(prim_parse::Program, String), MainError> {
-    // Read the source file
-    let source_code = fs::read_to_string(filename).map_err(MainError::IoError)?;
+fn compile_source(path: &str) -> Result<(prim_parse::Program, String), MainError> {
+    let p = Path::new(path);
+    if p.is_dir() {
+        compile_module_dir(p)
+    } else {
+        // Single file path
+        let source_code = fs::read_to_string(path).map_err(MainError::IoError)?;
+        let program =
+            parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
+        Ok((program, source_code))
+    }
+}
 
-    // Parse the source code
+fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainError> {
+    // Collect all .prim files (sorted for determinism)
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .map_err(MainError::IoError)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |ext| ext == "prim"))
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        return Err(MainError::CompilationError(
+            "No .prim files found in module directory".into(),
+        ));
+    }
+
+    // Verify all files declare the same module name and that it is `main` (binary)
+    let mut module_name: Option<String> = None;
+    let mut stripped_sources = Vec::new();
+
+    for file in &files {
+        let src = fs::read_to_string(file).map_err(MainError::IoError)?;
+        let program = prim_parse::parse_unit(&src)
+            .map_err(|err| MainError::CompilationError(format!("{}: {}", file.display(), err)))?;
+        let this_name = program
+            .module_name
+            .as_ref()
+            .map(|span| span.text(&src).to_string())
+            .ok_or_else(|| {
+                MainError::CompilationError(format!(
+                    "{}: missing 'mod <name>' declaration at top of file",
+                    file.display()
+                ))
+            })?;
+        match &module_name {
+            None => module_name = Some(this_name),
+            Some(prev) if prev == &this_name => {}
+            Some(prev) => {
+                return Err(MainError::CompilationError(format!(
+                    "Module name mismatch: {} declares '{}', expected '{}'",
+                    file.display(),
+                    this_name,
+                    prev
+                )));
+            }
+        }
+        stripped_sources.push(strip_module_and_imports(&src)?);
+    }
+
+    let module_name = module_name.unwrap();
+    if module_name != "main" {
+        return Err(MainError::CompilationError(format!(
+            "Binary module must be named 'main', found '{}'",
+            module_name
+        )));
+    }
+
+    // Concatenate stripped sources and parse as a single unit to produce final AST
+    let combined_source = stripped_sources.join("\n");
     let program =
-        parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    Ok((program, source_code))
+        parse(&combined_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
+
+    Ok((program, combined_source))
+}
+
+fn strip_module_and_imports(src: &str) -> Result<String, MainError> {
+    use prim_tok::{TokenKind, Tokenizer};
+    let mut tokenizer = Tokenizer::new(src);
+    let tokens = tokenizer
+        .tokenize()
+        .map_err(|e| MainError::CompilationError(e.to_string()))?;
+
+    let mut i = 0usize;
+    // Skip leading newlines
+    while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
+        i += 1;
+    }
+
+    // Optional mod header
+    if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Mod) {
+        i += 1; // 'mod'
+        if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
+            i += 1; // module name
+        }
+        // consume terminators
+        while i < tokens.len()
+            && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
+        {
+            i += 1;
+        }
+    }
+
+    // Zero or more imports
+    loop {
+        // Skip optional leading newlines between imports
+        while i < tokens.len() && matches!(tokens[i].kind, TokenKind::Newline) {
+            i += 1;
+        }
+        if i + 1 < tokens.len() && matches!(tokens[i].kind, TokenKind::Import) {
+            i += 1; // 'import'
+            if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Identifier) {
+                i += 1; // module name
+            }
+            while i < tokens.len()
+                && matches!(tokens[i].kind, TokenKind::Semicolon | TokenKind::Newline)
+            {
+                i += 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    let start = tokens.get(i).map(|t| t.position).unwrap_or(src.len());
+    Ok(src[start..].to_string())
 }
 
 // Build prim-rt (if needed) and return path to its static library.

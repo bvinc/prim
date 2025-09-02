@@ -150,6 +150,7 @@ pub struct Parameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    pub module_name: Option<Span>,
     pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
 }
@@ -160,6 +161,14 @@ pub fn parse(input: &str) -> Result<Program, ParseError> {
     let tokens = tokenizer.tokenize()?;
     let mut parser = Parser::new(tokens, input);
     parser.parse()
+}
+
+/// Parse a single file/unit without requiring a `main` function.
+pub fn parse_unit(input: &str) -> Result<Program, ParseError> {
+    let mut tokenizer = Tokenizer::new(input);
+    let tokens = tokenizer.tokenize()?;
+    let mut parser = Parser::new(tokens, input);
+    parser.parse_without_main()
 }
 
 #[cfg(test)]
