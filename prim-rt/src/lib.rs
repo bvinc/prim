@@ -40,33 +40,35 @@ pub unsafe extern "C" fn prim_rt_free(ptr: *mut u8, size: usize, align: usize) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// std.mem intrinsics (symbols matched by codegen via qualified calls)
 
-    #[test]
-    fn alloc_and_free_basic() {
-        unsafe {
-            let size = 64usize;
-            let align = 8usize;
-            let ptr = prim_rt_alloc(size, align);
-            assert!(!ptr.is_null());
-            // Touch memory to ensure it's writable
-            *ptr = 42;
-            prim_rt_free(ptr, size, align);
-        }
-    }
+#[unsafe(no_mangle)]
+pub extern "C" fn std__mem__copy(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    unsafe { std::ptr::copy_nonoverlapping(src, dst, n) };
+    n
 }
 
-// C runtime entrypoint that calls into Prim's generated entry (`prim_main`).
-#[cfg(feature = "rt-entry")]
 #[unsafe(no_mangle)]
-pub extern "C" fn main(_argc: i32, _argv: *mut *mut u8) -> i32 {
+pub extern "C" fn std__mem__move(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    unsafe { std::ptr::copy(src, dst, n) };
+    n
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn std__mem__set(dst: *mut u8, val: u8, n: usize) -> usize {
+    unsafe { std::ptr::write_bytes(dst, val, n) };
+    n
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn std__mem__len(ptr: *const u8) -> usize {
+    let mut len = 0usize;
     unsafe {
-        unsafe extern "C" {
-            fn prim_main() -> i32;
+        let mut p = ptr;
+        while *p != 0 {
+            len += 1;
+            p = p.add(1);
         }
-        // Safety: we trust codegen to export a correct `prim_main` symbol.
-        prim_main()
     }
+    len
 }

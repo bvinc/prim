@@ -1,0 +1,6 @@
+mod mem
+
+// std.mem intrinsics are provided by the runtime.
+// Use as: std.mem.copy(dst, src, n), std.mem.move(dst, src, n),
+//         std.mem.set(dst, val, n), std.mem.len(ptr)
+

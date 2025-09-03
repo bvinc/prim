@@ -29,6 +29,19 @@ impl TypeChecker {
 
         // Add built-in functions
         checker.functions.insert("println".to_string(), None);
+        // Seed intrinsic std.mem functions (runtime-provided)
+        checker
+            .functions
+            .insert("std__mem__copy".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__move".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__set".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__len".to_string(), Some(Type::Usize));
 
         checker
     }

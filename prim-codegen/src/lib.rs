@@ -677,6 +677,44 @@ impl CraneliftCodeGenerator {
                         } else {
                             Ok(results[0])
                         }
+                    } else if sym.starts_with("std__") {
+                        // Declare external import on the fly
+                        let mut sig = module.make_signature();
+                        let mut arg_vals = Vec::new();
+                        for arg in args {
+                            let v = Self::generate_expression_impl_static(
+                                struct_layouts,
+                                variables,
+                                module,
+                                builder,
+                                arg,
+                                println_func_id,
+                                function_ids,
+                                source,
+                            )?;
+                            let vt = builder.func.dfg.value_type(v);
+                            let v_i64 = if vt == types::I64 {
+                                v
+                            } else if vt == types::I32 || vt == types::I16 || vt == types::I8 {
+                                builder.ins().uextend(types::I64, v)
+                            } else {
+                                v
+                            };
+                            sig.params.push(AbiParam::new(types::I64));
+                            arg_vals.push(v_i64);
+                        }
+                        sig.returns.push(AbiParam::new(types::I64));
+                        let ext_id = module
+                            .declare_function(&sym, Linkage::Import, &sig)
+                            .map_err(|e| CodegenError::CraneliftModuleError(Box::new(e)))?;
+                        let local = module.declare_func_in_func(ext_id, builder.func);
+                        let call = builder.ins().call(local, &arg_vals);
+                        let results = builder.inst_results(call);
+                        if results.is_empty() {
+                            Ok(builder.ins().iconst(types::I64, 0))
+                        } else {
+                            Ok(results[0])
+                        }
                     } else {
                         Err(CodegenError::UnsupportedFunctionCall {
                             name: sym,
