@@ -13,8 +13,11 @@ fn layout_from(size: usize, align: usize) -> Option<Layout> {
 
 /// Allocate `size` bytes with `align` alignment using Rust's global allocator.
 ///
-/// Safety: Caller must ensure `align` is a power of two and >= 1, and must
-/// free with `prim_rt_free` using the exact same `size` and `align`.
+/// # Safety
+/// - `align` must be a power of two and >= 1.
+/// - The returned pointer must be freed with [`prim_rt_free`] using the exact
+///   same `size` and `align`.
+/// - On allocation failure, returns null; callers must handle a null pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn prim_rt_alloc(size: usize, align: usize) -> *mut u8 {
     match layout_from(size, align) {
@@ -28,8 +31,10 @@ pub unsafe extern "C" fn prim_rt_alloc(size: usize, align: usize) -> *mut u8 {
 
 /// Free memory previously returned by `prim_rt_alloc` with the same `size` and `align`.
 ///
-/// Safety: `ptr` must be a pointer previously returned by `prim_rt_alloc` with
-/// the exact `size` and `align`. Double free or mismatched values are UB.
+/// # Safety
+/// - `ptr` must have been allocated by [`prim_rt_alloc`].
+/// - `size` and `align` must be identical to the allocation call.
+/// - Passing an invalid pointer, wrong layout, or double-free is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn prim_rt_free(ptr: *mut u8, size: usize, align: usize) {
     if ptr.is_null() {
