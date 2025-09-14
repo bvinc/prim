@@ -250,22 +250,21 @@ fn ensure_runtime_staticlib() -> Result<PathBuf, MainError> {
         .join(&profile_dir)
         .join(staticlib_name);
 
-    if !staticlib_path.exists() {
-        // Build prim-rt in the appropriate profile
-        let mut args = vec!["build", "-p", "prim-rt", "--features", "rt-entry"]; // default dev (debug)
-        if profile_dir == "release" {
-            args.push("--release");
-        }
-        let status = Command::new("cargo")
-            .args(args)
-            .current_dir(workspace_root)
-            .status()
-            .map_err(|e| {
-                MainError::LinkingError(format!("failed to invoke cargo to build runtime: {}", e))
-            })?;
-        if !status.success() {
-            return Err(MainError::LinkingError("building prim-rt failed".into()));
-        }
+    // Always ensure prim-rt is built. If it's already up-to-date, Cargo will
+    // no-op quickly.
+    let mut args = vec!["build", "-p", "prim-rt"]; // default dev (debug)
+    if profile_dir == "release" {
+        args.push("--release");
+    }
+    let status = Command::new("cargo")
+        .args(args)
+        .current_dir(workspace_root)
+        .status()
+        .map_err(|e| {
+            MainError::LinkingError(format!("failed to invoke cargo to build runtime: {}", e))
+        })?;
+    if !status.success() {
+        return Err(MainError::LinkingError("building prim-rt failed".into()));
     }
 
     if !staticlib_path.exists() {

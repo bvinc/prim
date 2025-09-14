@@ -59,7 +59,9 @@ mod tests {
 }
 
 // C runtime entrypoint that calls into Prim's generated entry (`prim_main`).
-#[cfg(feature = "rt-entry")]
+// Always present for production builds; hidden during Rust unit tests to avoid
+// multiple `main` definitions in the test harness.
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_argc: i32, _argv: *mut *mut u8) -> i32 {
     unsafe {
