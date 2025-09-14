@@ -5,17 +5,13 @@ echo "pre-commit: running cargo fmt -- --check"
 cargo fmt --all -- --check
 
 echo "pre-commit: running cargo clippy (deny warnings)"
-if command -v cargo-clippy >/dev/null 2>&1; then
-  if cargo clippy --workspace --all-targets --all-features -D warnings; then
-    :
-  else
-    echo "clippy failed; falling back to 'cargo check' with -D warnings"
-    RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --all-features
-  fi
-else
-  echo "clippy not found; falling back to 'cargo check' with -D warnings"
-  RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --all-features
+if ! cargo clippy -V >/dev/null 2>&1; then
+  echo "error: cargo clippy subcommand not available; install with 'rustup component add clippy'"
+  exit 1
 fi
+
+# Clippy must pass with no warnings; do not allow fallback.
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 echo "pre-commit: running cargo test"
 cargo test --workspace --all-targets

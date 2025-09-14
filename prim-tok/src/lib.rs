@@ -111,10 +111,7 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
         // Skip whitespace (but not newlines - they're significant)
-        while self
-            .current_char()
-            .is_some_and(|c| c == ' ' || c == '\t')
-        {
+        while self.current_char().is_some_and(|c| c == ' ' || c == '\t') {
             self.advance();
         }
 
@@ -187,10 +184,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
-                if self
-                    .peek_ahead(1)
-                    .is_none_or(|c| !c.is_ascii_digit())
-                {
+                if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
                     self.make_simple_token(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
@@ -230,11 +224,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle type suffixes (e.g., 42u32, 3.14f64)
-        if self.current.is_some()
-            && self
-                .current_char()
-                .is_some_and(|c| c.is_ascii_alphabetic())
-        {
+        if self.current.is_some() && self.current_char().is_some_and(|c| c.is_ascii_alphabetic()) {
             while self.current.is_some()
                 && self
                     .current_char()

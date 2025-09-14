@@ -229,9 +229,9 @@ fn ensure_runtime_staticlib() -> Result<PathBuf, MainError> {
     // Determine workspace root and cargo profile used to build this binary
     // CARGO_MANIFEST_DIR points to prim-cli; workspace root is one level up
     let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = Path::new(cli_manifest_dir).parent().ok_or_else(|| {
-        MainError::IoError(std::io::Error::other("invalid workspace root"))
-    })?;
+    let workspace_root = Path::new(cli_manifest_dir)
+        .parent()
+        .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
     // Prefer runtime env var when available; default to "debug"
     let profile_dir = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
