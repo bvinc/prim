@@ -30,6 +30,13 @@ I/O Utilities
 - `prim_rt_println_bool(b: i8)`
   - Convenience helpers for basic output; intended to replace direct libc calls in codegen.
 
+I/O (File Descriptors)
+- `prim_rt_write(fd: i32, buf: *const u8, len: usize) -> isize`
+  - Writes up to `len` bytes from `buf` to file descriptor `fd`. Returns bytes written or -1 on error.
+- `prim_rt_read(fd: i32, buf: *mut u8, len: usize) -> isize`
+  - Reads up to `len` bytes into `buf` from file descriptor `fd`. Returns bytes read, 0 for EOF, or -1 on error.
+  - Note: These are thin wrappers over the OS stream; they do not close or own the descriptor.
+
 Process Control
 - `prim_rt_exit(code: i32) -> !`
   - Terminates the process with exit code.
@@ -54,4 +61,3 @@ Error Handling
 
 Versioning
 - Backward-compatible additions only. Breaking changes require bumping a runtime ABI version constant/symbol.
-

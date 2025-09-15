@@ -5,6 +5,10 @@
 
 use std::alloc::{Layout, alloc, dealloc};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::mem::ManuallyDrop;
+use std::os::fd::FromRawFd;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -119,6 +123,57 @@ pub extern "C" fn prim_rt_yield() {
 #[unsafe(no_mangle)]
 pub extern "C" fn prim_rt_sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
+}
+
+// --- IO ---
+
+/// Write up to `len` bytes from `buf` to the file descriptor `fd`.
+/// Returns the number of bytes written, or -1 on error.
+///
+/// # Safety
+/// - `buf` must be valid for reads of `len` bytes.
+/// - `fd` must be a valid, open file descriptor. This function does not take ownership of `fd`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn prim_rt_write(fd: i32, buf: *const u8, len: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    if buf.is_null() {
+        return -1;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts(buf, len) };
+    // Construct a File without taking ownership of the fd (avoid closing on drop)
+    let file = unsafe { File::from_raw_fd(fd) };
+    let mut file = ManuallyDrop::new(file);
+    match (*file).write(slice) {
+        Ok(n) => n as isize,
+        Err(_) => -1,
+    }
+}
+
+/// Read up to `len` bytes from the file descriptor `fd` into `buf`.
+/// Returns the number of bytes read, 0 on EOF, or -1 on error.
+///
+/// # Safety
+/// - `buf` must be valid for writes of `len` bytes.
+/// - `fd` must be a valid, open file descriptor. This function does not take ownership of `fd`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn prim_rt_read(fd: i32, buf: *mut u8, len: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    if buf.is_null() {
+        return -1;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts_mut(buf, len) };
+    let file = unsafe { File::from_raw_fd(fd) };
+    let mut file = ManuallyDrop::new(file);
+    match (*file).read(slice) {
+        Ok(n) => n as isize,
+        Err(_) => -1,
+    }
 }
 
 #[cfg(test)]
