@@ -98,6 +98,13 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
+            TokenKind::StringLiteral => {
+                let token = self.advance();
+                Ok(Expr::StringLiteral {
+                    span: Self::token_span(token),
+                    ty: Type::Undetermined,
+                })
+            }
             TokenKind::FloatLiteral => {
                 let token = self.advance();
                 Ok(Expr::FloatLiteral {

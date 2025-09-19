@@ -39,6 +39,8 @@ pub enum Type {
     F32,
     F64,
     Bool,
+    // String slice with runtime representation (ptr, len)
+    StrSlice,
     Struct(Span), // struct name reference
     Pointer {
         mutability: PointerMutability,
@@ -59,6 +61,10 @@ pub enum Expr {
     },
     BoolLiteral {
         value: bool,
+        ty: Type,
+    },
+    StringLiteral {
+        span: Span,
         ty: Type,
     },
     Identifier {
