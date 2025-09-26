@@ -418,21 +418,27 @@ impl CraneliftCodeGenerator {
                 }
             }
             Expr::StringLiteral { span, .. } => {
-                // We parse and validate the literal and create a data object to dedupe later,
-                // but we do not misrepresent a StrSlice as a single pointer. Until multi-value
-                // values are supported in codegen (ptr,len), using a string literal in an
-                // expression is rejected here to avoid an incorrect ABI.
+                // Parse and materialize string bytes as a private data object.
                 let raw = span.text(source);
-                let _bytes = Self::unescape_string_literal(raw).map_err(|e| {
+                let bytes = Self::unescape_string_literal(raw).map_err(|e| {
                     CodegenError::InvalidExpression {
                         message: format!("Invalid string literal: {}", e),
                         context: "string literal".to_string(),
                     }
                 })?;
-                Err(CodegenError::InvalidExpression {
-                    message: "String literals (StrSlice) are not yet supported in codegen; requires ptr+len pair".to_string(),
-                    context: "string literal lowering".to_string(),
-                })
+
+                // Unique symbol by source span to avoid collisions; content dedup can come later.
+                let sym_name = format!("strlit_{}_{}", span.start(), span.end());
+                let data_id = module.declare_data(&sym_name, Linkage::Local, true, false)?;
+                let mut desc = cranelift_module::DataDescription::new();
+                desc.define(bytes.clone().into_boxed_slice());
+                module.define_data(data_id, &desc)?;
+
+                // Generate address of the data and the length constant.
+                let gv = module.declare_data_in_func(data_id, builder.func);
+                let ptr = builder.ins().global_value(types::I64, gv);
+                let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+                Ok(Val::Many(vec![ptr, len]))
             }
             Expr::Binary {
                 left, op, right, ..
