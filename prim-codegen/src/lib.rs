@@ -9,17 +9,17 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 mod error;
 pub use error::CodegenError;
 
-// Small value representation supporting single values and pairs (e.g., StrSlice ptr+len)
-#[derive(Clone, Copy)]
+// Small value representation supporting scalars and aggregates (e.g., StrSlice ptr+len)
+#[derive(Clone)]
 enum Val {
     One(Value),
-    Two(Value, Value),
+    Many(Vec<Value>),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Var {
     One(Variable),
-    Two(Variable, Variable),
+    Many(Vec<Variable>),
 }
 
 pub struct CraneliftCodeGenerator {
@@ -237,7 +237,7 @@ impl CraneliftCodeGenerator {
                     let b = builder.declare_var(types::I64);
                     builder.def_var(a, block_params[i]);
                     builder.def_var(b, block_params[i + 1]);
-                    variables.insert(name, Var::Two(a, b));
+                    variables.insert(name, Var::Many(vec![a, b]));
                     i += 2;
                 }
                 prim_parse::Type::Pointer { .. } => {
@@ -275,9 +275,9 @@ impl CraneliftCodeGenerator {
                     Val::One(v) => {
                         builder.ins().return_(&[v]);
                     }
-                    Val::Two(_, _) => {
+                    Val::Many(_) => {
                         return Err(CodegenError::InvalidExpression {
-                            message: "Returning StrSlice not yet supported".to_string(),
+                            message: "Returning aggregates not yet supported".to_string(),
                             context: "function return".to_string(),
                         });
                     }
@@ -331,12 +331,14 @@ impl CraneliftCodeGenerator {
                         builder.def_var(var, v);
                         variables.insert(name.text(source).to_string(), Var::One(var));
                     }
-                    Val::Two(a, b) => {
-                        let va = builder.declare_var(types::I64);
-                        let vb = builder.declare_var(types::I64);
-                        builder.def_var(va, a);
-                        builder.def_var(vb, b);
-                        variables.insert(name.text(source).to_string(), Var::Two(va, vb));
+                    Val::Many(vals) => {
+                        let mut agg = Vec::with_capacity(vals.len());
+                        for v in vals {
+                            let var = builder.declare_var(types::I64);
+                            builder.def_var(var, v);
+                            agg.push(var);
+                        }
+                        variables.insert(name.text(source).to_string(), Var::Many(agg));
                     }
                 }
 
@@ -400,7 +402,13 @@ impl CraneliftCodeGenerator {
                 if let Some(var) = variables.get(name_text) {
                     Ok(match var {
                         Var::One(v) => Val::One(builder.use_var(*v)),
-                        Var::Two(a, b) => Val::Two(builder.use_var(*a), builder.use_var(*b)),
+                        Var::Many(vs) => {
+                            let mut outs = Vec::with_capacity(vs.len());
+                            for vv in vs {
+                                outs.push(builder.use_var(*vv));
+                            }
+                            Val::Many(outs)
+                        }
                     })
                 } else {
                     Err(CodegenError::UndefinedVariable {
@@ -552,7 +560,7 @@ impl CraneliftCodeGenerator {
                         Val::One(v) => {
                             builder.ins().store(MemFlags::new(), v, field_addr, 0);
                         }
-                        Val::Two(_, _) => {
+                        Val::Many(_) => {
                             return Err(CodegenError::InvalidExpression {
                                 message: "cannot assign multi-value to scalar field".to_string(),
                                 context: "struct literal field assignment".to_string(),
@@ -637,7 +645,7 @@ impl CraneliftCodeGenerator {
 
                     let scalar = match arg_val {
                         Val::One(v) => v,
-                        Val::Two(_, _) => {
+                        Val::Many(_) => {
                             return Err(CodegenError::InvalidExpression {
                                 message: "println currently supports scalar values only"
                                     .to_string(),
@@ -692,10 +700,7 @@ impl CraneliftCodeGenerator {
                         )?;
                         match val {
                             Val::One(v) => arg_vals.push(v),
-                            Val::Two(a, b) => {
-                                arg_vals.push(a);
-                                arg_vals.push(b);
-                            }
+                            Val::Many(vs) => arg_vals.extend(vs),
                         }
                     }
 
