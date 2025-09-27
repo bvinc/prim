@@ -117,6 +117,7 @@ pub struct StructField {
 pub struct StructDefinition {
     pub name: Span,
     pub fields: Vec<StructFieldDefinition>,
+    pub repr_c: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +142,7 @@ pub struct Function {
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
+    pub runtime_binding: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

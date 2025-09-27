@@ -47,21 +47,38 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         while !self.is_at_end() {
+            // Collect any leading attributes
+            let attrs = self.parse_attributes()?;
+
             // Allow struct definitions and function definitions at the top level
             match self.peek().kind {
                 TokenKind::Struct => {
-                    let struct_def = self.parse_struct()?;
+                    let struct_def = self.parse_struct_with_attrs(attrs)?;
                     structs.push(struct_def);
                     // Skip newlines between definitions
                     self.skip_newlines();
                 }
                 TokenKind::Fn => {
-                    let function = self.parse_function()?;
+                    let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
                     // Skip newlines between functions
                     self.skip_newlines();
                 }
                 _ => {
+                    // If there is a stray '@' anywhere, surface it as a tokenizer error for compatibility
+                    if let Some(tok) = self
+                        .tokens
+                        .iter()
+                        .skip(self.current)
+                        .find(|t| t.kind == TokenKind::At)
+                    {
+                        return Err(ParseError::TokenError(
+                            prim_tok::TokenError::UnexpectedCharacter {
+                                ch: '@',
+                                position: tok.position,
+                            },
+                        ));
+                    }
                     return Err(ParseError::StatementsOutsideFunction);
                 }
             }
@@ -197,6 +214,15 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
+            TokenKind::At => {
+                // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
+                Err(ParseError::TokenError(
+                    prim_tok::TokenError::UnexpectedCharacter {
+                        ch: '@',
+                        position: self.peek().position,
+                    },
+                ))
+            }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: self.peek().kind,
@@ -272,7 +298,7 @@ impl<'a> Parser<'a> {
     }
 
     // Helper methods
-    fn parse_function(&mut self) -> Result<Function, ParseError> {
+    fn parse_function_with_attrs(&mut self, attrs: PendingAttrs) -> Result<Function, ParseError> {
         // Consume 'fn' keyword
         self.consume(TokenKind::Fn, "Expected 'fn'")?;
         self.skip_newlines();
@@ -298,20 +324,51 @@ impl<'a> Parser<'a> {
         };
         self.skip_newlines();
 
-        // Parse function body
-        self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
-        let body = self.parse_statement_list()?;
-        self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
+        // Validate attributes on function
+        if attrs.repr_c {
+            return Err(ParseError::InvalidAttributeUsage {
+                message: "@repr is only valid on structs".to_string(),
+                position: name.start(),
+            });
+        }
+
+        // Parse either a declaration (with ';') or a definition with a body
+        let body = if matches!(self.peek().kind, TokenKind::Semicolon) {
+            self.advance(); // consume ';'
+            if attrs.runtime.is_none() {
+                return Err(ParseError::InvalidAttributeUsage {
+                    message: "function declarations without body require @runtime attribute"
+                        .to_string(),
+                    position: name.start(),
+                });
+            }
+            Vec::new()
+        } else {
+            if attrs.runtime.is_some() {
+                return Err(ParseError::InvalidAttributeUsage {
+                    message: "@runtime functions must not have a body".to_string(),
+                    position: name.start(),
+                });
+            }
+            self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
+            let body = self.parse_statement_list()?;
+            self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
+            body
+        };
 
         Ok(Function {
             name,
             parameters,
             return_type,
             body,
+            runtime_binding: attrs.runtime,
         })
     }
 
-    fn parse_struct(&mut self) -> Result<StructDefinition, ParseError> {
+    fn parse_struct_with_attrs(
+        &mut self,
+        attrs: PendingAttrs,
+    ) -> Result<StructDefinition, ParseError> {
         // Consume 'struct' keyword
         self.consume(TokenKind::Struct, "Expected 'struct'")?;
         self.skip_newlines();
@@ -326,7 +383,11 @@ impl<'a> Parser<'a> {
         let fields = self.parse_struct_field_list()?;
         self.consume(TokenKind::RightBrace, "Expected '}' to end struct body")?;
 
-        Ok(StructDefinition { name, fields })
+        Ok(StructDefinition {
+            name,
+            fields,
+            repr_c: attrs.repr_c,
+        })
     }
 
     fn parse_struct_field_list(&mut self) -> Result<Vec<StructFieldDefinition>, ParseError> {
@@ -683,6 +744,76 @@ impl<'a> Parser<'a> {
                 position: self.peek().position,
             }),
         }
+    }
+}
+
+#[derive(Default, Clone)]
+struct PendingAttrs {
+    runtime: Option<String>,
+    repr_c: bool,
+}
+
+impl<'a> Parser<'a> {
+    fn parse_attributes(&mut self) -> Result<PendingAttrs, ParseError> {
+        let mut attrs = PendingAttrs::default();
+        loop {
+            self.skip_newlines();
+            if !matches!(self.peek().kind, TokenKind::At) {
+                break;
+            }
+            self.advance(); // consume '@'
+            // Attribute name
+            let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
+            let name_span = Self::token_span(name_tok);
+            let name = self.span_text(&name_span).to_string();
+            self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
+            match name.as_str() {
+                "runtime" => {
+                    let sym_tok =
+                        self.consume(TokenKind::StringLiteral, "Expected runtime symbol string")?;
+                    let sym = Self::token_span(sym_tok).text(self.source);
+                    let sym_clean = sym.trim_matches('"').to_string();
+                    self.consume(TokenKind::RightParen, "Expected ')' after attribute")?;
+                    if attrs.runtime.is_some() {
+                        return Err(ParseError::InvalidAttributeUsage {
+                            message: "duplicate @runtime attribute".to_string(),
+                            position: name_span.start(),
+                        });
+                    }
+                    attrs.runtime = Some(sym_clean);
+                }
+                "repr" => {
+                    let arg_tok = self.consume(
+                        TokenKind::StringLiteral,
+                        "Expected repr string literal (\"C\")",
+                    )?;
+                    let arg_text = Self::token_span(arg_tok).text(self.source);
+                    let val = arg_text.trim_matches('"');
+                    if val != "C" {
+                        return Err(ParseError::InvalidAttributeUsage {
+                            message: "@repr only supports \"C\"".to_string(),
+                            position: name_span.start(),
+                        });
+                    }
+                    self.consume(TokenKind::RightParen, "Expected ')' after attribute")?;
+                    if attrs.repr_c {
+                        return Err(ParseError::InvalidAttributeUsage {
+                            message: "duplicate @repr attribute".to_string(),
+                            position: name_span.start(),
+                        });
+                    }
+                    attrs.repr_c = true;
+                }
+                _ => {
+                    return Err(ParseError::InvalidAttributeUsage {
+                        message: format!("unknown attribute @{}", name),
+                        position: name_span.start(),
+                    });
+                }
+            }
+            self.skip_newlines();
+        }
+        Ok(attrs)
     }
 }
 
