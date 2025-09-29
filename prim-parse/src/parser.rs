@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_prefix()?;
 
         // Parse infix expressions while precedence is sufficient
-        while get_precedence_for_token(self.peek().kind) > min_precedence {
+        while !self.is_at_end() && get_precedence_for_token(self.peek().kind) > min_precedence {
             left = self.parse_infix(left)?;
         }
 
@@ -124,6 +124,9 @@ impl<'a> Parser<'a> {
 
     /// Parse a prefix expression - much simpler direct approach
     fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
+        if self.is_at_end() {
+            return Err(ParseError::UnexpectedEof);
+        }
         match self.peek().kind {
             TokenKind::IntLiteral => {
                 let token = self.advance();
@@ -739,7 +742,7 @@ impl<'a> Parser<'a> {
         // Skip leading newlines
         self.skip_newlines();
 
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RightBrace) {
             statements.push(self.parse_statement()?);
 
             // After each statement, require a terminator or end of block
@@ -794,6 +797,9 @@ impl<'a> Parser<'a> {
     }
 
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token<'a>, ParseError> {
+        if self.is_at_end() {
+            return Err(ParseError::UnexpectedEof);
+        }
         if self.peek().kind == expected {
             Ok(self.advance())
         } else {
@@ -813,7 +819,7 @@ impl<'a> Parser<'a> {
     }
 
     fn is_at_end(&self) -> bool {
-        matches!(self.peek().kind, TokenKind::Eof)
+        self.current >= self.tokens.len()
     }
 
     fn peek(&self) -> &Token<'a> {
@@ -834,7 +840,7 @@ impl<'a> Parser<'a> {
 
     /// Skip newline tokens (used when newlines are not significant)
     fn skip_newlines(&mut self) {
-        while matches!(self.peek().kind, TokenKind::Newline) {
+        while !self.is_at_end() && matches!(self.peek().kind, TokenKind::Newline) {
             self.advance();
         }
     }
@@ -850,10 +856,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(())
             }
-            TokenKind::RightBrace | TokenKind::Eof => {
+            TokenKind::RightBrace => {
                 // End of block terminates statement
                 Ok(())
             }
+            _ if self.is_at_end() => Ok(()),
             _ => Err(ParseError::UnexpectedToken {
                 expected: "';', newline, or '}' after statement".to_string(),
                 found: self.peek().kind,

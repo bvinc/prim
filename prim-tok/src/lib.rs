@@ -66,7 +66,6 @@ pub enum TokenKind {
     // Special
     Comment,
     Newline,
-    Eof,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,22 +96,13 @@ impl<'a> Tokenizer<'a> {
 
     pub fn tokenize(&mut self) -> Result<Vec<Token<'a>>, TokenError> {
         let mut tokens = Vec::new();
-
-        while self.current.is_some() {
-            let token = self.next_token()?;
-            tokens.push(token);
+        while let Some(tok) = self.next_token()? {
+            tokens.push(tok);
         }
-
-        tokens.push(Token {
-            kind: TokenKind::Eof,
-            text: "",
-            position: self.position,
-        });
-
         Ok(tokens)
     }
 
-    fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
+    fn next_token(&mut self) -> Result<Option<Token<'a>>, TokenError> {
         // Skip whitespace (but not newlines - they're significant)
         while self.current_char().is_some_and(|c| c == ' ' || c == '\t') {
             self.advance();
@@ -121,69 +111,70 @@ impl<'a> Tokenizer<'a> {
         let start_pos = self.position;
 
         match self.current_char() {
-            Some('\n') | Some('\r') => self.make_simple_token(TokenKind::Newline, start_pos),
-            Some('+') => self.make_simple_token(TokenKind::Plus, start_pos),
+            None => Ok(None),
+            Some('\n') | Some('\r') => self.emit_simple(TokenKind::Newline, start_pos),
+            Some('+') => self.emit_simple(TokenKind::Plus, start_pos),
             Some('-') => {
                 self.advance();
                 if self.current_char() == Some('>') {
                     self.advance();
-                    Ok(Token {
+                    Ok(Some(Token {
                         kind: TokenKind::Arrow,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    })
+                    }))
                 } else {
-                    Ok(Token {
+                    Ok(Some(Token {
                         kind: TokenKind::Minus,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    })
+                    }))
                 }
             }
-            Some('*') => self.make_simple_token(TokenKind::Star, start_pos),
+            Some('*') => self.emit_simple(TokenKind::Star, start_pos),
             Some('/') => {
                 self.advance();
                 match self.current_char() {
-                    Some('/') => self.read_line_comment(start_pos),
-                    Some('*') => self.read_block_comment(start_pos),
-                    _ => Ok(Token {
+                    Some('/') => self.read_line_comment(start_pos).map(Some),
+                    Some('*') => self.read_block_comment(start_pos).map(Some),
+                    _ => Ok(Some(Token {
                         kind: TokenKind::Slash,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    }),
+                    })),
                 }
             }
             Some('=') => {
                 self.advance();
                 if self.current_char() == Some('=') {
                     self.advance();
-                    Ok(Token {
+                    Ok(Some(Token {
                         kind: TokenKind::DoubleEquals,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    })
+                    }))
                 } else {
-                    Ok(Token {
+                    Ok(Some(Token {
                         kind: TokenKind::Equals,
                         text: &self.input[start_pos..self.position],
                         position: start_pos,
-                    })
+                    }))
                 }
             }
-            Some('(') => self.make_simple_token(TokenKind::LeftParen, start_pos),
-            Some(')') => self.make_simple_token(TokenKind::RightParen, start_pos),
-            Some('{') => self.make_simple_token(TokenKind::LeftBrace, start_pos),
-            Some('}') => self.make_simple_token(TokenKind::RightBrace, start_pos),
-            Some(',') => self.make_simple_token(TokenKind::Comma, start_pos),
-            Some(':') => self.make_simple_token(TokenKind::Colon, start_pos),
-            Some(';') => self.make_simple_token(TokenKind::Semicolon, start_pos),
+            Some('(') => self.emit_simple(TokenKind::LeftParen, start_pos),
+            Some(')') => self.emit_simple(TokenKind::RightParen, start_pos),
+            Some('{') => self.emit_simple(TokenKind::LeftBrace, start_pos),
+            Some('}') => self.emit_simple(TokenKind::RightBrace, start_pos),
+            Some(',') => self.emit_simple(TokenKind::Comma, start_pos),
+            Some(':') => self.emit_simple(TokenKind::Colon, start_pos),
+            Some(';') => self.emit_simple(TokenKind::Semicolon, start_pos),
             Some('&') => {
                 self.advance();
-                Ok(Token {
+                Ok(Some(Token {
                     kind: TokenKind::Ampersand,
                     text: &self.input[start_pos..self.position],
                     position: start_pos,
-                })
+                }))
             }
             Some('@') => {
                 // Allow '@' only for top-level attributes like @runtime(...) or @repr(...)
@@ -215,7 +206,7 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 if is_line_start {
-                    self.make_simple_token(TokenKind::At, start_pos)
+                    self.emit_simple(TokenKind::At, start_pos)
                 } else {
                     Err(TokenError::UnexpectedCharacter {
                         ch: '@',
@@ -226,26 +217,33 @@ impl<'a> Tokenizer<'a> {
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
                 if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
-                    self.make_simple_token(TokenKind::Dot, start_pos)
+                    self.emit_simple(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
-                    self.read_number(start_pos)
+                    self.read_number(start_pos).map(Some)
                 }
             }
-            Some('"') => self.read_string_literal(start_pos),
-            Some('\'') => self.read_char_literal(start_pos),
-            Some(c) if c.is_ascii_digit() => self.read_number(start_pos),
-            Some(c) if c.is_ascii_alphabetic() || c == '_' => self.read_identifier(start_pos),
+            Some('"') => self.read_string_literal(start_pos).map(Some),
+            Some('\'') => self.read_char_literal(start_pos).map(Some),
+            Some(c) if c.is_ascii_digit() => self.read_number(start_pos).map(Some),
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                self.read_identifier(start_pos).map(Some)
+            }
             Some(c) => Err(TokenError::UnexpectedCharacter {
                 ch: c,
                 position: start_pos,
             }),
-            None => Ok(Token {
-                kind: TokenKind::Eof,
-                text: "",
-                position: start_pos,
-            }),
         }
+    }
+
+    #[inline]
+    fn emit_simple(
+        &mut self,
+        kind: TokenKind,
+        start_pos: usize,
+    ) -> Result<Option<Token<'a>>, TokenError> {
+        let t = self.make_simple_token(kind, start_pos)?;
+        Ok(Some(t))
     }
 
     fn read_number(&mut self, start_pos: usize) -> Result<Token<'a>, TokenError> {
@@ -566,7 +564,6 @@ mod tests {
         assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[4].kind, TokenKind::Comment);
         assert_eq!(tokens[4].text, "// this is a comment");
-        assert_eq!(tokens[5].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -599,7 +596,6 @@ mod tests {
         assert_eq!(tokens[3].text, "/* block comment */");
         assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[4].text, "42");
-        assert_eq!(tokens[5].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -626,7 +622,6 @@ mod tests {
         assert_eq!(tokens[0].text, "/* outer /* inner */");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[1].text, "remaining");
-        assert_eq!(tokens[2].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -684,7 +679,6 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
         assert_eq!(tokens[3].text, r#""hello world""#);
-        assert_eq!(tokens[4].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -737,7 +731,6 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::CharLiteral);
         assert_eq!(tokens[3].text, "'a'");
-        assert_eq!(tokens[4].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -822,7 +815,6 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::True);
         assert_eq!(tokens[3].text, "true");
-        assert_eq!(tokens[4].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -956,7 +948,6 @@ mod tests {
         assert_eq!(tokens[1].text, ".");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].text, "x");
-        assert_eq!(tokens[3].kind, TokenKind::Eof);
     }
 
     #[test]
@@ -1014,7 +1005,6 @@ mod tests {
         assert_eq!(tokens[1].text, ".");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].text, "x");
-        assert_eq!(tokens[3].kind, TokenKind::Eof);
     }
 
     #[test]
