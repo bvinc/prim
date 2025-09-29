@@ -443,6 +443,38 @@ mod tests {
         }
     }
 
+    /// Planned: traits and impls
+    ///
+    /// Syntax to support (future):
+    ///   trait Marker {}
+    ///   impl Marker for Point {}
+    ///
+    /// This test is intentionally ignored until the parser supports `trait` and `impl` items.
+    #[test]
+    #[ignore = "traits not implemented yet"]
+    fn test_parse_trait_and_impl_syntax() {
+        let source = r#"
+            struct Point { x: i32, y: i32 }
+            trait Marker {}
+            impl Marker for Point {}
+            fn main() {}
+        "#;
+
+        let program = parse(source).expect("parser should handle trait + impl items");
+
+        // When implemented, validate that:
+        // - One struct named Point exists
+        // - One trait named Marker exists
+        // - One impl binds Marker for Point
+        assert!(
+            program
+                .structs
+                .iter()
+                .any(|s| s.name.text(source).trim() == "Point")
+        );
+        // Placeholder: trait and impl collections do not yet exist; assertions to be added later.
+    }
+
     #[test]
     fn test_parse_parentheses_nested() {
         let source = "fn main() { let result = ((2 + 3) * 4) + 5 }";
