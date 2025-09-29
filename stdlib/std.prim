@@ -4,3 +4,9 @@ struct Str {
     len: usize,
 }
 
+@runtime("prim_rt_write")
+fn rt_write(fd: i32, s: Str) -> isize;
+
+fn print_str(s: Str) {
+    let _ = rt_write(1, s)
+}

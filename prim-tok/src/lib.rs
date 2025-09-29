@@ -212,8 +212,7 @@ impl<'a> Tokenizer<'a> {
                         _ => break,
                     }
                 }
-                let is_known_attr = ident == "runtime" || ident == "repr";
-                if is_line_start && is_known_attr {
+                if is_line_start {
                     self.make_simple_token(TokenKind::At, start_pos)
                 } else {
                     Err(TokenError::UnexpectedCharacter {

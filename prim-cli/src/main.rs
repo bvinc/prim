@@ -216,12 +216,26 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
 
 fn compile_source(filename: &str) -> Result<(prim_parse::Program, String), MainError> {
     // Read the source file
-    let source_code = fs::read_to_string(filename).map_err(MainError::IoError)?;
+    let user_source = fs::read_to_string(filename).map_err(MainError::IoError)?;
 
-    // Parse the source code
+    // Prepend stdlib if present
+    let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(cli_manifest_dir)
+        .parent()
+        .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
+    let std_path = workspace_root.join("stdlib").join("std.prim");
+
+    let full_source = if std_path.exists() {
+        let std_src = fs::read_to_string(&std_path).map_err(MainError::IoError)?;
+        format!("{}\n{}", std_src, user_source)
+    } else {
+        user_source
+    };
+
+    // Parse the combined source code
     let program =
-        parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    Ok((program, source_code))
+        parse(&full_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
+    Ok((program, full_source))
 }
 
 // Build prim-rt (if needed) and return path to its static library.

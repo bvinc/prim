@@ -77,14 +77,16 @@ impl CraneliftCodeGenerator {
         // Compute struct layouts
         self.compute_struct_layouts(&program.structs, source)?;
 
-        // First pass: declare all functions
+        // First pass: declare all functions (including imports via @runtime)
         let mut function_ids = HashMap::new();
         for function in &program.functions {
             let sig = self.create_function_signature(function, source);
             let linkage = self.determine_linkage(function, source);
 
             // Export Prim's `main` under the symbol name `prim_main`.
-            let sym_name = if function.name.text(source) == "main" {
+            let sym_name = if let Some(binding) = &function.runtime_binding {
+                binding.clone()
+            } else if function.name.text(source) == "main" {
                 "prim_main".to_string()
             } else {
                 function.name.text(source).to_string()
@@ -97,6 +99,10 @@ impl CraneliftCodeGenerator {
 
         // Second pass: generate function bodies
         for function in &program.functions {
+            // Do not generate bodies for runtime-bound imports
+            if function.runtime_binding.is_some() {
+                continue;
+            }
             self.generate_function(function, println_func_id, &function_ids, source)?;
         }
 
@@ -127,14 +133,27 @@ impl CraneliftCodeGenerator {
     fn create_function_signature(&mut self, function: &Function, source: &str) -> Signature {
         let mut sig = self.module.make_signature();
 
-        // Add parameters to signature
+        // Add parameters to signature (flatten aggregates)
         for param in &function.parameters {
-            let param_type = match param.type_annotation {
-                prim_parse::Type::Bool => types::I8,
-                prim_parse::Type::Pointer { .. } => types::I64, // All pointers are 64-bit
-                _ => types::I64,
-            };
-            sig.params.push(AbiParam::new(param_type));
+            match &param.type_annotation {
+                prim_parse::Type::Bool => sig.params.push(AbiParam::new(types::I8)),
+                prim_parse::Type::Pointer { .. } => sig.params.push(AbiParam::new(types::I64)),
+                prim_parse::Type::StrSlice => {
+                    sig.params.push(AbiParam::new(types::I64));
+                    sig.params.push(AbiParam::new(types::I64));
+                }
+                prim_parse::Type::Struct(name_span) => {
+                    let name = name_span.text(source).to_string();
+                    if let Some(layout) = self.struct_layouts.get(&name) {
+                        for fld in &layout.fields {
+                            sig.params.push(AbiParam::new(fld.cranelift_type));
+                        }
+                    } else {
+                        sig.params.push(AbiParam::new(types::I64));
+                    }
+                }
+                _ => sig.params.push(AbiParam::new(types::I64)),
+            }
         }
 
         // Add return type to signature
@@ -148,7 +167,9 @@ impl CraneliftCodeGenerator {
     }
 
     fn determine_linkage(&self, function: &Function, source: &str) -> Linkage {
-        if function.name.text(source) == "main" {
+        if function.runtime_binding.is_some() {
+            Linkage::Import
+        } else if function.name.text(source) == "main" {
             Linkage::Export
         } else {
             Linkage::Local
@@ -171,8 +192,13 @@ impl CraneliftCodeGenerator {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
-        let (variables, _) =
-            Self::setup_function_parameters(&mut builder, entry_block, function, source);
+        let (variables, _) = Self::setup_function_parameters(
+            &self.struct_layouts,
+            &mut builder,
+            entry_block,
+            function,
+            source,
+        );
 
         let mut variables = variables;
         let mut last_expr_value = None;
@@ -213,6 +239,7 @@ impl CraneliftCodeGenerator {
     }
 
     fn setup_function_parameters(
+        struct_layouts: &HashMap<String, StructLayout>,
         builder: &mut FunctionBuilder,
         entry_block: Block,
         function: &Function,
@@ -225,7 +252,7 @@ impl CraneliftCodeGenerator {
         let mut i = 0usize;
         for param in &function.parameters {
             let name = param.name.text(source).to_string();
-            match param.type_annotation {
+            match &param.type_annotation {
                 prim_parse::Type::Bool => {
                     let var = builder.declare_var(types::I8);
                     builder.def_var(var, block_params[i]);
@@ -245,6 +272,26 @@ impl CraneliftCodeGenerator {
                     builder.def_var(var, block_params[i]);
                     variables.insert(name, Var::One(var));
                     i += 1;
+                }
+                prim_parse::Type::Struct(name_span) => {
+                    let mut vs = Vec::new();
+                    let struct_name = name_span.text(source).to_string();
+                    if let Some(layout) = struct_layouts.get(&struct_name) {
+                        for fld in &layout.fields {
+                            let v = builder.declare_var(fld.cranelift_type);
+                            builder.def_var(v, block_params[i]);
+                            i += 1;
+                            vs.push(v);
+                        }
+                    }
+                    if vs.is_empty() {
+                        let v = builder.declare_var(types::I64);
+                        builder.def_var(v, block_params[i]);
+                        i += 1;
+                        variables.insert(name, Var::One(v));
+                    } else {
+                        variables.insert(name, Var::Many(vs));
+                    }
                 }
                 _ => {
                     let var = builder.declare_var(types::I64);
