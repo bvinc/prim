@@ -155,6 +155,8 @@ pub struct Parameter {
 pub struct Program {
     pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
+    pub traits: Vec<TraitDefinition>,
+    pub impls: Vec<ImplDefinition>,
 }
 
 /// Parse a Prim program using the unified parser
@@ -163,6 +165,17 @@ pub fn parse(input: &str) -> Result<Program, ParseError> {
     let tokens = tokenizer.tokenize()?;
     let mut parser = Parser::new(tokens, input);
     parser.parse()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDefinition {
+    pub name: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDefinition {
+    pub trait_name: Span,
+    pub struct_name: Span,
 }
 
 #[cfg(test)]
@@ -451,7 +464,6 @@ mod tests {
     ///
     /// This test is intentionally ignored until the parser supports `trait` and `impl` items.
     #[test]
-    #[ignore = "traits not implemented yet"]
     fn test_parse_trait_and_impl_syntax() {
         let source = r#"
             struct Point { x: i32, y: i32 }
@@ -464,15 +476,27 @@ mod tests {
 
         // When implemented, validate that:
         // - One struct named Point exists
-        // - One trait named Marker exists
-        // - One impl binds Marker for Point
         assert!(
             program
                 .structs
                 .iter()
                 .any(|s| s.name.text(source).trim() == "Point")
         );
-        // Placeholder: trait and impl collections do not yet exist; assertions to be added later.
+        // - One trait named Marker exists
+        assert!(
+            program
+                .traits
+                .iter()
+                .any(|t| t.name.text(source).trim() == "Marker")
+        );
+        // - One impl binds Marker for Point
+        assert!(
+            program
+                .impls
+                .iter()
+                .any(|im| im.trait_name.text(source).trim() == "Marker"
+                    && im.struct_name.text(source).trim() == "Point")
+        );
     }
 
     #[test]

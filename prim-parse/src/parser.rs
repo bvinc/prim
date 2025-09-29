@@ -42,6 +42,8 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
+        let mut traits = Vec::new();
+        let mut impls = Vec::new();
 
         // Skip leading newlines
         self.skip_newlines();
@@ -62,6 +64,16 @@ impl<'a> Parser<'a> {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
                     // Skip newlines between functions
+                    self.skip_newlines();
+                }
+                TokenKind::Trait => {
+                    let tr = self.parse_trait_definition()?;
+                    traits.push(tr);
+                    self.skip_newlines();
+                }
+                TokenKind::Impl => {
+                    let im = self.parse_impl_definition()?;
+                    impls.push(im);
                     self.skip_newlines();
                 }
                 _ => {
@@ -89,7 +101,12 @@ impl<'a> Parser<'a> {
             return Err(ParseError::MissingMainFunction);
         }
 
-        Ok(Program { structs, functions })
+        Ok(Program {
+            structs,
+            functions,
+            traits,
+            impls,
+        })
     }
 
     /// Parse an expression with minimum precedence
@@ -387,6 +404,38 @@ impl<'a> Parser<'a> {
             name,
             fields,
             repr_c: attrs.repr_c,
+        })
+    }
+
+    fn parse_trait_definition(&mut self) -> Result<crate::TraitDefinition, ParseError> {
+        self.consume(TokenKind::Trait, "Expected 'trait'")?;
+        self.skip_newlines();
+        let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
+        let name = Self::token_span(name_token);
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
+        self.skip_newlines();
+        self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
+        Ok(crate::TraitDefinition { name })
+    }
+
+    fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
+        self.consume(TokenKind::Impl, "Expected 'impl'")?;
+        self.skip_newlines();
+        let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
+        let trait_name = Self::token_span(trait_tok);
+        self.skip_newlines();
+        self.consume(TokenKind::For, "Expected 'for' in impl")?;
+        self.skip_newlines();
+        let type_tok = self.consume(TokenKind::Identifier, "Expected type name after 'for'")?;
+        let struct_name = Self::token_span(type_tok);
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
+        self.skip_newlines();
+        self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
+        Ok(crate::ImplDefinition {
+            trait_name,
+            struct_name,
         })
     }
 

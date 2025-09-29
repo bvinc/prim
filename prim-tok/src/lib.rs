@@ -15,8 +15,10 @@ pub enum TokenKind {
     Struct,
     Fn,
     Impl,
+    Trait,
     If,
     Println,
+    For,
     True,
     False,
     Const,
@@ -238,8 +240,9 @@ impl<'a> Tokenizer<'a> {
                 ch: c,
                 position: start_pos,
             }),
-            None => Err(TokenError::UnexpectedCharacter {
-                ch: '\0',
+            None => Ok(Token {
+                kind: TokenKind::Eof,
+                text: "",
                 position: start_pos,
             }),
         }
@@ -309,8 +312,10 @@ impl<'a> Tokenizer<'a> {
             "struct" => TokenKind::Struct,
             "fn" => TokenKind::Fn,
             "impl" => TokenKind::Impl,
+            "trait" => TokenKind::Trait,
             "if" => TokenKind::If,
             "println" => TokenKind::Println,
+            "for" => TokenKind::For,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "const" => TokenKind::Const,
