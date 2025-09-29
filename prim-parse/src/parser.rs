@@ -53,25 +53,25 @@ impl<'a> Parser<'a> {
             let attrs = self.parse_attributes()?;
 
             // Allow struct definitions and function definitions at the top level
-            match self.peek().kind {
-                TokenKind::Struct => {
+            match self.peek_kind() {
+                Some(TokenKind::Struct) => {
                     let struct_def = self.parse_struct_with_attrs(attrs)?;
                     structs.push(struct_def);
                     // Skip newlines between definitions
                     self.skip_newlines();
                 }
-                TokenKind::Fn => {
+                Some(TokenKind::Fn) => {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
                     // Skip newlines between functions
                     self.skip_newlines();
                 }
-                TokenKind::Trait => {
+                Some(TokenKind::Trait) => {
                     let tr = self.parse_trait_definition()?;
                     traits.push(tr);
                     self.skip_newlines();
                 }
-                TokenKind::Impl => {
+                Some(TokenKind::Impl) => {
                     let im = self.parse_impl_definition()?;
                     impls.push(im);
                     self.skip_newlines();
@@ -115,7 +115,12 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_prefix()?;
 
         // Parse infix expressions while precedence is sufficient
-        while !self.is_at_end() && get_precedence_for_token(self.peek().kind) > min_precedence {
+        while self
+            .peek_kind()
+            .map(get_precedence_for_token)
+            .unwrap_or(Precedence::NONE)
+            > min_precedence
+        {
             left = self.parse_infix(left)?;
         }
 
@@ -127,48 +132,48 @@ impl<'a> Parser<'a> {
         if self.is_at_end() {
             return Err(ParseError::UnexpectedEof);
         }
-        match self.peek().kind {
-            TokenKind::IntLiteral => {
+        match self.peek_kind() {
+            Some(TokenKind::IntLiteral) => {
                 let token = self.advance();
                 Ok(Expr::IntLiteral {
                     span: Self::token_span(token),
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::StringLiteral => {
+            Some(TokenKind::StringLiteral) => {
                 let token = self.advance();
                 Ok(Expr::StringLiteral {
                     span: Self::token_span(token),
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::FloatLiteral => {
+            Some(TokenKind::FloatLiteral) => {
                 let token = self.advance();
                 Ok(Expr::FloatLiteral {
                     span: Self::token_span(token),
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::True => {
+            Some(TokenKind::True) => {
                 self.advance();
                 Ok(Expr::BoolLiteral {
                     value: true,
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::False => {
+            Some(TokenKind::False) => {
                 self.advance();
                 Ok(Expr::BoolLiteral {
                     value: false,
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::Identifier => {
+            Some(TokenKind::Identifier) => {
                 let token = self.advance();
                 let name = Self::token_span(token);
 
                 // Check if this is a function call
-                if matches!(self.peek().kind, TokenKind::LeftParen) {
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
                     self.advance(); // consume '('
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -177,7 +182,7 @@ impl<'a> Parser<'a> {
                         args,
                         ty: Type::Undetermined,
                     })
-                } else if matches!(self.peek().kind, TokenKind::LeftBrace) {
+                } else if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
                     // This is a struct literal
                     self.advance(); // consume '{'
                     let fields = self.parse_struct_literal_fields()?;
@@ -194,7 +199,7 @@ impl<'a> Parser<'a> {
                     })
                 }
             }
-            TokenKind::Println => {
+            Some(TokenKind::Println) => {
                 let token = self.advance();
                 let name_span = Self::token_span(token);
                 self.consume(TokenKind::LeftParen, "Expected '(' after println")?;
@@ -206,13 +211,13 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::LeftParen => {
+            Some(TokenKind::LeftParen) => {
                 self.advance(); // consume '('
                 let expr = self.parse_expression(Precedence::NONE)?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(expr)
             }
-            TokenKind::Minus => {
+            Some(TokenKind::Minus) => {
                 self.advance(); // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 // Represent unary minus as 0 - operand
@@ -226,7 +231,7 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::Star => {
+            Some(TokenKind::Star) => {
                 self.advance(); // consume '*'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 Ok(Expr::Dereference {
@@ -234,37 +239,41 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
-            TokenKind::At => {
+            Some(TokenKind::At) => {
                 // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
                 Err(ParseError::TokenError(
                     prim_tok::TokenError::UnexpectedCharacter {
                         ch: '@',
-                        position: self.peek().position,
+                        position: self.peek().map(|t| t.position).unwrap_or(0),
                     },
                 ))
             }
-            _ => Err(ParseError::UnexpectedToken {
+            Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
-                found: self.peek().kind,
-                position: self.peek().position,
+                found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                position: self.peek().map(|t| t.position).unwrap_or(0),
             }),
+            None => Err(ParseError::UnexpectedEof),
         }
     }
 
     /// Parse an infix expression - much simpler direct approach
     fn parse_infix(&mut self, left: Expr) -> Result<Expr, ParseError> {
-        if let Some(binary_op) = token_to_binary_op(self.peek().kind) {
-            let precedence = get_precedence_for_token(self.peek().kind);
-            self.advance(); // consume operator
-            let right = self.parse_expression(precedence)?;
+        if let Some(kind) = self.peek_kind() {
+            if let Some(binary_op) = token_to_binary_op(kind) {
+                let precedence = get_precedence_for_token(kind);
+                self.advance(); // consume operator
+                let right = self.parse_expression(precedence)?;
 
-            Ok(Expr::Binary {
-                left: Box::new(left),
-                op: binary_op,
-                right: Box::new(right),
-                ty: Type::Undetermined,
-            })
-        } else if matches!(self.peek().kind, TokenKind::LeftParen) {
+                return Ok(Expr::Binary {
+                    left: Box::new(left),
+                    op: binary_op,
+                    right: Box::new(right),
+                    ty: Type::Undetermined,
+                });
+            }
+        }
+        if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
             // Function call: identifier(args)
             if let Expr::Identifier { span: name, .. } = left {
                 self.advance(); // consume '('
@@ -278,11 +287,11 @@ impl<'a> Parser<'a> {
             } else {
                 Err(ParseError::UnexpectedToken {
                     expected: "function name".to_string(),
-                    found: self.peek().kind,
-                    position: self.peek().position,
+                    found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                    position: self.peek().map(|t| t.position).unwrap_or(0),
                 })
             }
-        } else if matches!(self.peek().kind, TokenKind::Dot) {
+        } else if matches!(self.peek_kind(), Some(TokenKind::Dot)) {
             // Field access: expr.field
             self.advance(); // consume '.'
             let field_token =
@@ -301,7 +310,7 @@ impl<'a> Parser<'a> {
     fn parse_argument_list(&mut self) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
 
-        if matches!(self.peek().kind, TokenKind::RightParen) {
+        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
             return Ok(args); // Empty argument list
         }
 
@@ -309,7 +318,7 @@ impl<'a> Parser<'a> {
         args.push(self.parse_expression(Precedence::NONE)?);
 
         // Parse remaining arguments
-        while matches!(self.peek().kind, TokenKind::Comma) {
+        while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
             args.push(self.parse_expression(Precedence::NONE)?);
         }
@@ -335,7 +344,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Parse optional return type
-        let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+        let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
             self.advance(); // consume '->'
             self.skip_newlines();
             Some(self.parse_type()?)
@@ -353,7 +362,7 @@ impl<'a> Parser<'a> {
         }
 
         // Parse either a declaration (with ';') or a definition with a body
-        let body = if matches!(self.peek().kind, TokenKind::Semicolon) {
+        let body = if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
             self.advance(); // consume ';'
             if attrs.runtime.is_none() {
                 return Err(ParseError::InvalidAttributeUsage {
@@ -421,7 +430,7 @@ impl<'a> Parser<'a> {
 
         // Parse zero or more method signatures: fn name(params) [-> type] ;
         let mut methods = Vec::new();
-        while matches!(self.peek().kind, TokenKind::Fn) {
+        while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
             self.skip_newlines();
             let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
@@ -431,7 +440,7 @@ impl<'a> Parser<'a> {
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
             self.skip_newlines();
-            let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+            let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
                 self.skip_newlines();
                 Some(self.parse_type()?)
@@ -471,7 +480,7 @@ impl<'a> Parser<'a> {
 
         // Parse zero or more method bodies: fn name(params) [-> type] { statements }
         let mut methods = Vec::new();
-        while matches!(self.peek().kind, TokenKind::Fn) {
+        while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
             self.skip_newlines();
             let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
@@ -481,7 +490,7 @@ impl<'a> Parser<'a> {
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
             self.skip_newlines();
-            let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+            let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
                 self.skip_newlines();
                 Some(self.parse_type()?)
@@ -515,7 +524,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Handle empty field list
-        if matches!(self.peek().kind, TokenKind::RightBrace) {
+        if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
             return Ok(fields);
         }
 
@@ -525,13 +534,13 @@ impl<'a> Parser<'a> {
         // Parse remaining fields
         while {
             self.skip_newlines();
-            matches!(self.peek().kind, TokenKind::Comma)
+            matches!(self.peek_kind(), Some(TokenKind::Comma))
         } {
             self.advance(); // consume ','
             self.skip_newlines();
 
             // Allow trailing comma
-            if matches!(self.peek().kind, TokenKind::RightBrace) {
+            if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
                 break;
             }
 
@@ -560,7 +569,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Handle empty field list
-        if matches!(self.peek().kind, TokenKind::RightBrace) {
+        if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
             return Ok(fields);
         }
 
@@ -570,13 +579,13 @@ impl<'a> Parser<'a> {
         // Parse remaining fields
         while {
             self.skip_newlines();
-            matches!(self.peek().kind, TokenKind::Comma)
+            matches!(self.peek_kind(), Some(TokenKind::Comma))
         } {
             self.advance(); // consume ','
             self.skip_newlines();
 
             // Allow trailing comma
-            if matches!(self.peek().kind, TokenKind::RightBrace) {
+            if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
                 break;
             }
 
@@ -605,7 +614,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Handle empty parameter list
-        if matches!(self.peek().kind, TokenKind::RightParen) {
+        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
             return Ok(parameters);
         }
 
@@ -615,7 +624,7 @@ impl<'a> Parser<'a> {
         // Parse remaining parameters
         while {
             self.skip_newlines();
-            matches!(self.peek().kind, TokenKind::Comma)
+            matches!(self.peek_kind(), Some(TokenKind::Comma))
         } {
             self.advance(); // consume ','
             self.skip_newlines();
@@ -642,84 +651,86 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        match self.peek().kind {
-            TokenKind::U8 => {
+        match self.peek_kind() {
+            None => Err(ParseError::UnexpectedEof),
+            Some(TokenKind::U8) => {
                 self.advance();
                 Ok(Type::U8)
             }
-            TokenKind::I8 => {
+            Some(TokenKind::I8) => {
                 self.advance();
                 Ok(Type::I8)
             }
-            TokenKind::U16 => {
+            Some(TokenKind::U16) => {
                 self.advance();
                 Ok(Type::U16)
             }
-            TokenKind::I16 => {
+            Some(TokenKind::I16) => {
                 self.advance();
                 Ok(Type::I16)
             }
-            TokenKind::U32 => {
+            Some(TokenKind::U32) => {
                 self.advance();
                 Ok(Type::U32)
             }
-            TokenKind::I32 => {
+            Some(TokenKind::I32) => {
                 self.advance();
                 Ok(Type::I32)
             }
-            TokenKind::U64 => {
+            Some(TokenKind::U64) => {
                 self.advance();
                 Ok(Type::U64)
             }
-            TokenKind::I64 => {
+            Some(TokenKind::I64) => {
                 self.advance();
                 Ok(Type::I64)
             }
-            TokenKind::Usize => {
+            Some(TokenKind::Usize) => {
                 self.advance();
                 Ok(Type::Usize)
             }
-            TokenKind::Isize => {
+            Some(TokenKind::Isize) => {
                 self.advance();
                 Ok(Type::Isize)
             }
-            TokenKind::F32 => {
+            Some(TokenKind::F32) => {
                 self.advance();
                 Ok(Type::F32)
             }
-            TokenKind::F64 => {
+            Some(TokenKind::F64) => {
                 self.advance();
                 Ok(Type::F64)
             }
-            TokenKind::Bool => {
+            Some(TokenKind::Bool) => {
                 self.advance();
                 Ok(Type::Bool)
             }
-            TokenKind::Identifier => {
+            Some(TokenKind::Identifier) => {
                 // This could be a struct type reference
                 let token = self.advance();
                 Ok(Type::Struct(Self::token_span(token)))
             }
-            TokenKind::Star => {
+            Some(TokenKind::Star) => {
                 // Parse pointer type: *const T or *mut T
                 self.advance(); // consume '*'
 
-                let mutability = match self.peek().kind {
-                    TokenKind::Const => {
+                let mutability = match self.peek_kind() {
+                    Some(TokenKind::Const) => {
                         self.advance(); // consume 'const'
                         PointerMutability::Const
                     }
-                    TokenKind::Mut => {
+                    Some(TokenKind::Mut) => {
                         self.advance(); // consume 'mut'
                         PointerMutability::Mutable
                     }
-                    _ => {
+                    Some(_) => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
-                            found: self.peek().kind,
-                            position: self.peek().position,
+                            found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                            position: self.peek().map(|t| t.position).unwrap_or(0),
                         });
                     }
+                    None => return Err(ParseError::UnexpectedEof),
                 };
 
                 let pointee = Box::new(self.parse_type()?);
@@ -728,10 +739,10 @@ impl<'a> Parser<'a> {
                     pointee,
                 })
             }
-            _ => Err(ParseError::UnexpectedToken {
+            Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
-                found: self.peek().kind,
-                position: self.peek().position,
+                found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                position: self.peek().map(|t| t.position).unwrap_or(0),
             }),
         }
     }
@@ -742,7 +753,10 @@ impl<'a> Parser<'a> {
         // Skip leading newlines
         self.skip_newlines();
 
-        while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RightBrace) {
+        while let Some(kind) = self.peek_kind() {
+            if kind == TokenKind::RightBrace {
+                break;
+            }
             statements.push(self.parse_statement()?);
 
             // After each statement, require a terminator or end of block
@@ -756,8 +770,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
-        match self.peek().kind {
-            TokenKind::Let => self.parse_let_statement(),
+        match self.peek_kind() {
+            Some(TokenKind::Let) => self.parse_let_statement(),
             _ => {
                 // Expression statement (no semicolon required)
                 let expr = self.parse_expression(Precedence::NONE)?;
@@ -775,7 +789,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Optional type annotation
-        let type_annotation = if matches!(self.peek().kind, TokenKind::Colon) {
+        let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance(); // consume ':'
             self.skip_newlines();
             Some(self.parse_type()?)
@@ -797,17 +811,14 @@ impl<'a> Parser<'a> {
     }
 
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token<'a>, ParseError> {
-        if self.is_at_end() {
-            return Err(ParseError::UnexpectedEof);
-        }
-        if self.peek().kind == expected {
-            Ok(self.advance())
-        } else {
-            Err(ParseError::UnexpectedToken {
+        match self.tokens.get(self.current) {
+            Some(tok) if tok.kind == expected => Ok(self.advance()),
+            Some(tok) => Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
-                found: self.peek().kind,
-                position: self.peek().position,
-            })
+                found: tok.kind,
+                position: tok.position,
+            }),
+            None => Err(ParseError::UnexpectedEof),
         }
     }
 
@@ -822,8 +833,13 @@ impl<'a> Parser<'a> {
         self.current >= self.tokens.len()
     }
 
-    fn peek(&self) -> &Token<'a> {
-        &self.tokens[self.current]
+    fn peek(&self) -> Option<&Token<'a>> {
+        self.tokens.get(self.current)
+    }
+
+    #[inline]
+    fn peek_kind(&self) -> Option<TokenKind> {
+        self.tokens.get(self.current).map(|t| t.kind)
     }
 
     fn previous(&self) -> &Token<'a> {
@@ -840,31 +856,31 @@ impl<'a> Parser<'a> {
 
     /// Skip newline tokens (used when newlines are not significant)
     fn skip_newlines(&mut self) {
-        while !self.is_at_end() && matches!(self.peek().kind, TokenKind::Newline) {
+        while matches!(self.peek_kind(), Some(TokenKind::Newline)) {
             self.advance();
         }
     }
 
     /// Consume a statement terminator (semicolon, newline, or end of block)
     fn consume_statement_terminator(&mut self) -> Result<(), ParseError> {
-        match self.peek().kind {
-            TokenKind::Semicolon => {
+        match self.peek_kind() {
+            Some(TokenKind::Semicolon) => {
                 self.advance();
                 Ok(())
             }
-            TokenKind::Newline => {
+            Some(TokenKind::Newline) => {
                 self.advance();
                 Ok(())
             }
-            TokenKind::RightBrace => {
+            Some(TokenKind::RightBrace) => {
                 // End of block terminates statement
                 Ok(())
             }
-            _ if self.is_at_end() => Ok(()),
+            None => Ok(()),
             _ => Err(ParseError::UnexpectedToken {
                 expected: "';', newline, or '}' after statement".to_string(),
-                found: self.peek().kind,
-                position: self.peek().position,
+                found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                position: self.peek().map(|t| t.position).unwrap_or(0),
             }),
         }
     }
@@ -881,7 +897,7 @@ impl<'a> Parser<'a> {
         let mut attrs = PendingAttrs::default();
         loop {
             self.skip_newlines();
-            if !matches!(self.peek().kind, TokenKind::At) {
+            if !matches!(self.peek_kind(), Some(TokenKind::At)) {
                 break;
             }
             self.advance(); // consume '@'
