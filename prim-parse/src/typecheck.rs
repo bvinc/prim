@@ -1,5 +1,5 @@
 use crate::{Expr, Function, Program, Stmt, Type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct TypeChecker {
@@ -9,14 +9,35 @@ pub struct TypeChecker {
     functions: HashMap<String, Option<Type>>,
     /// Source text for span lookups
     source: String,
+    #[allow(clippy::type_complexity)]
+    traits: HashMap<String, HashMap<String, (Vec<Type>, Option<Type>)>>,
+    seen_impls: HashSet<(String, String)>,
 }
 
 #[derive(Debug)]
 pub enum TypeCheckError {
     UndefinedVariable(String),
     UndefinedFunction(String),
-    TypeMismatch { expected: Type, found: Type },
+    TypeMismatch {
+        expected: Type,
+        found: Type,
+    },
     InvalidDereference(Type),
+    UnknownTrait(String),
+    DuplicateImpl {
+        trait_name: String,
+        struct_name: String,
+    },
+    MissingImplMethod {
+        trait_name: String,
+        struct_name: String,
+        method: String,
+    },
+    MethodSignatureMismatch {
+        trait_name: String,
+        struct_name: String,
+        method: String,
+    },
 }
 
 impl TypeChecker {
@@ -25,6 +46,8 @@ impl TypeChecker {
             variables: HashMap::new(),
             functions: HashMap::new(),
             source: source.to_string(),
+            traits: HashMap::new(),
+            seen_impls: HashSet::new(),
         };
 
         // Add built-in functions
@@ -34,6 +57,68 @@ impl TypeChecker {
     }
 
     pub fn check_program(&mut self, mut program: Program) -> Result<Program, TypeCheckError> {
+        // Index trait method signatures
+        for tr in &program.traits {
+            let tname = tr.name.text(&self.source).to_string();
+            let mut ms = HashMap::new();
+            for m in &tr.methods {
+                let mname = m.name.text(&self.source).to_string();
+                let params = m
+                    .parameters
+                    .iter()
+                    .map(|p| p.type_annotation.clone())
+                    .collect::<Vec<_>>();
+                ms.insert(mname, (params, m.return_type.clone()));
+            }
+            self.traits.insert(tname, ms);
+        }
+
+        // Validate impls
+        for im in &program.impls {
+            let tname = im.trait_name.text(&self.source).to_string();
+            let sname = im.struct_name.text(&self.source).to_string();
+            if !self.traits.contains_key(&tname) {
+                return Err(TypeCheckError::UnknownTrait(tname));
+            }
+            let key = (tname.clone(), sname.clone());
+            if !self.seen_impls.insert(key) {
+                return Err(TypeCheckError::DuplicateImpl {
+                    trait_name: tname,
+                    struct_name: sname,
+                });
+            }
+            let trait_methods = &self.traits[&tname];
+            let mut impl_methods: HashMap<String, (Vec<Type>, Option<Type>)> = HashMap::new();
+            for m in &im.methods {
+                let mname = m.name.text(&self.source).to_string();
+                let params = m
+                    .parameters
+                    .iter()
+                    .map(|p| p.type_annotation.clone())
+                    .collect::<Vec<_>>();
+                impl_methods.insert(mname, (params, m.return_type.clone()));
+            }
+            for (mname, (tparams, tret)) in trait_methods.iter() {
+                match impl_methods.get(mname) {
+                    None => {
+                        return Err(TypeCheckError::MissingImplMethod {
+                            trait_name: tname.clone(),
+                            struct_name: sname.clone(),
+                            method: mname.clone(),
+                        });
+                    }
+                    Some((iparams, iret)) => {
+                        if iparams != tparams || iret != tret {
+                            return Err(TypeCheckError::MethodSignatureMismatch {
+                                trait_name: tname.clone(),
+                                struct_name: sname.clone(),
+                                method: mname.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
         // First pass: collect function signatures
         for func in &program.functions {
             let func_name = func.name.text(&self.source);
@@ -358,6 +443,85 @@ mod tests {
         let result = type_check(program, source);
 
         assert!(matches!(result, Err(TypeCheckError::InvalidDereference(_))));
+    }
+
+    #[test]
+    fn test_trait_impl_happy() {
+        let source = r#"
+            struct S {}
+            trait T { fn f(a: i32) -> i32; }
+            impl T for S { fn f(a: i32) -> i32 { a } }
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let res = type_check(program, source);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_trait_impl_missing_method() {
+        let source = r#"
+            struct S {}
+            trait T { fn f(a: i32) -> i32; }
+            impl T for S {}
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let res = type_check(program, source);
+        match res {
+            Err(TypeCheckError::MissingImplMethod {
+                trait_name,
+                struct_name,
+                method,
+            }) => {
+                assert_eq!(trait_name, "T");
+                assert_eq!(struct_name, "S");
+                assert_eq!(method, "f");
+            }
+            other => panic!("Expected MissingImplMethod, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_trait_impl_signature_mismatch() {
+        let source = r#"
+            struct S {}
+            trait T { fn f(a: i32) -> i32; }
+            impl T for S { fn f(a: i64) -> i32 { 0 } }
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let res = type_check(program, source);
+        assert!(matches!(
+            res,
+            Err(TypeCheckError::MethodSignatureMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_duplicate_impl() {
+        let source = r#"
+            struct S {}
+            trait T {}
+            impl T for S {}
+            impl T for S {}
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let res = type_check(program, source);
+        assert!(matches!(res, Err(TypeCheckError::DuplicateImpl { .. })));
+    }
+
+    #[test]
+    fn test_unknown_trait_impl() {
+        let source = r#"
+            struct S {}
+            impl U for S {}
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let res = type_check(program, source);
+        assert!(matches!(res, Err(TypeCheckError::UnknownTrait(_))));
     }
 
     #[test]
