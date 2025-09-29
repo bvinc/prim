@@ -72,6 +72,11 @@ mod test_programs {
         "test_programs/struct_basic.prim",
         "test_programs/struct_basic.expected"
     );
+    test_program!(
+        print_str,
+        "test_programs/print_str.prim",
+        "test_programs/print_str.expected"
+    );
 }
 
 fn run_test_program(prim_file: &str, expected_file: &str) {
