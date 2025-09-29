@@ -415,8 +415,41 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
         self.skip_newlines();
+
+        // Parse zero or more method signatures: fn name(params) [-> type] ;
+        let mut methods = Vec::new();
+        while matches!(self.peek().kind, TokenKind::Fn) {
+            self.advance();
+            self.skip_newlines();
+            let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
+            let mname = Self::token_span(name_tok);
+            self.skip_newlines();
+            self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
+            let parameters = self.parse_parameter_list()?;
+            self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
+            self.skip_newlines();
+            let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            self.skip_newlines();
+            self.consume(
+                TokenKind::Semicolon,
+                "Expected ';' after trait method signature",
+            )?;
+            methods.push(crate::TraitMethod {
+                name: mname,
+                parameters,
+                return_type,
+            });
+            self.skip_newlines();
+        }
+
         self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
-        Ok(crate::TraitDefinition { name })
+        Ok(crate::TraitDefinition { name, methods })
     }
 
     fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
@@ -432,10 +465,44 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
         self.skip_newlines();
+
+        // Parse zero or more method bodies: fn name(params) [-> type] { statements }
+        let mut methods = Vec::new();
+        while matches!(self.peek().kind, TokenKind::Fn) {
+            self.advance();
+            self.skip_newlines();
+            let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
+            let mname = Self::token_span(name_tok);
+            self.skip_newlines();
+            self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
+            let parameters = self.parse_parameter_list()?;
+            self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
+            self.skip_newlines();
+            let return_type = if matches!(self.peek().kind, TokenKind::Arrow) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            self.skip_newlines();
+            self.consume(TokenKind::LeftBrace, "Expected '{' to start method body")?;
+            let body = self.parse_statement_list()?;
+            self.consume(TokenKind::RightBrace, "Expected '}' to end method body")?;
+            methods.push(crate::ImplMethod {
+                name: mname,
+                parameters,
+                return_type,
+                body,
+            });
+            self.skip_newlines();
+        }
+
         self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
         Ok(crate::ImplDefinition {
             trait_name,
             struct_name,
+            methods,
         })
     }
 

@@ -170,12 +170,29 @@ pub fn parse(input: &str) -> Result<Program, ParseError> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDefinition {
     pub name: Span,
+    pub methods: Vec<TraitMethod>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDefinition {
     pub trait_name: Span,
     pub struct_name: Span,
+    pub methods: Vec<ImplMethod>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitMethod {
+    pub name: Span,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplMethod {
+    pub name: Span,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Option<Type>,
+    pub body: Vec<Stmt>,
 }
 
 #[cfg(test)]
@@ -496,6 +513,32 @@ mod tests {
                 .iter()
                 .any(|im| im.trait_name.text(source).trim() == "Marker"
                     && im.struct_name.text(source).trim() == "Point")
+        );
+    }
+
+    #[test]
+    fn test_parse_trait_with_method_and_impl_body() {
+        let source = r#"
+            struct Point { x: i32, y: i32 }
+            trait Greeter { fn hello(a: i32) -> i32; }
+            impl Greeter for Point { fn hello(a: i32) -> i32 { a } }
+            fn main() {}
+        "#;
+        let program = parse(source).unwrap();
+        let tr = program
+            .traits
+            .iter()
+            .find(|t| t.name.text(source).trim() == "Greeter")
+            .expect("trait Greeter present");
+        assert_eq!(tr.methods.len(), 1);
+        assert_eq!(tr.methods[0].name.text(source), "hello");
+        assert!(
+            program
+                .impls
+                .iter()
+                .any(|im| im.trait_name.text(source).trim() == "Greeter"
+                    && im.struct_name.text(source).trim() == "Point"
+                    && !im.methods.is_empty())
         );
     }
 
