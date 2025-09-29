@@ -19,13 +19,13 @@ impl Precedence {
 }
 
 pub struct Parser<'a> {
-    tokens: Vec<Token<'a>>,
+    tokens: Vec<Token>,
     current: usize,
     source: &'a str,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token<'a>>, source: &'a str) -> Self {
+    pub fn new(tokens: Vec<Token>, source: &'a str) -> Self {
         // Filter out comment tokens so the parser never sees them
         let tokens = tokens
             .into_iter()
@@ -87,7 +87,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::TokenError(
                             prim_tok::TokenError::UnexpectedCharacter {
                                 ch: '@',
-                                position: tok.position,
+                                position: tok.start,
                             },
                         ));
                     }
@@ -244,14 +244,14 @@ impl<'a> Parser<'a> {
                 Err(ParseError::TokenError(
                     prim_tok::TokenError::UnexpectedCharacter {
                         ch: '@',
-                        position: self.peek().map(|t| t.position).unwrap_or(0),
+                        position: self.peek().map(|t| t.start).unwrap_or(0),
                     },
                 ))
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.position).unwrap_or(0),
+                position: self.peek().map(|t| t.start).unwrap_or(0),
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -288,7 +288,7 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken {
                     expected: "function name".to_string(),
                     found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                    position: self.peek().map(|t| t.position).unwrap_or(0),
+                    position: self.peek().map(|t| t.start).unwrap_or(0),
                 })
             }
         } else if matches!(self.peek_kind(), Some(TokenKind::Dot)) {
@@ -727,7 +727,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
                             found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                            position: self.peek().map(|t| t.position).unwrap_or(0),
+                            position: self.peek().map(|t| t.start).unwrap_or(0),
                         });
                     }
                     None => return Err(ParseError::UnexpectedEof),
@@ -742,7 +742,7 @@ impl<'a> Parser<'a> {
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.position).unwrap_or(0),
+                position: self.peek().map(|t| t.start).unwrap_or(0),
             }),
         }
     }
@@ -810,19 +810,19 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token<'a>, ParseError> {
+    fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token, ParseError> {
         match self.tokens.get(self.current) {
             Some(tok) if tok.kind == expected => Ok(self.advance()),
             Some(tok) => Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
                 found: tok.kind,
-                position: tok.position,
+                position: tok.start,
             }),
             None => Err(ParseError::UnexpectedEof),
         }
     }
 
-    fn advance(&mut self) -> &Token<'a> {
+    fn advance(&mut self) -> &Token {
         if !self.is_at_end() {
             self.current += 1;
         }
@@ -833,7 +833,7 @@ impl<'a> Parser<'a> {
         self.current >= self.tokens.len()
     }
 
-    fn peek(&self) -> Option<&Token<'a>> {
+    fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.current)
     }
 
@@ -842,12 +842,12 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.current).map(|t| t.kind)
     }
 
-    fn previous(&self) -> &Token<'a> {
+    fn previous(&self) -> &Token {
         &self.tokens[self.current - 1]
     }
 
     fn token_span(token: &Token) -> Span {
-        Span::new(token.position, token.position + token.text.len())
+        Span::new(token.start, token.end)
     }
 
     fn span_text(&self, span: &Span) -> &str {
@@ -880,7 +880,7 @@ impl<'a> Parser<'a> {
             _ => Err(ParseError::UnexpectedToken {
                 expected: "';', newline, or '}' after statement".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.position).unwrap_or(0),
+                position: self.peek().map(|t| t.start).unwrap_or(0),
             }),
         }
     }
