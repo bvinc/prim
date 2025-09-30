@@ -1,5 +1,6 @@
 mod error;
 pub use error::TokenError;
+use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenKind {
@@ -71,8 +72,7 @@ pub enum TokenKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
-    pub start: usize,
-    pub end: usize,
+    pub range: Range<usize>,
 }
 
 pub struct Tokenizer<'a> {
@@ -120,14 +120,12 @@ impl<'a> Tokenizer<'a> {
                     self.advance();
                     Ok(Some(Token {
                         kind: TokenKind::Arrow,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     }))
                 } else {
                     Ok(Some(Token {
                         kind: TokenKind::Minus,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     }))
                 }
             }
@@ -139,8 +137,7 @@ impl<'a> Tokenizer<'a> {
                     Some('*') => self.read_block_comment(start_pos).map(Some),
                     _ => Ok(Some(Token {
                         kind: TokenKind::Slash,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     })),
                 }
             }
@@ -150,14 +147,12 @@ impl<'a> Tokenizer<'a> {
                     self.advance();
                     Ok(Some(Token {
                         kind: TokenKind::DoubleEquals,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     }))
                 } else {
                     Ok(Some(Token {
                         kind: TokenKind::Equals,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     }))
                 }
             }
@@ -172,8 +167,7 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
                 Ok(Some(Token {
                     kind: TokenKind::Ampersand,
-                    start: start_pos,
-                    end: self.position,
+                    range: start_pos..self.position,
                 }))
             }
             Some('@') => {
@@ -290,8 +284,7 @@ impl<'a> Tokenizer<'a> {
             } else {
                 TokenKind::IntLiteral
             },
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 
@@ -336,8 +329,7 @@ impl<'a> Tokenizer<'a> {
 
         Ok(Token {
             kind,
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 
@@ -371,8 +363,7 @@ impl<'a> Tokenizer<'a> {
 
         Ok(Token {
             kind: TokenKind::Comment,
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 
@@ -403,8 +394,7 @@ impl<'a> Tokenizer<'a> {
 
         Ok(Token {
             kind: TokenKind::Comment,
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 
@@ -417,8 +407,7 @@ impl<'a> Tokenizer<'a> {
                     self.advance(); // consume closing quote
                     return Ok(Token {
                         kind: TokenKind::StringLiteral,
-                        start: start_pos,
-                        end: self.position,
+                        range: start_pos..self.position,
                     });
                 }
                 Some('\\') => {
@@ -470,8 +459,7 @@ impl<'a> Tokenizer<'a> {
         self.advance(); // consume closing quote
         Ok(Token {
             kind: TokenKind::CharLiteral,
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 
@@ -483,8 +471,7 @@ impl<'a> Tokenizer<'a> {
         self.advance();
         Ok(Token {
             kind,
-            start: start_pos,
-            end: self.position,
+            range: start_pos..self.position,
         })
     }
 }
@@ -500,13 +487,13 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Let);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "let");
+        assert_eq!(&src[tokens[0].range.clone()], "let");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "x");
+        assert_eq!(&src[tokens[1].range.clone()], "x");
         assert_eq!(tokens[2].kind, TokenKind::Equals);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "=");
+        assert_eq!(&src[tokens[2].range.clone()], "=");
         assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "42");
+        assert_eq!(&src[tokens[3].range.clone()], "42");
     }
 
     #[test]
@@ -516,17 +503,17 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Let);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "let");
+        assert_eq!(&src[tokens[0].range.clone()], "let");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "x");
+        assert_eq!(&src[tokens[1].range.clone()], "x");
         assert_eq!(tokens[2].kind, TokenKind::Colon);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], ":");
+        assert_eq!(&src[tokens[2].range.clone()], ":");
         assert_eq!(tokens[3].kind, TokenKind::U32);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "u32");
+        assert_eq!(&src[tokens[3].range.clone()], "u32");
         assert_eq!(tokens[4].kind, TokenKind::Equals);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "=");
+        assert_eq!(&src[tokens[4].range.clone()], "=");
         assert_eq!(tokens[5].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[5].start..tokens[5].end], "0u32");
+        assert_eq!(&src[tokens[5].range.clone()], "0u32");
     }
 
     #[test]
@@ -537,23 +524,23 @@ mod tests {
 
         // Whitespace is now automatically filtered out during tokenization
         assert_eq!(tokens[0].kind, TokenKind::Fn);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "fn");
+        assert_eq!(&src[tokens[0].range.clone()], "fn");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "double");
+        assert_eq!(&src[tokens[1].range.clone()], "double");
         assert_eq!(tokens[2].kind, TokenKind::LeftParen);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "(");
+        assert_eq!(&src[tokens[2].range.clone()], "(");
         assert_eq!(tokens[3].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "x");
+        assert_eq!(&src[tokens[3].range.clone()], "x");
         assert_eq!(tokens[4].kind, TokenKind::Colon);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], ":");
+        assert_eq!(&src[tokens[4].range.clone()], ":");
         assert_eq!(tokens[5].kind, TokenKind::U32);
-        assert_eq!(&src[tokens[5].start..tokens[5].end], "u32");
+        assert_eq!(&src[tokens[5].range.clone()], "u32");
         assert_eq!(tokens[6].kind, TokenKind::RightParen);
-        assert_eq!(&src[tokens[6].start..tokens[6].end], ")");
+        assert_eq!(&src[tokens[6].range.clone()], ")");
         assert_eq!(tokens[7].kind, TokenKind::Arrow);
-        assert_eq!(&src[tokens[7].start..tokens[7].end], "->");
+        assert_eq!(&src[tokens[7].range.clone()], "->");
         assert_eq!(tokens[8].kind, TokenKind::U32);
-        assert_eq!(&src[tokens[8].start..tokens[8].end], "u32");
+        assert_eq!(&src[tokens[8].range.clone()], "u32");
     }
 
     #[test]
@@ -567,7 +554,7 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[4].kind, TokenKind::Comment);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "// this is a comment");
+        assert_eq!(&src[tokens[4].range.clone()], "// this is a comment");
     }
 
     #[test]
@@ -581,7 +568,7 @@ mod tests {
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[4].kind, TokenKind::Comment);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "// comment");
+        assert_eq!(&src[tokens[4].range.clone()], "// comment");
         assert_eq!(tokens[5].kind, TokenKind::Newline);
         assert_eq!(tokens[6].kind, TokenKind::Let);
         assert_eq!(tokens[7].kind, TokenKind::Identifier);
@@ -599,9 +586,9 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::Comment);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "/* block comment */");
+        assert_eq!(&src[tokens[3].range.clone()], "/* block comment */");
         assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "42");
+        assert_eq!(&src[tokens[4].range.clone()], "42");
     }
 
     #[test]
@@ -614,12 +601,9 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::Comment);
-        assert_eq!(
-            &src[tokens[3].start..tokens[3].end],
-            "/* multi\nline\ncomment */"
-        );
+        assert_eq!(&src[tokens[3].range.clone()], "/* multi\nline\ncomment */");
         assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "42");
+        assert_eq!(&src[tokens[4].range.clone()], "42");
     }
 
     #[test]
@@ -630,9 +614,9 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Comment);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "/* outer /* inner */");
+        assert_eq!(&src[tokens[0].range.clone()], "/* outer /* inner */");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "remaining");
+        assert_eq!(&src[tokens[1].range.clone()], "remaining");
     }
 
     #[test]
@@ -668,17 +652,17 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Star);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "*");
+        assert_eq!(&src[tokens[0].range.clone()], "*");
         assert_eq!(tokens[1].kind, TokenKind::Const);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "const");
+        assert_eq!(&src[tokens[1].range.clone()], "const");
         assert_eq!(tokens[2].kind, TokenKind::U8);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "u8");
+        assert_eq!(&src[tokens[2].range.clone()], "u8");
         assert_eq!(tokens[3].kind, TokenKind::Star);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "*");
+        assert_eq!(&src[tokens[3].range.clone()], "*");
         assert_eq!(tokens[4].kind, TokenKind::Mut);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "mut");
+        assert_eq!(&src[tokens[4].range.clone()], "mut");
         assert_eq!(tokens[5].kind, TokenKind::I32);
-        assert_eq!(&src[tokens[5].start..tokens[5].end], "i32");
+        assert_eq!(&src[tokens[5].range.clone()], "i32");
     }
 
     #[test]
@@ -691,7 +675,7 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], r#""hello world""#);
+        assert_eq!(&src[tokens[3].range.clone()], r#""hello world""#);
     }
 
     #[test]
@@ -701,7 +685,7 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], r#""hello\nworld\t!""#);
+        assert_eq!(&src[tokens[3].range.clone()], r#""hello\nworld\t!""#);
     }
 
     #[test]
@@ -711,7 +695,7 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], r#""say \"hello\"""#);
+        assert_eq!(&src[tokens[3].range.clone()], r#""say \"hello\"""#);
     }
 
     #[test]
@@ -721,7 +705,7 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[3].kind, TokenKind::StringLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], r#""""#);
+        assert_eq!(&src[tokens[3].range.clone()], r#""""#);
     }
 
     #[test]
@@ -747,7 +731,7 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::CharLiteral);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "'a'");
+        assert_eq!(&src[tokens[3].range.clone()], "'a'");
     }
 
     #[test]
@@ -766,7 +750,7 @@ mod tests {
 
             assert_eq!(tokens[3].kind, TokenKind::CharLiteral);
             assert_eq!(
-                &input_string[tokens[3].start..tokens[3].end],
+                &input_string[tokens[3].range.clone()],
                 expected,
                 "Failed for input: {}",
                 input
@@ -794,7 +778,7 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::If);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "if");
+        assert_eq!(&src[tokens[0].range.clone()], "if");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::DoubleEquals);
         assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
@@ -818,7 +802,7 @@ mod tests {
         assert_eq!(tokens[6].kind, TokenKind::Identifier);
         assert_eq!(tokens[7].kind, TokenKind::Equals);
         assert_eq!(tokens[8].kind, TokenKind::StringLiteral);
-        assert_eq!(&src[tokens[8].start..tokens[8].end], r#""hello""#);
+        assert_eq!(&src[tokens[8].range.clone()], r#""hello""#);
         assert_eq!(tokens[9].kind, TokenKind::Semicolon);
 
         // Third assignment: let c = 'a'
@@ -826,7 +810,7 @@ mod tests {
         assert_eq!(tokens[11].kind, TokenKind::Identifier);
         assert_eq!(tokens[12].kind, TokenKind::Equals);
         assert_eq!(tokens[13].kind, TokenKind::CharLiteral);
-        assert_eq!(&src[tokens[13].start..tokens[13].end], "'a'");
+        assert_eq!(&src[tokens[13].range.clone()], "'a'");
     }
 
     #[test]
@@ -839,7 +823,7 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Equals);
         assert_eq!(tokens[3].kind, TokenKind::True);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "true");
+        assert_eq!(&src[tokens[3].range.clone()], "true");
     }
 
     #[test]
@@ -849,7 +833,7 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[3].kind, TokenKind::False);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "false");
+        assert_eq!(&src[tokens[3].range.clone()], "false");
     }
 
     #[test]
@@ -862,7 +846,7 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[2].kind, TokenKind::Colon);
         assert_eq!(tokens[3].kind, TokenKind::Bool);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "bool");
+        assert_eq!(&src[tokens[3].range.clone()], "bool");
         assert_eq!(tokens[4].kind, TokenKind::Equals);
         assert_eq!(tokens[5].kind, TokenKind::True);
     }
@@ -930,11 +914,11 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "True");
+        assert_eq!(&src[tokens[0].range.clone()], "True");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "False");
+        assert_eq!(&src[tokens[1].range.clone()], "False");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "BOOL");
+        assert_eq!(&src[tokens[2].range.clone()], "BOOL");
     }
 
     #[test]
@@ -945,11 +929,11 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "truthy");
+        assert_eq!(&src[tokens[0].range.clone()], "truthy");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "falsey");
+        assert_eq!(&src[tokens[1].range.clone()], "falsey");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "boolean");
+        assert_eq!(&src[tokens[2].range.clone()], "boolean");
     }
 
     #[test]
@@ -973,11 +957,11 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "point");
+        assert_eq!(&src[tokens[0].range.clone()], "point");
         assert_eq!(tokens[1].kind, TokenKind::Dot);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], ".");
+        assert_eq!(&src[tokens[1].range.clone()], ".");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "x");
+        assert_eq!(&src[tokens[2].range.clone()], "x");
     }
 
     #[test]
@@ -993,7 +977,7 @@ mod tests {
         let mut tokenizer = Tokenizer::new(src2);
         let tokens = tokenizer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
-        assert_eq!(&src2[tokens[0].start..tokens[0].end], "3.14");
+        assert_eq!(&src2[tokens[0].range.clone()], "3.14");
     }
 
     #[test]
@@ -1002,7 +986,7 @@ mod tests {
         let mut tokenizer = Tokenizer::new(src);
         let tokens = tokenizer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], ".5");
+        assert_eq!(&src[tokens[0].range.clone()], ".5");
     }
 
     #[test]
@@ -1012,17 +996,17 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Struct);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "struct");
+        assert_eq!(&src[tokens[0].range.clone()], "struct");
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], "Point");
+        assert_eq!(&src[tokens[1].range.clone()], "Point");
         assert_eq!(tokens[2].kind, TokenKind::LeftBrace);
         assert_eq!(tokens[3].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[3].start..tokens[3].end], "x");
+        assert_eq!(&src[tokens[3].range.clone()], "x");
         assert_eq!(tokens[4].kind, TokenKind::Colon);
         assert_eq!(tokens[5].kind, TokenKind::I32);
         assert_eq!(tokens[6].kind, TokenKind::Comma);
         assert_eq!(tokens[7].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[7].start..tokens[7].end], "y");
+        assert_eq!(&src[tokens[7].range.clone()], "y");
         assert_eq!(tokens[8].kind, TokenKind::Colon);
         assert_eq!(tokens[9].kind, TokenKind::I32);
         assert_eq!(tokens[10].kind, TokenKind::RightBrace);
@@ -1035,11 +1019,11 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "p");
+        assert_eq!(&src[tokens[0].range.clone()], "p");
         assert_eq!(tokens[1].kind, TokenKind::Dot);
-        assert_eq!(&src[tokens[1].start..tokens[1].end], ".");
+        assert_eq!(&src[tokens[1].range.clone()], ".");
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "x");
+        assert_eq!(&src[tokens[2].range.clone()], "x");
     }
 
     #[test]
@@ -1049,19 +1033,19 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         assert_eq!(tokens[0].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[0].start..tokens[0].end], "Point");
+        assert_eq!(&src[tokens[0].range.clone()], "Point");
         assert_eq!(tokens[1].kind, TokenKind::LeftBrace);
         assert_eq!(tokens[2].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[2].start..tokens[2].end], "x");
+        assert_eq!(&src[tokens[2].range.clone()], "x");
         assert_eq!(tokens[3].kind, TokenKind::Colon);
         assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[4].start..tokens[4].end], "10");
+        assert_eq!(&src[tokens[4].range.clone()], "10");
         assert_eq!(tokens[5].kind, TokenKind::Comma);
         assert_eq!(tokens[6].kind, TokenKind::Identifier);
-        assert_eq!(&src[tokens[6].start..tokens[6].end], "y");
+        assert_eq!(&src[tokens[6].range.clone()], "y");
         assert_eq!(tokens[7].kind, TokenKind::Colon);
         assert_eq!(tokens[8].kind, TokenKind::IntLiteral);
-        assert_eq!(&src[tokens[8].start..tokens[8].end], "20");
+        assert_eq!(&src[tokens[8].range.clone()], "20");
         assert_eq!(tokens[9].kind, TokenKind::RightBrace);
     }
 }

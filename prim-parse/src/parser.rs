@@ -87,7 +87,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::TokenError(
                             prim_tok::TokenError::UnexpectedCharacter {
                                 ch: '@',
-                                position: tok.start,
+                                position: tok.range.start,
                             },
                         ));
                     }
@@ -244,14 +244,14 @@ impl<'a> Parser<'a> {
                 Err(ParseError::TokenError(
                     prim_tok::TokenError::UnexpectedCharacter {
                         ch: '@',
-                        position: self.peek().map(|t| t.start).unwrap_or(0),
+                        position: self.position(),
                     },
                 ))
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.start).unwrap_or(0),
+                position: self.position(),
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -288,7 +288,7 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken {
                     expected: "function name".to_string(),
                     found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                    position: self.peek().map(|t| t.start).unwrap_or(0),
+                    position: self.position(),
                 })
             }
         } else if matches!(self.peek_kind(), Some(TokenKind::Dot)) {
@@ -727,7 +727,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
                             found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                            position: self.peek().map(|t| t.start).unwrap_or(0),
+                            position: self.position(),
                         });
                     }
                     None => return Err(ParseError::UnexpectedEof),
@@ -742,7 +742,7 @@ impl<'a> Parser<'a> {
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.start).unwrap_or(0),
+                position: self.position(),
             }),
         }
     }
@@ -816,7 +816,7 @@ impl<'a> Parser<'a> {
             Some(tok) => Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
                 found: tok.kind,
-                position: tok.start,
+                position: tok.range.start,
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -846,8 +846,15 @@ impl<'a> Parser<'a> {
         &self.tokens[self.current - 1]
     }
 
+    #[inline]
+    fn position(&self) -> usize {
+        self.peek()
+            .map(|t| t.range.start)
+            .unwrap_or_else(|| self.source.len())
+    }
+
     fn token_span(token: &Token) -> Span {
-        Span::new(token.start, token.end)
+        Span::from_range(token.range.clone())
     }
 
     fn span_text(&self, span: &Span) -> &str {
@@ -880,7 +887,7 @@ impl<'a> Parser<'a> {
             _ => Err(ParseError::UnexpectedToken {
                 expected: "';', newline, or '}' after statement".to_string(),
                 found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.peek().map(|t| t.start).unwrap_or(0),
+                position: self.position(),
             }),
         }
     }
