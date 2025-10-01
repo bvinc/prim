@@ -39,6 +39,8 @@ pub enum Type {
     F32,
     F64,
     Bool,
+    // String slice with runtime representation (ptr, len)
+    StrSlice,
     Array(Box<Type>),
     Struct(Span), // struct name reference
     Pointer {
@@ -60,6 +62,10 @@ pub enum Expr {
     },
     BoolLiteral {
         value: bool,
+        ty: Type,
+    },
+    StringLiteral {
+        span: Span,
         ty: Type,
     },
     Identifier {
@@ -117,6 +123,7 @@ pub struct StructField {
 pub struct StructDefinition {
     pub name: Span,
     pub fields: Vec<StructFieldDefinition>,
+    pub repr_c: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +148,7 @@ pub struct Function {
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
+    pub runtime_binding: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1556,7 +1564,7 @@ impl NamePath {
         self.segments.len() == 1
     }
 
-    pub fn to_string<'a>(&self, source: &'a str) -> String {
+    pub fn to_string(&self, source: &str) -> String {
         self.segments
             .iter()
             .map(|s| s.text(source).to_string())
@@ -1564,7 +1572,7 @@ impl NamePath {
             .join(".")
     }
 
-    pub fn mangle<'a>(&self, source: &'a str, sep: &str) -> String {
+    pub fn mangle(&self, source: &str, sep: &str) -> String {
         self.segments
             .iter()
             .map(|s| s.text(source).to_string())

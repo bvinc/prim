@@ -7,6 +7,3 @@ edition = "2024"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-
-[features]
-rt-entry = []

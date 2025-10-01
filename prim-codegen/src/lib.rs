@@ -9,6 +9,19 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 mod error;
 pub use error::CodegenError;
 
+// Small value representation supporting scalars and aggregates (e.g., StrSlice ptr+len)
+#[derive(Clone)]
+enum Val {
+    One(Value),
+    Many(Vec<Value>),
+}
+
+#[derive(Clone)]
+enum Var {
+    One(Variable),
+    Many(Vec<Variable>),
+}
+
 pub struct CraneliftCodeGenerator {
     module: ObjectModule,
     ctx: codegen::Context,
@@ -64,14 +77,16 @@ impl CraneliftCodeGenerator {
         // Compute struct layouts
         self.compute_struct_layouts(&program.structs, source)?;
 
-        // First pass: declare all functions
+        // First pass: declare all functions (including imports via @runtime)
         let mut function_ids = HashMap::new();
         for function in &program.functions {
             let sig = self.create_function_signature(function, source);
             let linkage = self.determine_linkage(function, source);
 
             // Export Prim's `main` under the symbol name `prim_main`.
-            let sym_name = if function.name.text(source) == "main" {
+            let sym_name = if let Some(binding) = &function.runtime_binding {
+                binding.clone()
+            } else if function.name.text(source) == "main" {
                 "prim_main".to_string()
             } else {
                 function.name.text(source).to_string()
@@ -84,6 +99,10 @@ impl CraneliftCodeGenerator {
 
         // Second pass: generate function bodies
         for function in &program.functions {
+            // Do not generate bodies for runtime-bound imports
+            if function.runtime_binding.is_some() {
+                continue;
+            }
             self.generate_function(function, println_func_id, &function_ids, source)?;
         }
 
@@ -114,14 +133,27 @@ impl CraneliftCodeGenerator {
     fn create_function_signature(&mut self, function: &Function, source: &str) -> Signature {
         let mut sig = self.module.make_signature();
 
-        // Add parameters to signature
+        // Add parameters to signature (flatten aggregates)
         for param in &function.parameters {
-            let param_type = match param.type_annotation {
-                prim_parse::Type::Bool => types::I8,
-                prim_parse::Type::Pointer { .. } => types::I64, // All pointers are 64-bit
-                _ => types::I64,
-            };
-            sig.params.push(AbiParam::new(param_type));
+            match &param.type_annotation {
+                prim_parse::Type::Bool => sig.params.push(AbiParam::new(types::I8)),
+                prim_parse::Type::Pointer { .. } => sig.params.push(AbiParam::new(types::I64)),
+                prim_parse::Type::StrSlice => {
+                    sig.params.push(AbiParam::new(types::I64));
+                    sig.params.push(AbiParam::new(types::I64));
+                }
+                prim_parse::Type::Struct(name_span) => {
+                    let name = name_span.text(source).to_string();
+                    if let Some(layout) = self.struct_layouts.get(&name) {
+                        for fld in &layout.fields {
+                            sig.params.push(AbiParam::new(fld.cranelift_type));
+                        }
+                    } else {
+                        sig.params.push(AbiParam::new(types::I64));
+                    }
+                }
+                _ => sig.params.push(AbiParam::new(types::I64)),
+            }
         }
 
         // Add return type to signature
@@ -135,7 +167,9 @@ impl CraneliftCodeGenerator {
     }
 
     fn determine_linkage(&self, function: &Function, source: &str) -> Linkage {
-        if function.name.text(source) == "main" {
+        if function.runtime_binding.is_some() {
+            Linkage::Import
+        } else if function.name.text(source) == "main" {
             Linkage::Export
         } else {
             Linkage::Local
@@ -158,8 +192,13 @@ impl CraneliftCodeGenerator {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
-        let (variables, _) =
-            Self::setup_function_parameters(&mut builder, entry_block, function, source);
+        let (variables, _) = Self::setup_function_parameters(
+            &self.struct_layouts,
+            &mut builder,
+            entry_block,
+            function,
+            source,
+        );
 
         let mut variables = variables;
         let mut last_expr_value = None;
@@ -193,31 +232,74 @@ impl CraneliftCodeGenerator {
                 }
             }
         }
-        Self::generate_function_return(&mut builder, function, last_expr_value, source);
+        Self::generate_function_return(&mut builder, function, last_expr_value, source)?;
 
         builder.finalize();
         Ok(())
     }
 
     fn setup_function_parameters(
+        struct_layouts: &HashMap<String, StructLayout>,
         builder: &mut FunctionBuilder,
         entry_block: Block,
         function: &Function,
         source: &str,
-    ) -> (HashMap<String, Variable>, usize) {
-        let mut variables = HashMap::new();
+    ) -> (HashMap<String, Var>, usize) {
+        let mut variables: HashMap<String, Var> = HashMap::new();
 
         // Add parameters to variables
         let block_params: Vec<Value> = builder.block_params(entry_block).to_vec();
-        for (i, param) in function.parameters.iter().enumerate() {
-            let param_type = match param.type_annotation {
-                prim_parse::Type::Bool => types::I8,
-                prim_parse::Type::Pointer { .. } => types::I64, // All pointers are 64-bit
-                _ => types::I64,
-            };
-            let var = builder.declare_var(param_type);
-            builder.def_var(var, block_params[i]);
-            variables.insert(param.name.text(source).to_string(), var);
+        let mut i = 0usize;
+        for param in &function.parameters {
+            let name = param.name.text(source).to_string();
+            match &param.type_annotation {
+                prim_parse::Type::Bool => {
+                    let var = builder.declare_var(types::I8);
+                    builder.def_var(var, block_params[i]);
+                    variables.insert(name, Var::One(var));
+                    i += 1;
+                }
+                prim_parse::Type::StrSlice => {
+                    let a = builder.declare_var(types::I64);
+                    let b = builder.declare_var(types::I64);
+                    builder.def_var(a, block_params[i]);
+                    builder.def_var(b, block_params[i + 1]);
+                    variables.insert(name, Var::Many(vec![a, b]));
+                    i += 2;
+                }
+                prim_parse::Type::Pointer { .. } => {
+                    let var = builder.declare_var(types::I64);
+                    builder.def_var(var, block_params[i]);
+                    variables.insert(name, Var::One(var));
+                    i += 1;
+                }
+                prim_parse::Type::Struct(name_span) => {
+                    let mut vs = Vec::new();
+                    let struct_name = name_span.text(source).to_string();
+                    if let Some(layout) = struct_layouts.get(&struct_name) {
+                        for fld in &layout.fields {
+                            let v = builder.declare_var(fld.cranelift_type);
+                            builder.def_var(v, block_params[i]);
+                            i += 1;
+                            vs.push(v);
+                        }
+                    }
+                    if vs.is_empty() {
+                        let v = builder.declare_var(types::I64);
+                        builder.def_var(v, block_params[i]);
+                        i += 1;
+                        variables.insert(name, Var::One(v));
+                    } else {
+                        variables.insert(name, Var::Many(vs));
+                    }
+                }
+                _ => {
+                    let var = builder.declare_var(types::I64);
+                    builder.def_var(var, block_params[i]);
+                    variables.insert(name, Var::One(var));
+                    i += 1;
+                }
+            }
         }
 
         (variables, 0)
@@ -226,9 +308,9 @@ impl CraneliftCodeGenerator {
     fn generate_function_return(
         builder: &mut FunctionBuilder,
         function: &Function,
-        last_expr_value: Option<Value>,
+        last_expr_value: Option<Val>,
         source: &str,
-    ) {
+    ) -> Result<(), CodegenError> {
         if function.name.text(source) == "main" {
             // Main function returns 0
             let zero = builder.ins().iconst(types::I32, 0);
@@ -236,7 +318,17 @@ impl CraneliftCodeGenerator {
         } else if function.return_type.is_some() {
             // Function has return type, return the last expression or default value
             if let Some(return_val) = last_expr_value {
-                builder.ins().return_(&[return_val]);
+                match return_val {
+                    Val::One(v) => {
+                        builder.ins().return_(&[v]);
+                    }
+                    Val::Many(_) => {
+                        return Err(CodegenError::InvalidExpression {
+                            message: "Returning aggregates not yet supported".to_string(),
+                            context: "function return".to_string(),
+                        });
+                    }
+                }
             } else {
                 // Return a default value if no expression
                 let zero = builder.ins().iconst(types::I64, 0);
@@ -246,11 +338,12 @@ impl CraneliftCodeGenerator {
             // Other functions return void
             builder.ins().return_(&[]);
         }
+        Ok(())
     }
 
     fn generate_statement_impl_static(
         struct_layouts: &HashMap<String, StructLayout>,
-        variables: &mut HashMap<String, Variable>,
+        variables: &mut HashMap<String, Var>,
         module: &mut ObjectModule,
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
@@ -264,14 +357,7 @@ impl CraneliftCodeGenerator {
                 type_annotation: _,
                 value,
             } => {
-                // Determine the type based on the value expression
-                let var_type = match value {
-                    Expr::BoolLiteral { .. } => types::I8,
-                    _ => types::I64,
-                };
-                let var = builder.declare_var(var_type);
-
-                // Generate expression
+                // Generate expression first
                 let val = Self::generate_expression_impl_static(
                     struct_layouts,
                     variables,
@@ -282,10 +368,26 @@ impl CraneliftCodeGenerator {
                     function_ids,
                     source,
                 )?;
-
-                // Store in variable
-                builder.def_var(var, val);
-                variables.insert(name.text(source).to_string(), var);
+                match val {
+                    Val::One(v) => {
+                        let vt = match value {
+                            Expr::BoolLiteral { .. } => types::I8,
+                            _ => types::I64,
+                        };
+                        let var = builder.declare_var(vt);
+                        builder.def_var(var, v);
+                        variables.insert(name.text(source).to_string(), Var::One(var));
+                    }
+                    Val::Many(vals) => {
+                        let mut agg = Vec::with_capacity(vals.len());
+                        for v in vals {
+                            let var = builder.declare_var(types::I64);
+                            builder.def_var(var, v);
+                            agg.push(var);
+                        }
+                        variables.insert(name.text(source).to_string(), Var::Many(agg));
+                    }
+                }
 
                 Ok(())
             }
@@ -307,14 +409,14 @@ impl CraneliftCodeGenerator {
 
     fn generate_expression_impl_static(
         struct_layouts: &HashMap<String, StructLayout>,
-        variables: &HashMap<String, Variable>,
+        variables: &HashMap<String, Var>,
         module: &mut ObjectModule,
         builder: &mut FunctionBuilder,
         expr: &Expr,
         println_func_id: cranelift_module::FuncId,
         function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
-    ) -> Result<Value, CodegenError> {
+    ) -> Result<Val, CodegenError> {
         match expr {
             Expr::ArrayLiteral { elements, ty } => {
                 // Only implement for byte arrays for now: [u8]
@@ -369,17 +471,26 @@ impl CraneliftCodeGenerator {
                         function_ids,
                         source,
                     )?;
+                    let v = match val {
+                        Val::One(v) => v,
+                        Val::Many(_) => {
+                            return Err(CodegenError::InvalidExpression {
+                                message: "array elements must be scalars".to_string(),
+                                context: "array literal".to_string(),
+                            });
+                        }
+                    };
                     // Convert to element CL type if needed
-                    let store_val = if builder.func.dfg.value_type(val) == elem_cl_ty {
-                        val
+                    let store_val = if builder.func.dfg.value_type(v) == elem_cl_ty {
+                        v
                     } else {
                         // Narrow or extend to match
                         match elem_cl_ty {
-                            types::I8 => builder.ins().ireduce(types::I8, val),
-                            types::I16 => builder.ins().ireduce(types::I16, val),
-                            types::I32 => builder.ins().ireduce(types::I32, val),
-                            types::I64 => val,
-                            _ => val,
+                            types::I8 => builder.ins().ireduce(types::I8, v),
+                            types::I16 => builder.ins().ireduce(types::I16, v),
+                            types::I32 => builder.ins().ireduce(types::I32, v),
+                            types::I64 => v,
+                            _ => v,
                         }
                     };
                     let offset = (i as i64) * (elem_size as i64);
@@ -413,7 +524,7 @@ impl CraneliftCodeGenerator {
                 let cap_addr = builder.ins().iadd(header_ptr, cap_off);
                 builder.ins().store(MemFlags::new(), cap_val, cap_addr, 0);
 
-                Ok(header_ptr)
+                Ok(Val::One(header_ptr))
             }
             Expr::IntLiteral { span: value, .. } => {
                 // Parse the literal (handle type suffixes like 42u32)
@@ -428,7 +539,7 @@ impl CraneliftCodeGenerator {
                         message: format!("Invalid integer literal: {}", value_text),
                         context: "number parsing".to_string(),
                     })?;
-                Ok(builder.ins().iconst(types::I64, num))
+                Ok(Val::One(builder.ins().iconst(types::I64, num)))
             }
             Expr::FloatLiteral { span: value, .. } => Err(CodegenError::InvalidExpression {
                 message: format!(
@@ -439,18 +550,50 @@ impl CraneliftCodeGenerator {
             }),
             Expr::BoolLiteral { value, .. } => {
                 let bool_val = if *value { 1 } else { 0 };
-                Ok(builder.ins().iconst(types::I8, bool_val))
+                Ok(Val::One(builder.ins().iconst(types::I8, bool_val)))
             }
             Expr::Identifier { span: name, .. } => {
                 let name_text = name.text(source);
-                if let Some(&var) = variables.get(name_text) {
-                    Ok(builder.use_var(var))
+                if let Some(var) = variables.get(name_text) {
+                    Ok(match var {
+                        Var::One(v) => Val::One(builder.use_var(*v)),
+                        Var::Many(vs) => {
+                            let mut outs = Vec::with_capacity(vs.len());
+                            for vv in vs {
+                                outs.push(builder.use_var(*vv));
+                            }
+                            Val::Many(outs)
+                        }
+                    })
                 } else {
                     Err(CodegenError::UndefinedVariable {
                         name: name_text.to_string(),
                         context: "expression evaluation".to_string(),
                     })
                 }
+            }
+            Expr::StringLiteral { span, .. } => {
+                // Parse and materialize string bytes as a private data object.
+                let raw = span.text(source);
+                let bytes = Self::unescape_string_literal(raw).map_err(|e| {
+                    CodegenError::InvalidExpression {
+                        message: format!("Invalid string literal: {}", e),
+                        context: "string literal".to_string(),
+                    }
+                })?;
+
+                // Unique symbol by source span to avoid collisions; content dedup can come later.
+                let sym_name = format!("strlit_{}_{}", span.start(), span.end());
+                let data_id = module.declare_data(&sym_name, Linkage::Local, true, false)?;
+                let mut desc = cranelift_module::DataDescription::new();
+                desc.define(bytes.clone().into_boxed_slice());
+                module.define_data(data_id, &desc)?;
+
+                // Generate address of the data and the length constant.
+                let gv = module.declare_data_in_func(data_id, builder.func);
+                let ptr = builder.ins().global_value(types::I64, gv);
+                let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+                Ok(Val::Many(vec![ptr, len]))
             }
             Expr::Binary {
                 left, op, right, ..
@@ -476,17 +619,26 @@ impl CraneliftCodeGenerator {
                     source,
                 )?;
 
+                let (l, r) = match (left_val, right_val) {
+                    (Val::One(l), Val::One(r)) => (l, r),
+                    _ => {
+                        return Err(CodegenError::InvalidExpression {
+                            message: "binary ops only support scalar operands".to_string(),
+                            context: "binary op".to_string(),
+                        });
+                    }
+                };
                 let result = match op {
-                    BinaryOp::Add => builder.ins().iadd(left_val, right_val),
-                    BinaryOp::Subtract => builder.ins().isub(left_val, right_val),
-                    BinaryOp::Multiply => builder.ins().imul(left_val, right_val),
-                    BinaryOp::Divide => builder.ins().sdiv(left_val, right_val),
+                    BinaryOp::Add => builder.ins().iadd(l, r),
+                    BinaryOp::Subtract => builder.ins().isub(l, r),
+                    BinaryOp::Multiply => builder.ins().imul(l, r),
+                    BinaryOp::Divide => builder.ins().sdiv(l, r),
                     BinaryOp::Equals => {
-                        let cmp = builder.ins().icmp(IntCC::Equal, left_val, right_val);
+                        let cmp = builder.ins().icmp(IntCC::Equal, l, r);
                         builder.ins().uextend(types::I64, cmp)
                     }
                 };
-                Ok(result)
+                Ok(Val::One(result))
             }
             Expr::StructLiteral { name, fields, .. } => {
                 let struct_name = name.text(source);
@@ -565,13 +717,21 @@ impl CraneliftCodeGenerator {
                         builder
                             .ins()
                             .stack_addr(types::I64, slot, field_layout.offset as i32);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), field_value, field_addr, 0);
+                    match field_value {
+                        Val::One(v) => {
+                            builder.ins().store(MemFlags::new(), v, field_addr, 0);
+                        }
+                        Val::Many(_) => {
+                            return Err(CodegenError::InvalidExpression {
+                                message: "cannot assign multi-value to scalar field".to_string(),
+                                context: "struct literal field assignment".to_string(),
+                            });
+                        }
+                    }
                 }
 
                 // Return pointer to the struct
-                Ok(builder.ins().stack_addr(types::I64, slot, 0))
+                Ok(Val::One(builder.ins().stack_addr(types::I64, slot, 0)))
             }
             Expr::FieldAccess { object, field, .. } => {
                 // Generate the object expression (should be a struct pointer)
@@ -585,6 +745,15 @@ impl CraneliftCodeGenerator {
                     function_ids,
                     source,
                 )?;
+                let object_val = match object_val {
+                    Val::One(v) => v,
+                    _ => {
+                        return Err(CodegenError::InvalidExpression {
+                            message: "field access requires object pointer value".to_string(),
+                            context: "field access".to_string(),
+                        });
+                    }
+                };
 
                 // Get the struct type from the object expression
                 // For now, we'll need to infer the struct type from context
@@ -617,7 +786,7 @@ impl CraneliftCodeGenerator {
                         .ins()
                         .load(field_layout.cranelift_type, MemFlags::new(), field_addr, 0);
 
-                Ok(field_value)
+                Ok(Val::One(field_value))
             }
             Expr::FunctionCall { path, args, .. } => {
                 let is_println =
@@ -633,31 +802,51 @@ impl CraneliftCodeGenerator {
                         function_ids,
                         source,
                     )?;
-                    let value_type = builder.func.dfg.value_type(arg_val);
+
+                    let scalar = match arg_val {
+                        Val::One(v) => v,
+                        Val::Many(_) => {
+                            return Err(CodegenError::InvalidExpression {
+                                message: "println currently supports scalar values only"
+                                    .to_string(),
+                                context: "println".to_string(),
+                            });
+                        }
+                    };
+
+                    // Check if this is a boolean type based on value type
+                    let value_type = builder.func.dfg.value_type(scalar);
                     if value_type == types::I8 {
                         let println_bool_func_id =
                             Self::get_or_create_println_bool_function(module)?;
                         let local_func =
                             module.declare_func_in_func(println_bool_func_id, builder.func);
-                        let _ = builder.ins().call(local_func, &[arg_val]);
+                        let call = builder.ins().call(local_func, &[scalar]);
+                        let _results = builder.inst_results(call);
                     } else {
                         let i64_val = if value_type == types::I64 {
-                            arg_val
-                        } else if value_type == types::I32 || value_type == types::I16 {
-                            builder.ins().sextend(types::I64, arg_val)
+                            scalar
                         } else {
-                            builder.ins().uextend(types::I64, arg_val)
+                            // Convert to i64 (sign-extend for signed types, zero-extend for unsigned)
+                            if value_type == types::I32 || value_type == types::I16 {
+                                builder.ins().sextend(types::I64, scalar)
+                            } else {
+                                // Default: zero-extend other types
+                                builder.ins().uextend(types::I64, scalar)
+                            }
                         };
                         let local_func = module.declare_func_in_func(println_func_id, builder.func);
                         let _ = builder.ins().call(local_func, &[i64_val]);
                     }
-                    Ok(builder.ins().iconst(types::I64, 0))
+                    // Return void value (0)
+                    Ok(Val::One(builder.ins().iconst(types::I64, 0)))
                 } else {
                     let sym = path.mangle(source, "__");
                     if let Some(&func_id) = function_ids.get(&sym) {
-                        let mut arg_vals = Vec::new();
+                        // User-defined function call (supports flattened aggregates)
+                        let mut flat_args: Vec<Value> = Vec::new();
                         for arg in args {
-                            let arg_val = Self::generate_expression_impl_static(
+                            match Self::generate_expression_impl_static(
                                 struct_layouts,
                                 variables,
                                 module,
@@ -666,23 +855,25 @@ impl CraneliftCodeGenerator {
                                 println_func_id,
                                 function_ids,
                                 source,
-                            )?;
-                            arg_vals.push(arg_val);
+                            )? {
+                                Val::One(v) => flat_args.push(v),
+                                Val::Many(vs) => flat_args.extend(vs),
+                            }
                         }
                         let local_func = module.declare_func_in_func(func_id, builder.func);
-                        let call = builder.ins().call(local_func, &arg_vals);
+                        let call = builder.ins().call(local_func, &flat_args);
                         let results = builder.inst_results(call);
                         if results.is_empty() {
-                            Ok(builder.ins().iconst(types::I64, 0))
+                            Ok(Val::One(builder.ins().iconst(types::I64, 0)))
                         } else {
-                            Ok(results[0])
+                            Ok(Val::One(results[0]))
                         }
                     } else if sym.starts_with("std__") {
-                        // Declare external import on the fly
+                        // External import: coerce all args to i64 and call
                         let mut sig = module.make_signature();
-                        let mut arg_vals = Vec::new();
+                        let mut coerced: Vec<Value> = Vec::new();
                         for arg in args {
-                            let v = Self::generate_expression_impl_static(
+                            match Self::generate_expression_impl_static(
                                 struct_layouts,
                                 variables,
                                 module,
@@ -691,29 +882,52 @@ impl CraneliftCodeGenerator {
                                 println_func_id,
                                 function_ids,
                                 source,
-                            )?;
-                            let vt = builder.func.dfg.value_type(v);
-                            let v_i64 = if vt == types::I64 {
-                                v
-                            } else if vt == types::I32 || vt == types::I16 || vt == types::I8 {
-                                builder.ins().uextend(types::I64, v)
-                            } else {
-                                v
-                            };
-                            sig.params.push(AbiParam::new(types::I64));
-                            arg_vals.push(v_i64);
+                            )? {
+                                Val::One(v) => {
+                                    let vt = builder.func.dfg.value_type(v);
+                                    let v_i64 = if vt == types::I64 {
+                                        v
+                                    } else if vt == types::I32
+                                        || vt == types::I16
+                                        || vt == types::I8
+                                    {
+                                        builder.ins().uextend(types::I64, v)
+                                    } else {
+                                        v
+                                    };
+                                    sig.params.push(AbiParam::new(types::I64));
+                                    coerced.push(v_i64);
+                                }
+                                Val::Many(vs) => {
+                                    for v in vs {
+                                        let vt = builder.func.dfg.value_type(v);
+                                        let v_i64 = if vt == types::I64 {
+                                            v
+                                        } else if vt == types::I32
+                                            || vt == types::I16
+                                            || vt == types::I8
+                                        {
+                                            builder.ins().uextend(types::I64, v)
+                                        } else {
+                                            v
+                                        };
+                                        sig.params.push(AbiParam::new(types::I64));
+                                        coerced.push(v_i64);
+                                    }
+                                }
+                            }
                         }
                         sig.returns.push(AbiParam::new(types::I64));
                         let ext_id = module
                             .declare_function(&sym, Linkage::Import, &sig)
                             .map_err(|e| CodegenError::CraneliftModuleError(Box::new(e)))?;
                         let local = module.declare_func_in_func(ext_id, builder.func);
-                        let call = builder.ins().call(local, &arg_vals);
+                        let call = builder.ins().call(local, &coerced);
                         let results = builder.inst_results(call);
                         if results.is_empty() {
-                            Ok(builder.ins().iconst(types::I64, 0))
+                            Ok(Val::One(builder.ins().iconst(types::I64, 0)))
                         } else {
-                            Ok(results[0])
+                            Ok(Val::One(results[0]))
                         }
                     } else {
                         Err(CodegenError::UnsupportedFunctionCall {
@@ -735,6 +949,15 @@ impl CraneliftCodeGenerator {
                     function_ids,
                     source,
                 )?;
+                let ptr_val = match ptr_val {
+                    Val::One(v) => v,
+                    _ => {
+                        return Err(CodegenError::InvalidExpression {
+                            message: "dereference expects pointer value".to_string(),
+                            context: "dereference".to_string(),
+                        });
+                    }
+                };
 
                 // LIMITATION: Always loads 8 bytes (i64) regardless of pointee type
                 //
@@ -745,9 +968,38 @@ impl CraneliftCodeGenerator {
                 // This can cause memory safety issues and incorrect values.
                 // To fix: implement type tracking for expressions or require explicit type annotations.
                 let loaded_val = builder.ins().load(types::I64, MemFlags::new(), ptr_val, 0);
-                Ok(loaded_val)
+                Ok(Val::One(loaded_val))
             }
         }
+    }
+
+    fn unescape_string_literal(src: &str) -> Result<Vec<u8>, String> {
+        // Expect a quoted string: "..."
+        let s = src
+            .strip_prefix('"')
+            .and_then(|t| t.strip_suffix('"'))
+            .ok_or_else(|| "missing quotes".to_string())?;
+        let mut out = Vec::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars
+                    .next()
+                    .ok_or_else(|| "trailing backslash".to_string())?
+                {
+                    'n' => out.push(b'\n'),
+                    't' => out.push(b'\t'),
+                    'r' => out.push(b'\r'),
+                    '0' => out.push(b'\0'),
+                    '"' => out.push(b'"'),
+                    '\\' => out.push(b'\\'),
+                    other => return Err(format!("unsupported escape: \\{}", other)),
+                }
+            } else {
+                out.extend(c.to_string().as_bytes());
+            }
+        }
+        Ok(out)
     }
 
     fn create_println_function(&mut self) -> Result<cranelift_module::FuncId, CodegenError> {
@@ -1003,6 +1255,7 @@ impl CraneliftCodeGenerator {
             Type::F64 => (8, types::F64),
             Type::Bool => (1, types::I8),
             Type::Array(_) => (8, types::I64), // Arrays are represented as pointers for now
+            Type::StrSlice => (16, types::I64), // Slice is (ptr,len); placeholder CL type for sizing only
             Type::Struct(_) => (8, types::I64), // Struct references are pointers, 8 bytes on 64-bit systems
             Type::Pointer { .. } => (8, types::I64), // All pointers are 8 bytes on 64-bit systems
             Type::Undetermined => panic!(

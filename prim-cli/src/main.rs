@@ -217,19 +217,36 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
 fn compile_source(path: &str) -> Result<(prim_parse::Program, String), MainError> {
     let p = Path::new(path);
     if p.is_dir() {
-        compile_module_dir(p)
-    } else {
-        // Single file path
-        let source_code = fs::read_to_string(path).map_err(MainError::IoError)?;
-        let program =
-            parse(&source_code).map_err(|err| MainError::CompilationError(err.to_string()))?;
-        Ok((program, source_code))
+        // Directory module: use module-aware compilation (supports mod/import and std.* via prim-std)
+        return compile_module_dir(p);
     }
+
+    // Single file path: read user source
+    let user_source = fs::read_to_string(path).map_err(MainError::IoError)?;
+
+    // Prepend stdlib if present at workspace_root/stdlib/std.prim for single-file programs
+    let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(cli_manifest_dir)
+        .parent()
+        .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
+    let std_path = workspace_root.join("stdlib").join("std.prim");
+
+    let full_source = if std_path.exists() {
+        let std_src = fs::read_to_string(&std_path).map_err(MainError::IoError)?;
+        format!("{}\n{}", std_src, user_source)
+    } else {
+        user_source
+    };
+
+    // Parse the combined source code
+    let program =
+        parse(&full_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
+    Ok((program, full_source))
 }
 
 fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainError> {
     // Determine module root: if this is a cmd/ directory, the root is its parent
-    let module_root = if dir.file_name().map_or(false, |n| n == "cmd") {
+    let module_root = if dir.file_name().is_some_and(|n| n == "cmd") {
         dir.parent().unwrap_or(dir)
     } else {
         dir
@@ -240,7 +257,7 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
         .map_err(MainError::IoError)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "prim"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "prim"))
         .collect();
     files.sort();
 
@@ -297,15 +314,12 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
         )));
     }
 
-    // Resolve imports recursively within module_root siblings, detect cycles, and concatenate
+    // Resolve imports recursively within module_root siblings, detect cycles, and concatenate.
     // Also prepare a stdlib search root at <workspace>/prim-std/src for `import std.*`.
     let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = Path::new(cli_manifest_dir).parent().ok_or_else(|| {
-        MainError::IoError(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "invalid workspace root",
-        ))
-    })?;
+    let workspace_root = Path::new(cli_manifest_dir)
+        .parent()
+        .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
     let std_root = workspace_root.join("prim-std").join("src");
     let mut visited = std::collections::HashSet::<String>::new();
     let mut stack = Vec::<String>::new();
@@ -430,7 +444,7 @@ fn resolve_module_recursive(
         .map_err(MainError::IoError)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "prim"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "prim"))
         .collect();
     files.sort();
     if files.is_empty() {
@@ -532,12 +546,9 @@ fn ensure_runtime_staticlib() -> Result<PathBuf, MainError> {
     // Determine workspace root and cargo profile used to build this binary
     // CARGO_MANIFEST_DIR points to prim-cli; workspace root is one level up
     let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = Path::new(cli_manifest_dir).parent().ok_or_else(|| {
-        MainError::IoError(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "invalid workspace root",
-        ))
-    })?;
+    let workspace_root = Path::new(cli_manifest_dir)
+        .parent()
+        .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
     // Prefer runtime env var when available; default to "debug"
     let profile_dir = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
@@ -553,22 +564,21 @@ fn ensure_runtime_staticlib() -> Result<PathBuf, MainError> {
         .join(&profile_dir)
         .join(staticlib_name);
 
-    if !staticlib_path.exists() {
-        // Build prim-rt in the appropriate profile
-        let mut args = vec!["build", "-p", "prim-rt", "--features", "rt-entry"]; // default dev (debug)
-        if profile_dir == "release" {
-            args.push("--release");
-        }
-        let status = Command::new("cargo")
-            .args(args)
-            .current_dir(workspace_root)
-            .status()
-            .map_err(|e| {
-                MainError::LinkingError(format!("failed to invoke cargo to build runtime: {}", e))
-            })?;
-        if !status.success() {
-            return Err(MainError::LinkingError("building prim-rt failed".into()));
-        }
+    // Always ensure prim-rt is built. If it's already up-to-date, Cargo will
+    // no-op quickly.
+    let mut args = vec!["build", "-p", "prim-rt"]; // default dev (debug)
+    if profile_dir == "release" {
+        args.push("--release");
+    }
+    let status = Command::new("cargo")
+        .args(args)
+        .current_dir(workspace_root)
+        .status()
+        .map_err(|e| {
+            MainError::LinkingError(format!("failed to invoke cargo to build runtime: {}", e))
+        })?;
+    if !status.success() {
+        return Err(MainError::LinkingError("building prim-rt failed".into()));
     }
 
     if !staticlib_path.exists() {

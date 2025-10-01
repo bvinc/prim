@@ -11,6 +11,10 @@ pub enum ParseError {
     TokenError(TokenError),
     MissingMainFunction,
     StatementsOutsideFunction,
+    InvalidAttributeUsage {
+        message: String,
+        position: usize,
+    },
 }
 
 impl From<TokenError> for ParseError {
@@ -45,6 +49,9 @@ impl std::fmt::Display for ParseError {
             ParseError::StatementsOutsideFunction => {
                 write!(f, "Parse error: statements must be inside a function")
             }
+            ParseError::InvalidAttributeUsage { message, position } => {
+                write!(f, "Parse error at position {}: {}", position, message)
+            }
         }
     }
 }
@@ -60,6 +67,7 @@ impl ParseError {
             ParseError::TokenError(token_err) => token_err.error_code(),
             ParseError::MissingMainFunction => "PAR003",
             ParseError::StatementsOutsideFunction => "PAR004",
+            ParseError::InvalidAttributeUsage { .. } => "PAR005",
         }
     }
 
@@ -77,6 +85,7 @@ impl ParseError {
             ParseError::TokenError(token_err) => token_err.position(),
             ParseError::MissingMainFunction => None,
             ParseError::StatementsOutsideFunction => None,
+            ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
         }
     }
 
@@ -87,6 +96,7 @@ impl ParseError {
             ParseError::TokenError(token_err) => token_err.context(),
             ParseError::MissingMainFunction => Some("program structure"),
             ParseError::StatementsOutsideFunction => Some("program structure"),
+            ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
         }
     }
 }

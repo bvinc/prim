@@ -63,6 +63,7 @@ pub enum TokenKind {
     Semicolon,    // ;
     Ampersand,    // &
     Dot,          // .
+    At,           // @
 
     // Special
     Comment,
@@ -115,7 +116,7 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Token<'a>, TokenError> {
         // Skip whitespace (but not newlines - they're significant)
-        while self.current_char().map_or(false, |c| c == ' ' || c == '\t') {
+        while self.current_char().is_some_and(|c| c == ' ' || c == '\t') {
             self.advance();
         }
 
@@ -188,9 +189,47 @@ impl<'a> Tokenizer<'a> {
                     position: start_pos,
                 })
             }
+            Some('@') => {
+                // Allow '@' only for top-level attributes like @runtime(...) or @repr(...)
+                // Heuristics: must appear at start of input or right after a newline, ignoring spaces/tabs,
+                // and must be followed by an identifier starting with a letter (e.g., runtime, repr).
+                let mut is_line_start = true;
+                for c in self.input[..start_pos].chars().rev() {
+                    if c == ' ' || c == '\t' {
+                        continue;
+                    }
+                    if c == '\n' || c == '\r' {
+                        break;
+                    }
+                    is_line_start = false;
+                    break;
+                }
+                // Peek identifier name after '@'
+                let mut ahead = self.chars.clone();
+                // current is '@'; skip it
+                ahead.next();
+                let mut ident = String::new();
+                loop {
+                    match ahead.clone().next() {
+                        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
+                            ident.push(ch);
+                            ahead.next();
+                        }
+                        _ => break,
+                    }
+                }
+                if is_line_start {
+                    self.make_simple_token(TokenKind::At, start_pos)
+                } else {
+                    Err(TokenError::UnexpectedCharacter {
+                        ch: '@',
+                        position: start_pos,
+                    })
+                }
+            }
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
-                if self.peek_ahead(1).map_or(true, |c| !c.is_ascii_digit()) {
+                if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
                     self.make_simple_token(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
@@ -218,7 +257,7 @@ impl<'a> Tokenizer<'a> {
         while self.current.is_some()
             && self
                 .current_char()
-                .map_or(false, |c| c.is_ascii_digit() || c == '.')
+                .is_some_and(|c| c.is_ascii_digit() || c == '.')
         {
             if self.current_char() == Some('.') {
                 if is_float {
@@ -230,15 +269,11 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle type suffixes (e.g., 42u32, 3.14f64)
-        if self.current.is_some()
-            && self
-                .current_char()
-                .map_or(false, |c| c.is_ascii_alphabetic())
-        {
+        if self.current.is_some() && self.current_char().is_some_and(|c| c.is_ascii_alphabetic()) {
             while self.current.is_some()
                 && self
                     .current_char()
-                    .map_or(false, |c| c.is_ascii_alphanumeric())
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
             {
                 self.advance();
             }
@@ -269,7 +304,7 @@ impl<'a> Tokenizer<'a> {
         while self.current.is_some()
             && self
                 .current_char()
-                .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             self.advance();
         }

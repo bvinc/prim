@@ -168,6 +168,12 @@ impl TypeChecker {
                 *ty = inferred_type.clone();
                 inferred_type
             }
+            Expr::StringLiteral { ty, .. } => {
+                // String literals have slice representation (ptr, len)
+                let inferred_type = Type::StrSlice;
+                *ty = inferred_type.clone();
+                inferred_type
+            }
 
             Expr::Identifier { span, ty } => {
                 let name = span.text(&self.source);
@@ -256,6 +262,7 @@ impl TypeChecker {
                         Expr::IntLiteral { ty, .. }
                         | Expr::FloatLiteral { ty, .. }
                         | Expr::BoolLiteral { ty, .. }
+                        | Expr::StringLiteral { ty, .. }
                         | Expr::Identifier { ty, .. }
                         | Expr::Binary { ty, .. }
                         | Expr::FunctionCall { ty, .. }
