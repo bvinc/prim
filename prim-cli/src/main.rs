@@ -298,12 +298,22 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
     }
 
     // Resolve imports recursively within module_root siblings, detect cycles, and concatenate
+    // Also prepare a stdlib search root at <workspace>/prim-std/src for `import std.*`.
+    let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(cli_manifest_dir).parent().ok_or_else(|| {
+        MainError::IoError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "invalid workspace root",
+        ))
+    })?;
+    let std_root = workspace_root.join("prim-std").join("src");
     let mut visited = std::collections::HashSet::<String>::new();
     let mut stack = Vec::<String>::new();
     let mut dep_sources: Vec<String> = Vec::new();
     for imp in import_names {
         resolve_module_recursive(
             module_root,
+            &std_root,
             &imp,
             &mut visited,
             &mut stack,
@@ -381,6 +391,7 @@ fn strip_module_and_imports(src: &str) -> Result<String, MainError> {
 
 fn resolve_module_recursive(
     module_root: &Path,
+    std_root: &Path,
     name: &str,
     visited: &mut std::collections::HashSet<String>,
     stack: &mut Vec<String>,
@@ -400,9 +411,19 @@ fn resolve_module_recursive(
     }
     stack.push(qual_name.clone());
 
-    // Compute module directory by joining segments
-    let mut mod_dir = module_root.to_path_buf();
-    for s in name.split('.') {
+    // Compute module directory by joining segments, with special-case for std.*
+    let mut parts = name.split('.');
+    let first = parts.next().unwrap_or("");
+    let mut mod_dir = if first == "std" {
+        std_root.to_path_buf()
+    } else {
+        module_root.to_path_buf()
+    };
+    // include the first segment as well (std/..., or non-std root/<first>)
+    if !first.is_empty() {
+        mod_dir = mod_dir.join(first);
+    }
+    for s in parts {
         mod_dir = mod_dir.join(s);
     }
     let mut files: Vec<PathBuf> = fs::read_dir(&mod_dir)
@@ -458,7 +479,7 @@ fn resolve_module_recursive(
         body_sources.push(prefix_functions_with_module(&stripped, &qual_name)?);
     }
     for imp in imports {
-        resolve_module_recursive(module_root, &imp, visited, stack, out_sources)?;
+        resolve_module_recursive(module_root, std_root, &imp, visited, stack, out_sources)?;
     }
     out_sources.push(body_sources.join("\n"));
     stack.pop();
