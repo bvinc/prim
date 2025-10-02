@@ -176,6 +176,59 @@ pub unsafe extern "C" fn prim_rt_read(fd: i32, buf: *mut u8, len: usize) -> isiz
     }
 }
 
+// --- std.mem intrinsics (symbols matched by codegen via qualified calls) ---
+
+/// Copy `n` bytes from `src` to `dst` without overlap handling.
+///
+/// # Safety
+/// - `dst` and `src` must be valid for reads/writes of `n` bytes.
+/// - The regions must not overlap; use `std__mem__move` for overlapping copies.
+/// - Pointers must be properly aligned for the copy width.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn std__mem__copy(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    unsafe { std::ptr::copy_nonoverlapping(src, dst, n) };
+    n
+}
+
+/// Move `n` bytes from `src` to `dst`, allowing overlap.
+///
+/// # Safety
+/// - `dst` and `src` must be valid for reads/writes of `n` bytes.
+/// - Pointers must be properly aligned for the copy width.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn std__mem__move(dst: *mut u8, src: *const u8, n: usize) -> usize {
+    unsafe { std::ptr::copy(src, dst, n) };
+    n
+}
+
+/// Set `n` bytes at `dst` to `val`.
+///
+/// # Safety
+/// - `dst` must be valid for writes of `n` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn std__mem__set(dst: *mut u8, val: u8, n: usize) -> usize {
+    unsafe { std::ptr::write_bytes(dst, val, n) };
+    n
+}
+
+/// Return the length of a null-terminated byte string starting at `ptr`.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a null-terminated sequence of bytes.
+/// - Behavior is undefined if no terminator is found within accessible memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn std__mem__len(ptr: *const u8) -> usize {
+    let mut len = 0usize;
+    unsafe {
+        let mut p = ptr;
+        while *p != 0 {
+            len += 1;
+            p = p.add(1);
+        }
+    }
+    len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

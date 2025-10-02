@@ -22,6 +22,7 @@ pub struct Parser<'a> {
     tokens: Vec<Token>,
     current: usize,
     source: &'a str,
+    module_name: Option<Span>,
 }
 
 impl<'a> Parser<'a> {
@@ -36,17 +37,54 @@ impl<'a> Parser<'a> {
             tokens,
             current: 0,
             source,
+            module_name: None,
         }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
+        self.parse_internal(true)
+    }
+
+    pub fn parse_without_main(&mut self) -> Result<Program, ParseError> {
+        self.parse_internal(false)
+    }
+
+    fn parse_internal(&mut self, require_main: bool) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
+        let mut imports: Vec<crate::NamePath> = Vec::new();
 
         // Skip leading newlines
         self.skip_newlines();
+
+        // Optional module header: mod <identifier>
+        if matches!(self.peek_kind(), Some(TokenKind::Mod)) {
+            self.advance(); // consume 'mod'
+            let name_token =
+                self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
+            self.module_name = Some(Self::token_span(name_token));
+            // terminate with newline/semicolon or end of block
+            let _ = self.consume_statement_terminator();
+            self.skip_newlines();
+        }
+
+        // Optional imports: import <identifier> ('.' <identifier>)*
+        while matches!(self.peek_kind(), Some(TokenKind::Import)) {
+            self.advance(); // consume 'import'
+            let first =
+                self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
+            let mut segs = vec![Self::token_span(first)];
+            while matches!(self.peek_kind(), Some(TokenKind::Dot)) {
+                self.advance();
+                let seg = self.consume(TokenKind::Identifier, "Expected identifier after '.'")?;
+                segs.push(Self::token_span(seg));
+            }
+            imports.push(crate::NamePath { segments: segs });
+            let _ = self.consume_statement_terminator();
+            self.skip_newlines();
+        }
 
         while !self.is_at_end() {
             // Collect any leading attributes
@@ -97,11 +135,13 @@ impl<'a> Parser<'a> {
         }
 
         // Validate that a main function exists
-        if !functions.iter().any(|f| self.span_text(&f.name) == "main") {
+        if require_main && !functions.iter().any(|f| self.span_text(&f.name) == "main") {
             return Err(ParseError::MissingMainFunction);
         }
 
         Ok(Program {
+            module_name: self.module_name.clone(),
+            imports,
             structs,
             functions,
             traits,
@@ -178,7 +218,7 @@ impl<'a> Parser<'a> {
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
                     Ok(Expr::FunctionCall {
-                        name,
+                        path: crate::NamePath::from_single(name),
                         args,
                         ty: Type::Undetermined,
                     })
@@ -206,7 +246,7 @@ impl<'a> Parser<'a> {
                 let args = self.parse_argument_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(Expr::FunctionCall {
-                    name: name_span,
+                    path: crate::NamePath::from_single(name_span),
                     args,
                     ty: Type::Undetermined,
                 })
@@ -216,6 +256,27 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expression(Precedence::NONE)?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(expr)
+            }
+            Some(TokenKind::LeftBracket) => {
+                // Array literal: [expr, expr, ...]
+                self.advance(); // consume '['
+                let mut elements = Vec::new();
+                // Allow empty literal []
+                if !matches!(self.peek_kind(), Some(TokenKind::RightBracket)) {
+                    elements.push(self.parse_expression(Precedence::NONE)?);
+                    while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance(); // consume ','
+                        elements.push(self.parse_expression(Precedence::NONE)?);
+                    }
+                }
+                self.consume(
+                    TokenKind::RightBracket,
+                    "Expected ']' to close array literal",
+                )?;
+                Ok(Expr::ArrayLiteral {
+                    elements,
+                    ty: Type::Undetermined,
+                })
             }
             Some(TokenKind::Minus) => {
                 self.advance(); // consume '-'
@@ -274,23 +335,36 @@ impl<'a> Parser<'a> {
             }
         }
         if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
-            // Function call: identifier(args)
-            if let Expr::Identifier { span: name, .. } = left {
-                self.advance(); // consume '('
-                let args = self.parse_argument_list()?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall {
-                    name,
-                    args,
-                    ty: Type::Undetermined,
-                })
-            } else {
-                Err(ParseError::UnexpectedToken {
-                    expected: "function name".to_string(),
-                    found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                    position: self.position(),
-                })
-            }
+            // Function call: identifier(args) or qualified: module.ident(args)
+            let path: Vec<Span> = match left {
+                Expr::Identifier { span: name, .. } => vec![name],
+                Expr::FieldAccess { object, field, .. } => {
+                    if let Expr::Identifier { span: module, .. } = *object {
+                        vec![module, field]
+                    } else {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "module name before '.'".to_string(),
+                            found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                            position: self.position(),
+                        });
+                    }
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "function name".to_string(),
+                        found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                        position: self.position(),
+                    });
+                }
+            };
+            self.advance(); // consume '('
+            let args = self.parse_argument_list()?;
+            self.consume(TokenKind::RightParen, "Expected ')'")?;
+            Ok(Expr::FunctionCall {
+                path: crate::NamePath { segments: path },
+                args,
+                ty: Type::Undetermined,
+            })
         } else if matches!(self.peek_kind(), Some(TokenKind::Dot)) {
             // Field access: expr.field
             self.advance(); // consume '.'
@@ -704,6 +778,16 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Bool) => {
                 self.advance();
                 Ok(Type::Bool)
+            }
+            Some(TokenKind::LeftBracket) => {
+                // Dynamic array type: [T]
+                self.advance(); // consume '['
+                let elem_ty = self.parse_type()?;
+                self.consume(
+                    TokenKind::RightBracket,
+                    "Expected ']' after array element type",
+                )?;
+                Ok(Type::Array(Box::new(elem_ty)))
             }
             Some(TokenKind::Identifier) => {
                 // This could be a struct type reference

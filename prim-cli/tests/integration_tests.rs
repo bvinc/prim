@@ -214,6 +214,20 @@ fn test_cli_run_command() {
 }
 
 #[test]
+fn test_byte_array_literal_codegen() {
+    use prim_parse::parse;
+    let source = "fn main() { let a: [u8] = [1, 2, 3] }";
+    let program = parse(source).unwrap();
+    let result = generate_object_code(&program, source);
+    assert!(
+        result.is_ok(),
+        "Array literal codegen should succeed: {:?}",
+        result
+    );
+    assert!(!result.unwrap().is_empty());
+}
+
+#[test]
 fn test_unified_error_handling() {
     // Test that error codes and categories work correctly
     let parse_result = parse("let x = @");

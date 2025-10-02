@@ -1,0 +1,6 @@
+mod a
+
+import b
+
+fn f() -> i64 { 1 }
+

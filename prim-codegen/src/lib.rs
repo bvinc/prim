@@ -418,6 +418,114 @@ impl CraneliftCodeGenerator {
         source: &str,
     ) -> Result<Val, CodegenError> {
         match expr {
+            Expr::ArrayLiteral { elements, ty } => {
+                // Only implement for byte arrays for now: [u8]
+                // Determine element type
+                let elem_ty = match ty {
+                    Type::Array(inner) => inner.as_ref(),
+                    _ => &Type::I64,
+                };
+
+                // Local helper mapping
+                let (elem_size, elem_cl_ty) = match elem_ty {
+                    Type::U8 | Type::I8 | Type::Bool => (1u32, types::I8),
+                    Type::U16 | Type::I16 => (2u32, types::I16),
+                    Type::U32 | Type::I32 => (4u32, types::I32),
+                    _ => (8u32, types::I64),
+                };
+
+                // Compute total size and alignment
+                let count = elements.len() as i64;
+                let total_size = (elem_size as i64) * count;
+                let align = elem_size.max(1) as i64;
+
+                // Declare extern runtime alloc: prim_rt_alloc(size: usize, align: usize) -> *mut u8
+                let mut alloc_sig = module.make_signature();
+                alloc_sig.params.push(AbiParam::new(types::I64));
+                alloc_sig.params.push(AbiParam::new(types::I64));
+                alloc_sig.returns.push(AbiParam::new(types::I64));
+                let alloc_func_id =
+                    module.declare_function("prim_rt_alloc", Linkage::Import, &alloc_sig)?;
+                let alloc_local = module.declare_func_in_func(alloc_func_id, builder.func);
+
+                // Allocate data buffer (or null if empty)
+                let base_ptr = if total_size > 0 {
+                    let size_val = builder.ins().iconst(types::I64, total_size);
+                    let align_val = builder.ins().iconst(types::I64, align);
+                    let call = builder.ins().call(alloc_local, &[size_val, align_val]);
+                    let results = builder.inst_results(call);
+                    results[0]
+                } else {
+                    builder.ins().iconst(types::I64, 0)
+                };
+
+                // Store elements sequentially
+                for (i, el) in elements.iter().enumerate() {
+                    let val = Self::generate_expression_impl_static(
+                        struct_layouts,
+                        variables,
+                        module,
+                        builder,
+                        el,
+                        println_func_id,
+                        function_ids,
+                        source,
+                    )?;
+                    let v = match val {
+                        Val::One(v) => v,
+                        Val::Many(_) => {
+                            return Err(CodegenError::InvalidExpression {
+                                message: "array elements must be scalars".to_string(),
+                                context: "array literal".to_string(),
+                            });
+                        }
+                    };
+                    // Convert to element CL type if needed
+                    let store_val = if builder.func.dfg.value_type(v) == elem_cl_ty {
+                        v
+                    } else {
+                        // Narrow or extend to match
+                        match elem_cl_ty {
+                            types::I8 => builder.ins().ireduce(types::I8, v),
+                            types::I16 => builder.ins().ireduce(types::I16, v),
+                            types::I32 => builder.ins().ireduce(types::I32, v),
+                            types::I64 => v,
+                            _ => v,
+                        }
+                    };
+                    let offset = (i as i64) * (elem_size as i64);
+                    let off_val = builder.ins().iconst(types::I64, offset);
+                    let addr = builder.ins().iadd(base_ptr, off_val);
+                    builder.ins().store(MemFlags::new(), store_val, addr, 0);
+                }
+
+                // Build header { ptr, len, cap } on the stack and return pointer to it
+                let header_size = 8 * 3; // 24 bytes (ptr, len, cap)
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    header_size as u32,
+                    3, // 8-byte alignment
+                ));
+                let header_ptr = builder.ins().stack_addr(types::I64, slot, 0);
+
+                let len_val = builder.ins().iconst(types::I64, count);
+                let cap_val = builder.ins().iconst(types::I64, count); // cap == len for literal
+
+                // Store ptr at offset 0
+                builder
+                    .ins()
+                    .store(MemFlags::new(), base_ptr, header_ptr, 0);
+                // Store len at offset 8
+                let len_off = builder.ins().iconst(types::I64, 8);
+                let len_addr = builder.ins().iadd(header_ptr, len_off);
+                builder.ins().store(MemFlags::new(), len_val, len_addr, 0);
+                // Store cap at offset 16
+                let cap_off = builder.ins().iconst(types::I64, 16);
+                let cap_addr = builder.ins().iadd(header_ptr, cap_off);
+                builder.ins().store(MemFlags::new(), cap_val, cap_addr, 0);
+
+                Ok(Val::One(header_ptr))
+            }
             Expr::IntLiteral { span: value, .. } => {
                 // Parse the literal (handle type suffixes like 42u32)
                 let value_text = value.text(source);
@@ -680,11 +788,10 @@ impl CraneliftCodeGenerator {
 
                 Ok(Val::One(field_value))
             }
-            Expr::FunctionCall { name, args, .. } => {
-                let func_name = name.text(source);
-
-                if func_name == "println" && args.len() == 1 {
-                    // Generate the argument
+            Expr::FunctionCall { path, args, .. } => {
+                let is_println =
+                    path.segments.len() == 1 && path.segments[0].text(source) == "println";
+                if is_println && args.len() == 1 {
                     let arg_val = Self::generate_expression_impl_static(
                         struct_layouts,
                         variables,
@@ -710,7 +817,6 @@ impl CraneliftCodeGenerator {
                     // Check if this is a boolean type based on value type
                     let value_type = builder.func.dfg.value_type(scalar);
                     if value_type == types::I8 {
-                        // For boolean values, call boolean-specific println
                         let println_bool_func_id =
                             Self::get_or_create_println_bool_function(module)?;
                         let local_func =
@@ -718,7 +824,6 @@ impl CraneliftCodeGenerator {
                         let call = builder.ins().call(local_func, &[scalar]);
                         let _results = builder.inst_results(call);
                     } else {
-                        // For integer values, convert to i64 if needed and use regular println
                         let i64_val = if value_type == types::I64 {
                             scalar
                         } else {
@@ -731,50 +836,105 @@ impl CraneliftCodeGenerator {
                             }
                         };
                         let local_func = module.declare_func_in_func(println_func_id, builder.func);
-                        let call = builder.ins().call(local_func, &[i64_val]);
-                        let _results = builder.inst_results(call);
+                        let _ = builder.ins().call(local_func, &[i64_val]);
                     }
-
                     // Return void value (0)
                     Ok(Val::One(builder.ins().iconst(types::I64, 0)))
-                } else if let Some(&func_id) = function_ids.get(func_name) {
-                    // User-defined function call
-                    let mut arg_vals = Vec::new();
-                    for arg in args {
-                        let val = Self::generate_expression_impl_static(
-                            struct_layouts,
-                            variables,
-                            module,
-                            builder,
-                            arg,
-                            println_func_id,
-                            function_ids,
-                            source,
-                        )?;
-                        match val {
-                            Val::One(v) => arg_vals.push(v),
-                            Val::Many(vs) => arg_vals.extend(vs),
-                        }
-                    }
-
-                    // Get function reference
-                    let local_func = module.declare_func_in_func(func_id, builder.func);
-
-                    // Call the function
-                    let call = builder.ins().call(local_func, &arg_vals);
-                    let results = builder.inst_results(call);
-
-                    // Return the result (or 0 if void function)
-                    if results.is_empty() {
-                        Ok(Val::One(builder.ins().iconst(types::I64, 0)))
-                    } else {
-                        Ok(Val::One(results[0]))
-                    }
                 } else {
-                    Err(CodegenError::UnsupportedFunctionCall {
-                        name: func_name.to_string(),
-                        context: "function call".to_string(),
-                    })
+                    let sym = path.mangle(source, "__");
+                    if let Some(&func_id) = function_ids.get(&sym) {
+                        // User-defined function call (supports flattened aggregates)
+                        let mut flat_args: Vec<Value> = Vec::new();
+                        for arg in args {
+                            match Self::generate_expression_impl_static(
+                                struct_layouts,
+                                variables,
+                                module,
+                                builder,
+                                arg,
+                                println_func_id,
+                                function_ids,
+                                source,
+                            )? {
+                                Val::One(v) => flat_args.push(v),
+                                Val::Many(vs) => flat_args.extend(vs),
+                            }
+                        }
+                        let local_func = module.declare_func_in_func(func_id, builder.func);
+                        let call = builder.ins().call(local_func, &flat_args);
+                        let results = builder.inst_results(call);
+                        if results.is_empty() {
+                            Ok(Val::One(builder.ins().iconst(types::I64, 0)))
+                        } else {
+                            Ok(Val::One(results[0]))
+                        }
+                    } else if sym.starts_with("std__") {
+                        // External import: coerce all args to i64 and call
+                        let mut sig = module.make_signature();
+                        let mut coerced: Vec<Value> = Vec::new();
+                        for arg in args {
+                            match Self::generate_expression_impl_static(
+                                struct_layouts,
+                                variables,
+                                module,
+                                builder,
+                                arg,
+                                println_func_id,
+                                function_ids,
+                                source,
+                            )? {
+                                Val::One(v) => {
+                                    let vt = builder.func.dfg.value_type(v);
+                                    let v_i64 = if vt == types::I64 {
+                                        v
+                                    } else if vt == types::I32
+                                        || vt == types::I16
+                                        || vt == types::I8
+                                    {
+                                        builder.ins().uextend(types::I64, v)
+                                    } else {
+                                        v
+                                    };
+                                    sig.params.push(AbiParam::new(types::I64));
+                                    coerced.push(v_i64);
+                                }
+                                Val::Many(vs) => {
+                                    for v in vs {
+                                        let vt = builder.func.dfg.value_type(v);
+                                        let v_i64 = if vt == types::I64 {
+                                            v
+                                        } else if vt == types::I32
+                                            || vt == types::I16
+                                            || vt == types::I8
+                                        {
+                                            builder.ins().uextend(types::I64, v)
+                                        } else {
+                                            v
+                                        };
+                                        sig.params.push(AbiParam::new(types::I64));
+                                        coerced.push(v_i64);
+                                    }
+                                }
+                            }
+                        }
+                        sig.returns.push(AbiParam::new(types::I64));
+                        let ext_id = module
+                            .declare_function(&sym, Linkage::Import, &sig)
+                            .map_err(|e| CodegenError::CraneliftModuleError(Box::new(e)))?;
+                        let local = module.declare_func_in_func(ext_id, builder.func);
+                        let call = builder.ins().call(local, &coerced);
+                        let results = builder.inst_results(call);
+                        if results.is_empty() {
+                            Ok(Val::One(builder.ins().iconst(types::I64, 0)))
+                        } else {
+                            Ok(Val::One(results[0]))
+                        }
+                    } else {
+                        Err(CodegenError::UnsupportedFunctionCall {
+                            name: sym,
+                            context: "function call".to_string(),
+                        })
+                    }
                 }
             }
             Expr::Dereference { operand, .. } => {
@@ -1094,6 +1254,7 @@ impl CraneliftCodeGenerator {
             Type::F32 => (4, types::F32),
             Type::F64 => (8, types::F64),
             Type::Bool => (1, types::I8),
+            Type::Array(_) => (8, types::I64), // Arrays are represented as pointers for now
             Type::StrSlice => (16, types::I64), // Slice is (ptr,len); placeholder CL type for sizing only
             Type::Struct(_) => (8, types::I64), // Struct references are pointers, 8 bytes on 64-bit systems
             Type::Pointer { .. } => (8, types::I64), // All pointers are 8 bytes on 64-bit systems

@@ -52,6 +52,19 @@ impl TypeChecker {
 
         // Add built-in functions
         checker.functions.insert("println".to_string(), None);
+        // Seed intrinsic std.mem functions (runtime-provided)
+        checker
+            .functions
+            .insert("std__mem__copy".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__move".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__set".to_string(), Some(Type::Usize));
+        checker
+            .functions
+            .insert("std__mem__len".to_string(), Some(Type::Usize));
 
         checker
     }
@@ -162,7 +175,7 @@ impl TypeChecker {
             } => {
                 // If there's a type annotation, use it to guide type checking
                 if let Some(annotated_type) = type_annotation {
-                    // First set the expected type on the expression if it's an integer literal
+                    // If the annotated type is an integer, set integer literal expectation
                     if let Expr::IntLiteral { ty, .. } = value {
                         if matches!(
                             annotated_type,
@@ -178,6 +191,16 @@ impl TypeChecker {
                                 | Type::Usize
                         ) {
                             *ty = annotated_type.clone();
+                        }
+                    }
+                    // If the annotated type is an array, push element expectations into array literal
+                    if let Type::Array(elem_ty) = annotated_type {
+                        if let Expr::ArrayLiteral { elements, .. } = value {
+                            for el in elements.iter_mut() {
+                                if let Expr::IntLiteral { ty, .. } = el {
+                                    *ty = *elem_ty.clone();
+                                }
+                            }
                         }
                     }
                 }
@@ -248,21 +271,15 @@ impl TypeChecker {
                 var_type
             }
 
-            Expr::FunctionCall { name, args, ty } => {
-                let func_name = name.text(&self.source);
-                let func_name_string = func_name.to_string();
-
-                // Check function exists
+            Expr::FunctionCall { path, args, ty } => {
+                // Build function key: join path with double underscores (module__function)
+                let func_name_string = path.mangle(&self.source, "__");
                 if !self.functions.contains_key(&func_name_string) {
                     return Err(TypeCheckError::UndefinedFunction(func_name_string));
                 }
-
-                // Type check arguments
                 for arg in args {
                     self.check_expression(arg)?;
                 }
-
-                // Return the function's return type, or i64 for built-ins like println
                 let return_type = self
                     .functions
                     .get(&func_name_string)
@@ -317,6 +334,34 @@ impl TypeChecker {
                 let placeholder_type = Type::I64; // TODO: implement field type checking
                 *ty = placeholder_type.clone();
                 placeholder_type
+            }
+            Expr::ArrayLiteral { elements, ty } => {
+                // Infer array element type from elements; default to i64 if empty
+                // Note: precise inference is limited; for now, use i64 unless prior expectation set
+                for el in elements.iter_mut() {
+                    self.check_expression(el)?;
+                }
+                // Use first element type if available, else default to i64
+                let elem_ty = if let Some(first) = elements.first() {
+                    match first.clone() {
+                        Expr::IntLiteral { ty, .. }
+                        | Expr::FloatLiteral { ty, .. }
+                        | Expr::BoolLiteral { ty, .. }
+                        | Expr::StringLiteral { ty, .. }
+                        | Expr::Identifier { ty, .. }
+                        | Expr::Binary { ty, .. }
+                        | Expr::FunctionCall { ty, .. }
+                        | Expr::StructLiteral { ty, .. }
+                        | Expr::FieldAccess { ty, .. }
+                        | Expr::Dereference { ty, .. }
+                        | Expr::ArrayLiteral { ty, .. } => ty,
+                    }
+                } else {
+                    Type::I64
+                };
+                let arr_ty = Type::Array(Box::new(elem_ty));
+                *ty = arr_ty.clone();
+                arr_ty
             }
         };
 

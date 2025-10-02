@@ -172,25 +172,29 @@ fn test_all_programs_have_expected_files() {
         panic!("test_programs directory does not exist");
     }
 
+    // File-based tests: .prim paired with .expected
     let entries =
         fs::read_dir(test_dir).unwrap_or_else(|_| panic!("Failed to read test_programs directory"));
-
     let mut prim_files = Vec::new();
     let mut expected_files = Vec::new();
+    let mut module_dirs = Vec::new();
 
     for entry in entries {
         let entry = entry.unwrap();
         let path = entry.path();
-        if let Some(extension) = path.extension() {
-            if extension == "prim" {
-                prim_files.push(path.file_stem().unwrap().to_string_lossy().to_string());
-            } else if extension == "expected" {
-                expected_files.push(path.file_stem().unwrap().to_string_lossy().to_string());
+        if path.is_file() {
+            if let Some(extension) = path.extension() {
+                if extension == "prim" {
+                    prim_files.push(path.file_stem().unwrap().to_string_lossy().to_string());
+                } else if extension == "expected" {
+                    expected_files.push(path.file_stem().unwrap().to_string_lossy().to_string());
+                }
             }
+        } else if path.is_dir() {
+            module_dirs.push(path);
         }
     }
 
-    // Check that every .prim file has a corresponding .expected file
     for prim_file in &prim_files {
         assert!(
             expected_files.contains(prim_file),
@@ -198,8 +202,6 @@ fn test_all_programs_have_expected_files() {
             prim_file
         );
     }
-
-    // Check that every .expected file has a corresponding .prim file
     for expected_file in &expected_files {
         assert!(
             prim_files.contains(expected_file),
@@ -208,8 +210,71 @@ fn test_all_programs_have_expected_files() {
         );
     }
 
-    println!(
-        "Found {} test programs with expected outputs",
-        prim_files.len()
-    );
+    // Directory-based tests: each subdir has expected.txt and either main.prim or cmd/main.prim
+    for dir in module_dirs {
+        let expected_txt = dir.join("expected.txt");
+        if expected_txt.exists() {
+            let root_main = dir.join("main.prim");
+            let cmd_main = dir.join("cmd").join("main.prim");
+            assert!(
+                root_main.exists() || cmd_main.exists(),
+                "{} has expected.txt but no main.prim or cmd/main.prim",
+                dir.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_module_directories_run() {
+    let test_dir = Path::new("test_programs");
+    if !test_dir.exists() {
+        panic!("test_programs directory does not exist");
+    }
+    for entry in fs::read_dir(test_dir).expect("read test_programs") {
+        let path = entry.unwrap().path();
+        if !path.is_dir() {
+            continue;
+        }
+        let expected_txt = path.join("expected.txt");
+        if !expected_txt.exists() {
+            continue; // Not a dir-based test
+        }
+        // Determine entry path to run: prefer cmd/ if exists; else root
+        let run_path = if path.join("cmd").join("main.prim").exists() {
+            path.join("cmd")
+        } else {
+            path.clone()
+        };
+
+        // Read expected output
+        let expected = fs::read_to_string(&expected_txt)
+            .unwrap_or_else(|_| panic!("Failed to read {}", expected_txt.display()))
+            .trim()
+            .to_string();
+
+        // Run the prim compiler on the directory
+        let output = Command::new("cargo")
+            .args(["run", "--", "run"])
+            .arg(run_path.to_string_lossy().to_string())
+            .output()
+            .unwrap_or_else(|_| panic!("Failed to execute prim compiler for: {}", path.display()));
+
+        if expected == "PARSE_ERROR" || expected == "COMPILE_ERROR" || expected == "RUNTIME_ERROR" {
+            assert!(
+                !output.status.success(),
+                "Program {} should have failed but succeeded",
+                path.display()
+            );
+        } else {
+            assert!(
+                output.status.success(),
+                "Program {} failed unexpectedly: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            assert_eq!(actual, expected, "Output mismatch for {}", path.display());
+        }
+    }
 }

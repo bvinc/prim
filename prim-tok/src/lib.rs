@@ -17,6 +17,8 @@ pub enum TokenKind {
     Fn,
     Impl,
     Trait,
+    Import,
+    Mod,
     If,
     Println,
     For,
@@ -53,16 +55,18 @@ pub enum TokenKind {
     Arrow,        // ->
 
     // Punctuation
-    LeftParen,  // (
-    RightParen, // )
-    LeftBrace,  // {
-    RightBrace, // }
-    Comma,      // ,
-    Colon,      // :
-    Semicolon,  // ;
-    Ampersand,  // &
-    Dot,        // .
-    At,         // @
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Comma,        // ,
+    Colon,        // :
+    Semicolon,    // ;
+    Ampersand,    // &
+    Dot,          // .
+    At,           // @
 
     // Special
     Comment,
@@ -160,6 +164,8 @@ impl<'a> Tokenizer<'a> {
             Some(')') => self.emit_simple(TokenKind::RightParen, start_pos),
             Some('{') => self.emit_simple(TokenKind::LeftBrace, start_pos),
             Some('}') => self.emit_simple(TokenKind::RightBrace, start_pos),
+            Some('[') => self.emit_simple(TokenKind::LeftBracket, start_pos),
+            Some(']') => self.emit_simple(TokenKind::RightBracket, start_pos),
             Some(',') => self.emit_simple(TokenKind::Comma, start_pos),
             Some(':') => self.emit_simple(TokenKind::Colon, start_pos),
             Some(';') => self.emit_simple(TokenKind::Semicolon, start_pos),
@@ -305,6 +311,8 @@ impl<'a> Tokenizer<'a> {
             "impl" => TokenKind::Impl,
             "trait" => TokenKind::Trait,
             "if" => TokenKind::If,
+            "import" => TokenKind::Import,
+            "mod" => TokenKind::Mod,
             "println" => TokenKind::Println,
             "for" => TokenKind::For,
             "true" => TokenKind::True,
