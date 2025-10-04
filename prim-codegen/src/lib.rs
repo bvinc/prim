@@ -868,6 +868,39 @@ impl CraneliftCodeGenerator {
                         } else {
                             Ok(Val::One(results[0]))
                         }
+                    } else if let Some(last) = path.segments.last() {
+                        let last_name = last.text(source).to_string();
+                        if let Some(&func_id) = function_ids.get(&last_name) {
+                            let mut flat_args: Vec<Value> = Vec::new();
+                            for arg in args {
+                                match Self::generate_expression_impl_static(
+                                    struct_layouts,
+                                    variables,
+                                    module,
+                                    builder,
+                                    arg,
+                                    println_func_id,
+                                    function_ids,
+                                    source,
+                                )? {
+                                    Val::One(v) => flat_args.push(v),
+                                    Val::Many(vs) => flat_args.extend(vs),
+                                }
+                            }
+                            let local_func = module.declare_func_in_func(func_id, builder.func);
+                            let call = builder.ins().call(local_func, &flat_args);
+                            let results = builder.inst_results(call);
+                            if results.is_empty() {
+                                Ok(Val::One(builder.ins().iconst(types::I64, 0)))
+                            } else {
+                                Ok(Val::One(results[0]))
+                            }
+                        } else {
+                            Err(CodegenError::UnsupportedFunctionCall {
+                                name: sym,
+                                context: "function call".to_string(),
+                            })
+                        }
                     } else if sym.starts_with("std__") {
                         // External import: coerce all args to i64 and call
                         let mut sig = module.make_signature();

@@ -1,0 +1,8 @@
+mod io
+
+@runtime("write") fn rt_write(fd: i64, s: String);
+
+fn print_str(s: String) {
+    rt_write(1, s);
+    rt_write(1, "\n");
+}

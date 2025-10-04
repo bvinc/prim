@@ -224,24 +224,62 @@ fn compile_source(path: &str) -> Result<(prim_parse::Program, String), MainError
     // Single file path: read user source
     let user_source = fs::read_to_string(path).map_err(MainError::IoError)?;
 
-    // Prepend stdlib if present at workspace_root/stdlib/std.prim for single-file programs
+    // Parse unit to discover imports (no need for a module header)
+    let unit = prim_parse::parse_unit(&user_source)
+        .map_err(|err| MainError::CompilationError(err.to_string()))?;
+
+    // Resolve imports recursively, including std.* from prim-std/src
     let cli_manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace_root = Path::new(cli_manifest_dir)
         .parent()
         .ok_or_else(|| MainError::IoError(std::io::Error::other("invalid workspace root")))?;
-    let std_path = workspace_root.join("stdlib").join("std.prim");
+    let std_root = workspace_root.join("prim-std").join("src");
+    let module_root = p.parent().unwrap_or_else(|| Path::new("."));
+    let mut visited = std::collections::HashSet::<String>::new();
+    let mut stack = Vec::<String>::new();
+    let mut dep_sources: Vec<String> = Vec::new();
+    let mut import_queue: Vec<String> = unit
+        .imports
+        .iter()
+        .map(|imp| imp.mangle(&user_source, "."))
+        .collect();
+    // Always include standard prelude imports
+    import_queue.push("std.string".to_string());
+    import_queue.push("std.io".to_string());
+    for name in import_queue {
+        resolve_module_recursive(
+            module_root,
+            &std_root,
+            &name,
+            &mut visited,
+            &mut stack,
+            &mut dep_sources,
+        )?;
+    }
 
-    let full_source = if std_path.exists() {
-        let std_src = fs::read_to_string(&std_path).map_err(MainError::IoError)?;
-        format!("{}\n{}", std_src, user_source)
-    } else {
-        user_source
-    };
+    // Minimal prelude providing print_str via libc write for single-file programs.
+    // This keeps unqualified print_str available without explicit imports.
+    const PRELUDE: &str = r#"
+import std.string
+import std.io
+"#;
+
+    // Strip headers from the user source (mod/import) and combine with deps
+    let stripped_user = strip_module_and_imports(&user_source)?;
+    let mut combined_source = String::new();
+    // Always include prelude first for single-file mode
+    combined_source.push_str(PRELUDE);
+    combined_source.push('\n');
+    if !dep_sources.is_empty() {
+        combined_source.push_str(&dep_sources.join("\n"));
+        combined_source.push('\n');
+    }
+    combined_source.push_str(&stripped_user);
 
     // Parse the combined source code
     let program =
-        parse(&full_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    Ok((program, full_source))
+        parse(&combined_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
+    Ok((program, combined_source))
 }
 
 fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainError> {
@@ -428,24 +466,35 @@ fn resolve_module_recursive(
     // Compute module directory by joining segments, with special-case for std.*
     let mut parts = name.split('.');
     let first = parts.next().unwrap_or("");
+    // For std.*, start at <std_root>/std to mirror on-disk layout prim-std/src/std/...;
+    // otherwise start at module_root and include the first segment.
     let mut mod_dir = if first == "std" {
-        std_root.to_path_buf()
+        std_root.join("std")
     } else {
-        module_root.to_path_buf()
+        let mut d = module_root.to_path_buf();
+        if !first.is_empty() {
+            d = d.join(first);
+        }
+        d
     };
-    // include the first segment as well (std/..., or non-std root/<first>)
-    if !first.is_empty() {
-        mod_dir = mod_dir.join(first);
-    }
     for s in parts {
         mod_dir = mod_dir.join(s);
     }
-    let mut files: Vec<PathBuf> = fs::read_dir(&mod_dir)
-        .map_err(MainError::IoError)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "prim"))
-        .collect();
+    let mut files: Vec<PathBuf> = Vec::new();
+    if mod_dir.is_dir() {
+        files = fs::read_dir(&mod_dir)
+            .map_err(MainError::IoError)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "prim"))
+            .collect();
+    } else {
+        // Allow modules to be a single file like src/string.prim
+        let file_candidate = mod_dir.with_extension("prim");
+        if file_candidate.exists() {
+            files.push(file_candidate);
+        }
+    }
     files.sort();
     if files.is_empty() {
         return Err(MainError::CompilationError(format!(
@@ -490,7 +539,8 @@ fn resolve_module_recursive(
         }
         // Strip headers then prefix using fully-qualified module name
         let stripped = strip_module_and_imports(&src)?;
-        body_sources.push(prefix_functions_with_module(&stripped, &qual_name)?);
+        // Imported modules are treated as bringing their items into scope
+        body_sources.push(stripped);
     }
     for imp in imports {
         resolve_module_recursive(module_root, std_root, &imp, visited, stack, out_sources)?;
@@ -500,6 +550,7 @@ fn resolve_module_recursive(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn prefix_functions_with_module(src: &str, module_name: &str) -> Result<String, MainError> {
     use prim_tok::{TokenKind, Tokenizer};
     let mut tokenizer = Tokenizer::new(src);
