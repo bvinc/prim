@@ -77,6 +77,26 @@ mod test_programs {
         "test_programs/print_str.prim",
         "test_programs/print_str.expected"
     );
+    test_program!(
+        import_struct,
+        "test_programs/import_struct.prim",
+        "test_programs/import_struct.expected"
+    );
+    test_program!(
+        import_selective_fn,
+        "test_programs/import_selective_fn.prim",
+        "test_programs/import_selective_fn.expected"
+    );
+    test_program!(
+        import_missing_symbol,
+        "test_programs/import_missing_symbol.prim",
+        "test_programs/import_missing_symbol.expected"
+    );
+    test_program!(
+        import_trait,
+        "test_programs/import_trait.prim",
+        "test_programs/import_trait.expected"
+    );
 }
 
 fn run_test_program(prim_file: &str, expected_file: &str) {
@@ -108,7 +128,20 @@ fn run_test_program(prim_file: &str, expected_file: &str) {
         .unwrap_or_else(|_| panic!("Failed to execute prim compiler for: {}", prim_file));
 
     // Handle different expected outcomes
-    if expected == "PARSE_ERROR" {
+    if let Some(message) = expected.strip_prefix("ERROR: ") {
+        assert!(
+            !output.status.success(),
+            "Program {} should have failed but succeeded",
+            prim_file
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(message),
+            "Expected error message '{}' in stderr, got: {}",
+            message,
+            stderr
+        );
+    } else if expected == "PARSE_ERROR" {
         // Should fail to parse
         assert!(
             !output.status.success(),

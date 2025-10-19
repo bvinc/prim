@@ -1,6 +1,7 @@
 use crate::{
-    BinaryOp, Expr, Function, Parameter, ParseError, PointerMutability, Program, Span, Stmt,
-    StructDefinition, StructField, StructFieldDefinition, Type,
+    BinaryOp, Expr, Function, ImportDecl, ImportSelector, NamePath, Parameter, ParseError,
+    PointerMutability, Program, Span, Stmt, StructDefinition, StructField, StructFieldDefinition,
+    Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -54,7 +55,7 @@ impl<'a> Parser<'a> {
         let mut functions = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
-        let mut imports: Vec<crate::NamePath> = Vec::new();
+        let mut imports: Vec<ImportDecl> = Vec::new();
 
         // Skip leading newlines
         self.skip_newlines();
@@ -70,18 +71,74 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        // Optional imports: import <identifier> ('.' <identifier>)*
+        // Optional imports with optional selectors
         while matches!(self.peek_kind(), Some(TokenKind::Import)) {
             self.advance(); // consume 'import'
-            let first =
+            self.skip_newlines();
+            let head =
                 self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
-            let mut segs = vec![Self::token_span(first)];
-            while matches!(self.peek_kind(), Some(TokenKind::Dot)) {
-                self.advance();
-                let seg = self.consume(TokenKind::Identifier, "Expected identifier after '.'")?;
-                segs.push(Self::token_span(seg));
+            let mut segments = vec![Self::token_span(head)];
+            let mut selector = ImportSelector::All;
+            let mut trailing_symbol: Option<Span> = None;
+
+            loop {
+                self.skip_newlines();
+                if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
+                    break;
+                }
+                self.advance(); // consume '.'
+                self.skip_newlines();
+                match self.peek_kind() {
+                    Some(TokenKind::LeftBrace) => {
+                        self.advance(); // consume '{'
+                        self.skip_newlines();
+                        let mut names = Vec::new();
+                        loop {
+                            let name_tok = self.consume(
+                                TokenKind::Identifier,
+                                "Expected identifier inside import braces",
+                            )?;
+                            let name_span = Self::token_span(name_tok);
+                            names.push(name_span);
+                            self.skip_newlines();
+                            if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                                self.advance();
+                                self.skip_newlines();
+                                continue;
+                            }
+                            break;
+                        }
+                        self.consume(TokenKind::RightBrace, "Expected '}' to close import list")?;
+                        selector = ImportSelector::Named(names);
+                        trailing_symbol = None;
+                        break;
+                    }
+                    Some(TokenKind::Identifier) => {
+                        let seg_tok = self.advance();
+                        let seg_span = Self::token_span(seg_tok);
+                        segments.push(seg_span.clone());
+                        trailing_symbol = if segments.len() >= 2 {
+                            Some(seg_span)
+                        } else {
+                            None
+                        };
+                    }
+                    Some(other) => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "identifier or '{' after '.' in import".to_string(),
+                            found: other,
+                            position: self.position(),
+                        });
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                }
             }
-            imports.push(crate::NamePath { segments: segs });
+
+            imports.push(ImportDecl {
+                raw_path: NamePath { segments },
+                selector,
+                trailing_symbol,
+            });
             let _ = self.consume_statement_terminator();
             self.skip_newlines();
         }
@@ -403,7 +460,8 @@ impl<'a> Parser<'a> {
     // Helper methods
     fn parse_function_with_attrs(&mut self, attrs: PendingAttrs) -> Result<Function, ParseError> {
         // Consume 'fn' keyword
-        self.consume(TokenKind::Fn, "Expected 'fn'")?;
+        let fn_token = self.consume(TokenKind::Fn, "Expected 'fn'")?;
+        let span_start = attrs.span_start.unwrap_or(fn_token.range.start);
         self.skip_newlines();
 
         // Parse function name
@@ -436,8 +494,8 @@ impl<'a> Parser<'a> {
         }
 
         // Parse either a declaration (with ';') or a definition with a body
-        let body = if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
-            self.advance(); // consume ';'
+        let (body, span_end) = if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+            let semicolon = self.advance(); // consume ';'
             if attrs.runtime.is_none() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "function declarations without body require @runtime attribute"
@@ -445,7 +503,7 @@ impl<'a> Parser<'a> {
                     position: name.start(),
                 });
             }
-            Vec::new()
+            (Vec::new(), semicolon.range.end)
         } else {
             if attrs.runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
@@ -455,8 +513,9 @@ impl<'a> Parser<'a> {
             }
             self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
             let body = self.parse_statement_list()?;
-            self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
-            body
+            let right_brace =
+                self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
+            (body, right_brace.range.end)
         };
 
         Ok(Function {
@@ -465,6 +524,7 @@ impl<'a> Parser<'a> {
             return_type,
             body,
             runtime_binding: attrs.runtime,
+            span: Span::new(span_start, span_end),
         })
     }
 
@@ -473,7 +533,8 @@ impl<'a> Parser<'a> {
         attrs: PendingAttrs,
     ) -> Result<StructDefinition, ParseError> {
         // Consume 'struct' keyword
-        self.consume(TokenKind::Struct, "Expected 'struct'")?;
+        let struct_token = self.consume(TokenKind::Struct, "Expected 'struct'")?;
+        let span_start = attrs.span_start.unwrap_or(struct_token.range.start);
         self.skip_newlines();
 
         // Parse struct name
@@ -484,17 +545,19 @@ impl<'a> Parser<'a> {
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
         let fields = self.parse_struct_field_list()?;
-        self.consume(TokenKind::RightBrace, "Expected '}' to end struct body")?;
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end struct body")?;
 
         Ok(StructDefinition {
             name,
             fields,
             repr_c: attrs.repr_c,
+            span: Span::new(span_start, right_brace.range.end),
         })
     }
 
     fn parse_trait_definition(&mut self) -> Result<crate::TraitDefinition, ParseError> {
-        self.consume(TokenKind::Trait, "Expected 'trait'")?;
+        let trait_token = self.consume(TokenKind::Trait, "Expected 'trait'")?;
+        let span_start = trait_token.range.start;
         self.skip_newlines();
         let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
         let name = Self::token_span(name_token);
@@ -534,12 +597,17 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
-        Ok(crate::TraitDefinition { name, methods })
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
+        Ok(crate::TraitDefinition {
+            name,
+            methods,
+            span: crate::Span::new(span_start, right_brace.range.end),
+        })
     }
 
     fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
-        self.consume(TokenKind::Impl, "Expected 'impl'")?;
+        let impl_token = self.consume(TokenKind::Impl, "Expected 'impl'")?;
+        let span_start = impl_token.range.start;
         self.skip_newlines();
         let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
         let trait_name = Self::token_span(trait_tok);
@@ -584,11 +652,12 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
         Ok(crate::ImplDefinition {
             trait_name,
             struct_name,
             methods,
+            span: crate::Span::new(span_start, right_brace.range.end),
         })
     }
 
@@ -981,6 +1050,8 @@ impl<'a> Parser<'a> {
 struct PendingAttrs {
     runtime: Option<String>,
     repr_c: bool,
+    span_start: Option<usize>,
+    span_end: Option<usize>,
 }
 
 impl<'a> Parser<'a> {
@@ -991,7 +1062,10 @@ impl<'a> Parser<'a> {
             if !matches!(self.peek_kind(), Some(TokenKind::At)) {
                 break;
             }
-            self.advance(); // consume '@'
+            let at_token = self.advance(); // consume '@'
+            if attrs.span_start.is_none() {
+                attrs.span_start = Some(at_token.range.start);
+            }
             // Attribute name
             let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
             let name_span = Self::token_span(name_tok);
@@ -1041,6 +1115,8 @@ impl<'a> Parser<'a> {
                     });
                 }
             }
+            let end_pos = self.previous().range.end;
+            attrs.span_end = Some(end_pos);
             self.skip_newlines();
         }
         Ok(attrs)

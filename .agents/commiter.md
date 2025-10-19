@@ -18,5 +18,4 @@ Given a diff, summary, or task description, produce a single, high-quality commi
 - If a body is needed, separate it from the subject line with a blank line.
 
 # Output Format
-Return only the final commit message text, exactly as it should appear in `git commit -m`.
-Do not include quotes, explanations, markdown, or commentary.
+Run git commit with the commit message

@@ -124,6 +124,7 @@ pub struct StructDefinition {
     pub name: Span,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +150,7 @@ pub struct Function {
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
     pub runtime_binding: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,11 +162,46 @@ pub struct Parameter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub module_name: Option<Span>,
-    pub imports: Vec<NamePath>,
+    pub imports: Vec<ImportDecl>,
     pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
     pub traits: Vec<TraitDefinition>,
     pub impls: Vec<ImplDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    pub raw_path: NamePath,
+    pub selector: ImportSelector,
+    pub trailing_symbol: Option<Span>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportSelector {
+    All,
+    Named(Vec<Span>),
+}
+
+impl ImportDecl {
+    pub fn module_segments<'a>(&'a self, source: &'a str) -> Vec<String> {
+        self.raw_path
+            .segments
+            .iter()
+            .map(|s| s.text(source).to_string())
+            .collect()
+    }
+
+    pub fn selector_names<'a>(&'a self, source: &'a str) -> Option<Vec<String>> {
+        match &self.selector {
+            ImportSelector::All => None,
+            ImportSelector::Named(names) => Some(
+                names
+                    .iter()
+                    .map(|span| span.text(source).to_string())
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// Parse a Prim program using the unified parser
@@ -187,6 +224,7 @@ pub fn parse_unit(input: &str) -> Result<Program, ParseError> {
 pub struct TraitDefinition {
     pub name: Span,
     pub methods: Vec<TraitMethod>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +232,7 @@ pub struct ImplDefinition {
     pub trait_name: Span,
     pub struct_name: Span,
     pub methods: Vec<ImplMethod>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1646,7 +1685,94 @@ fn main() {
             }
         }
     }
+
+    #[test]
+    fn test_import_decl_variants() {
+        let source = "import foo.bar\nimport foo.bar.Baz\nimport foo.bar.{Baz, Quux}\nfn main() {}";
+        let program = parse(source).unwrap();
+        assert_eq!(program.imports.len(), 3);
+
+        let module_import = &program.imports[0];
+        assert_eq!(
+            module_import.module_segments(source),
+            vec!["foo".to_string(), "bar".to_string()]
+        );
+        assert!(matches!(module_import.selector, ImportSelector::All));
+        assert_eq!(
+            module_import
+                .trailing_symbol
+                .as_ref()
+                .map(|s| s.text(source)),
+            Some("bar")
+        );
+
+        let trailing_symbol_import = &program.imports[1];
+        assert_eq!(
+            trailing_symbol_import.module_segments(source),
+            vec!["foo".to_string(), "bar".to_string(), "Baz".to_string()]
+        );
+        assert!(matches!(
+            trailing_symbol_import.selector,
+            ImportSelector::All
+        ));
+        assert_eq!(
+            trailing_symbol_import
+                .trailing_symbol
+                .as_ref()
+                .map(|s| s.text(source)),
+            Some("Baz")
+        );
+
+        let brace_import = &program.imports[2];
+        assert_eq!(
+            brace_import.module_segments(source),
+            vec!["foo".to_string(), "bar".to_string()]
+        );
+        match &brace_import.selector {
+            ImportSelector::Named(names) => {
+                let texts: Vec<_> = names.iter().map(|n| n.text(source)).collect();
+                assert_eq!(texts, vec!["Baz", "Quux"]);
+            }
+            _ => panic!("expected named selector"),
+        }
+        assert!(brace_import.trailing_symbol.is_none());
+    }
+
+    #[test]
+    fn test_definition_spans_include_attributes() {
+        let struct_source = "@repr(\"C\")\nstruct Foo { }";
+        let struct_program = parse_unit(struct_source).unwrap();
+        let def = &struct_program.structs[0];
+        assert_eq!(def.span.text(struct_source), "@repr(\"C\")\nstruct Foo { }");
+
+        let func_source = "@runtime(\"puts\")\nfn print(message: Str);";
+        let func_program = parse_unit(func_source).unwrap();
+        let func = &func_program.functions[0];
+        assert_eq!(
+            func.span.text(func_source),
+            "@runtime(\"puts\")\nfn print(message: Str);"
+        );
+    }
+
+    #[test]
+    fn test_trait_and_impl_spans() {
+        let source = "trait Greeter { fn greet(person: Person); }\n\nimpl Greeter for Person {\n    fn greet(person: Person) {}\n}\n";
+        let program = parse_unit(source).unwrap();
+        assert_eq!(program.traits.len(), 1);
+        assert_eq!(program.impls.len(), 1);
+        let trait_def = &program.traits[0];
+        assert_eq!(
+            trait_def.span.text(source),
+            "trait Greeter { fn greet(person: Person); }"
+        );
+        let impl_def = &program.impls[0];
+        assert_eq!(
+            impl_def.span.text(source),
+            "impl Greeter for Person {\n    fn greet(person: Person) {}\n}"
+        );
+    }
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamePath {
     pub segments: Vec<Span>,

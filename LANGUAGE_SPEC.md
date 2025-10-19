@@ -10,7 +10,8 @@ Prim is a statically-typed programming language with a focus on simplicity and c
 ```
 module_unit    → module_header? import* ( struct | function )*
 module_header  → "mod" IDENTIFIER terminator
-import         → "import" IDENTIFIER terminator
+import         → "import" import_path ( "." IDENTIFIER | ".{" IDENTIFIER ( "," IDENTIFIER )* "}" )? terminator
+import_path    → IDENTIFIER ( "." IDENTIFIER )*
 
 program        → function*                    # single-file mode
 function       → "fn" IDENTIFIER "(" parameters? ")" ( "->" type )? block
@@ -154,12 +155,23 @@ The compiler provides clear error messages for:
 - Definition: A module is a directory containing one or more `.prim` files. Each file starts with a header `mod <name>` declaring the module name used by that file.
 - Entry modules: For binaries, the entry module must be named `main` and must define `fn main()`.
   - The CLI accepts a module directory or its `cmd/` subdirectory. When `cmd/` is used, imports are resolved relative to the parent directory.
-- Imports: Top-of-file `import <name>` lines declare dependencies on sibling modules located as `./<name>/` next to the entry module root.
+- Imports: Top-of-file `import` statements declare dependencies on sibling modules located under the current module root.
+  - `import foo.bar` loads module `foo/bar` when it exists; if that module is missing but `foo/bar` defines a top-level item named `bar`, the identifier import falls back to that symbol.
+  - `import foo.bar.Baz` first searches for module `foo/bar/Baz`; when absent it selects symbol `Baz` from `foo.bar`.
+  - `import foo.bar.{Baz, Quux}` loads only the listed definitions from `foo.bar` and leaves the rest of the module untouched.
+  - When a module and a symbol share the same name, the module is preferred; use braces to import the symbol explicitly.
   - Imports must appear before any `struct` or `fn` definitions (after the `mod` header, if present).
   - Import cycles are not allowed; the compiler reports an error on cycles.
   - Resolution order: imported modules are compiled/merged before the current module.
 - Visibility and namespacing (current behavior): Imported symbols become available unqualified (merged compilation unit). Names across the combined modules must be unique.
   - Future work may introduce explicit namespacing and `module::symbol` references.
+
+Example selective imports:
+```prim
+import std.io.print_str          // single symbol, falls back to std.io when std.io.print_str module is absent
+import util.math.{Vector2, dot}  // explicit list from util/math
+// import util.math.Vector2      // loads util/math module if it exists; use braces to force the struct symbol
+```
 
 ### Examples
 
