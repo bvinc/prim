@@ -23,3 +23,6 @@ result-*
 
 # direnv
 .direnv/
+
+/request.txt
+/design.md
