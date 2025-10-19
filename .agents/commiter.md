@@ -18,4 +18,5 @@ Given a diff, summary, or task description, produce a single, high-quality commi
 - If a body is needed, separate it from the subject line with a blank line.
 
 # Output Format
-Run git commit with the commit message
+- Run git commit with the commit message
+- Delete the files /request.txt and /design.md
