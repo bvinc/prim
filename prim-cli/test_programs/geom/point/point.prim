@@ -1,0 +1,23 @@
+mod point
+
+struct Point {
+    value: i32,
+}
+
+trait HasValue {
+    fn get(point: Point) -> i32;
+}
+
+impl HasValue for Point {
+    fn get(point: Point) -> i32 {
+        point.value
+    }
+}
+
+fn new_point() -> Point {
+    Point { value = 42 }
+}
+
+fn announce() {
+    println(42);
+}

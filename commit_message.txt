@@ -1,0 +1,7 @@
+span: unify span handling across crates
+
+- add prim-tok span module with Span, SpanBuilder, Spannable, and focused unit tests
+- refactor tokenizer, parser, CLI, and typechecker to consume the shared Span API and adopt SpanBuilder for attribute tracking
+- re-export span utilities through prim-parse so downstream crates compile without changes
+
+Deviations from design.md: none.

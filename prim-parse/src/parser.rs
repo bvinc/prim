@@ -65,7 +65,7 @@ impl<'a> Parser<'a> {
             self.advance(); // consume 'mod'
             let name_token =
                 self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
-            self.module_name = Some(Self::token_span(name_token));
+            self.module_name = Some(name_token.span);
             // terminate with newline/semicolon or end of block
             let _ = self.consume_statement_terminator();
             self.skip_newlines();
@@ -77,7 +77,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
             let head =
                 self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
-            let mut segments = vec![Self::token_span(head)];
+            let mut segments = vec![head.span];
             let mut selector = ImportSelector::All;
             let mut trailing_symbol: Option<Span> = None;
 
@@ -98,7 +98,7 @@ impl<'a> Parser<'a> {
                                 TokenKind::Identifier,
                                 "Expected identifier inside import braces",
                             )?;
-                            let name_span = Self::token_span(name_tok);
+                            let name_span = name_tok.span;
                             names.push(name_span);
                             self.skip_newlines();
                             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
@@ -115,8 +115,8 @@ impl<'a> Parser<'a> {
                     }
                     Some(TokenKind::Identifier) => {
                         let seg_tok = self.advance();
-                        let seg_span = Self::token_span(seg_tok);
-                        segments.push(seg_span.clone());
+                        let seg_span = seg_tok.span;
+                        segments.push(seg_span);
                         trailing_symbol = if segments.len() >= 2 {
                             Some(seg_span)
                         } else {
@@ -182,7 +182,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::TokenError(
                             prim_tok::TokenError::UnexpectedCharacter {
                                 ch: '@',
-                                position: tok.range.start,
+                                position: tok.span.start(),
                             },
                         ));
                     }
@@ -197,7 +197,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Program {
-            module_name: self.module_name.clone(),
+            module_name: self.module_name,
             imports,
             structs,
             functions,
@@ -233,21 +233,21 @@ impl<'a> Parser<'a> {
             Some(TokenKind::IntLiteral) => {
                 let token = self.advance();
                 Ok(Expr::IntLiteral {
-                    span: Self::token_span(token),
+                    span: token.span,
                     ty: Type::Undetermined,
                 })
             }
             Some(TokenKind::StringLiteral) => {
                 let token = self.advance();
                 Ok(Expr::StringLiteral {
-                    span: Self::token_span(token),
+                    span: token.span,
                     ty: Type::Undetermined,
                 })
             }
             Some(TokenKind::FloatLiteral) => {
                 let token = self.advance();
                 Ok(Expr::FloatLiteral {
-                    span: Self::token_span(token),
+                    span: token.span,
                     ty: Type::Undetermined,
                 })
             }
@@ -267,7 +267,7 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::Identifier) => {
                 let token = self.advance();
-                let name = Self::token_span(token);
+                let name = token.span;
 
                 // Check if this is a function call
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
@@ -298,7 +298,7 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::Println) => {
                 let token = self.advance();
-                let name_span = Self::token_span(token);
+                let name_span = token.span;
                 self.consume(TokenKind::LeftParen, "Expected '(' after println")?;
                 let args = self.parse_argument_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -427,7 +427,7 @@ impl<'a> Parser<'a> {
             self.advance(); // consume '.'
             let field_token =
                 self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
-            let field = Self::token_span(field_token);
+            let field = field_token.span;
             Ok(Expr::FieldAccess {
                 object: Box::new(left),
                 field,
@@ -458,15 +458,21 @@ impl<'a> Parser<'a> {
     }
 
     // Helper methods
-    fn parse_function_with_attrs(&mut self, attrs: PendingAttrs) -> Result<Function, ParseError> {
+    fn parse_function_with_attrs(
+        &mut self,
+        mut attrs: PendingAttrs,
+    ) -> Result<Function, ParseError> {
+        let runtime = attrs.runtime.take();
+        let repr_c = attrs.repr_c;
+
         // Consume 'fn' keyword
         let fn_token = self.consume(TokenKind::Fn, "Expected 'fn'")?;
-        let span_start = attrs.span_start.unwrap_or(fn_token.range.start);
+        let fn_start = fn_token.span.start();
         self.skip_newlines();
 
         // Parse function name
         let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         // Parse parameter list
@@ -486,7 +492,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Validate attributes on function
-        if attrs.repr_c {
+        if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
                 message: "@repr is only valid on structs".to_string(),
                 position: name.start(),
@@ -496,16 +502,16 @@ impl<'a> Parser<'a> {
         // Parse either a declaration (with ';') or a definition with a body
         let (body, span_end) = if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
             let semicolon = self.advance(); // consume ';'
-            if attrs.runtime.is_none() {
+            if runtime.is_none() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "function declarations without body require @runtime attribute"
                         .to_string(),
                     position: name.start(),
                 });
             }
-            (Vec::new(), semicolon.range.end)
+            (Vec::new(), semicolon.span.end())
         } else {
-            if attrs.runtime.is_some() {
+            if runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "@runtime functions must not have a body".to_string(),
                     position: name.start(),
@@ -515,16 +521,18 @@ impl<'a> Parser<'a> {
             let body = self.parse_statement_list()?;
             let right_brace =
                 self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
-            (body, right_brace.range.end)
+            (body, right_brace.span.end())
         };
+
+        let full_span = attrs.finalize_span(fn_start, span_end);
 
         Ok(Function {
             name,
             parameters,
             return_type,
             body,
-            runtime_binding: attrs.runtime,
-            span: Span::new(span_start, span_end),
+            runtime_binding: runtime,
+            span: full_span,
         })
     }
 
@@ -532,35 +540,40 @@ impl<'a> Parser<'a> {
         &mut self,
         attrs: PendingAttrs,
     ) -> Result<StructDefinition, ParseError> {
+        let repr_c = attrs.repr_c;
+
         // Consume 'struct' keyword
         let struct_token = self.consume(TokenKind::Struct, "Expected 'struct'")?;
-        let span_start = attrs.span_start.unwrap_or(struct_token.range.start);
+        let struct_start = struct_token.span.start();
         self.skip_newlines();
 
         // Parse struct name
         let name_token = self.consume(TokenKind::Identifier, "Expected struct name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
         let fields = self.parse_struct_field_list()?;
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end struct body")?;
+        let struct_end = right_brace.span.end();
+
+        let full_span = attrs.finalize_span(struct_start, struct_end);
 
         Ok(StructDefinition {
             name,
             fields,
-            repr_c: attrs.repr_c,
-            span: Span::new(span_start, right_brace.range.end),
+            repr_c,
+            span: full_span,
         })
     }
 
     fn parse_trait_definition(&mut self) -> Result<crate::TraitDefinition, ParseError> {
         let trait_token = self.consume(TokenKind::Trait, "Expected 'trait'")?;
-        let span_start = trait_token.range.start;
+        let span_start = trait_token.span.start();
         self.skip_newlines();
         let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
         self.skip_newlines();
@@ -571,7 +584,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.skip_newlines();
             let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname = Self::token_span(name_tok);
+            let mname = name_tok.span;
             self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
@@ -601,21 +614,21 @@ impl<'a> Parser<'a> {
         Ok(crate::TraitDefinition {
             name,
             methods,
-            span: crate::Span::new(span_start, right_brace.range.end),
+            span: crate::Span::new(span_start, right_brace.span.end()),
         })
     }
 
     fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
         let impl_token = self.consume(TokenKind::Impl, "Expected 'impl'")?;
-        let span_start = impl_token.range.start;
+        let span_start = impl_token.span.start();
         self.skip_newlines();
         let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
-        let trait_name = Self::token_span(trait_tok);
+        let trait_name = trait_tok.span;
         self.skip_newlines();
         self.consume(TokenKind::For, "Expected 'for' in impl")?;
         self.skip_newlines();
         let type_tok = self.consume(TokenKind::Identifier, "Expected type name after 'for'")?;
-        let struct_name = Self::token_span(type_tok);
+        let struct_name = type_tok.span;
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
         self.skip_newlines();
@@ -626,7 +639,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.skip_newlines();
             let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname = Self::token_span(name_tok);
+            let mname = name_tok.span;
             self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
@@ -657,7 +670,7 @@ impl<'a> Parser<'a> {
             trait_name,
             struct_name,
             methods,
-            span: crate::Span::new(span_start, right_brace.range.end),
+            span: crate::Span::new(span_start, right_brace.span.end()),
         })
     }
 
@@ -696,7 +709,7 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_field_definition(&mut self) -> Result<StructFieldDefinition, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         self.consume(TokenKind::Colon, "Expected ':' after field name")?;
@@ -741,7 +754,7 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_literal_field(&mut self) -> Result<StructField, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         self.consume(TokenKind::Equals, "Expected '=' after field name")?;
@@ -780,7 +793,7 @@ impl<'a> Parser<'a> {
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected parameter name")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
@@ -861,7 +874,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Identifier) => {
                 // This could be a struct type reference
                 let token = self.advance();
-                Ok(Type::Struct(Self::token_span(token)))
+                Ok(Type::Struct(token.span))
             }
             Some(TokenKind::Star) => {
                 // Parse pointer type: *const T or *mut T
@@ -938,7 +951,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let name_token = self.consume(TokenKind::Identifier, "identifier")?;
-        let name = Self::token_span(name_token);
+        let name = name_token.span;
         self.skip_newlines();
 
         // Optional type annotation
@@ -969,7 +982,7 @@ impl<'a> Parser<'a> {
             Some(tok) => Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
                 found: tok.kind,
-                position: tok.range.start,
+                position: tok.span.start(),
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -1002,12 +1015,8 @@ impl<'a> Parser<'a> {
     #[inline]
     fn position(&self) -> usize {
         self.peek()
-            .map(|t| t.range.start)
+            .map(|t| t.span.start())
             .unwrap_or_else(|| self.source.len())
-    }
-
-    fn token_span(token: &Token) -> Span {
-        Span::from_range(token.range.clone())
     }
 
     fn span_text(&self, span: &Span) -> &str {
@@ -1054,6 +1063,53 @@ struct PendingAttrs {
     span_end: Option<usize>,
 }
 
+impl PendingAttrs {
+    fn record_start(&mut self, pos: usize) {
+        match self.span_start {
+            Some(current) if pos < current => self.span_start = Some(pos),
+            None => self.span_start = Some(pos),
+            _ => {}
+        }
+
+        if let Some(current_end) = self.span_end {
+            if pos > current_end {
+                self.span_end = Some(pos);
+            }
+        }
+    }
+
+    fn record_end(&mut self, pos: usize) {
+        match self.span_end {
+            Some(current) if pos > current => self.span_end = Some(pos),
+            None => self.span_end = Some(pos),
+            _ => {}
+        }
+
+        if let Some(current_start) = self.span_start {
+            if pos < current_start {
+                self.span_start = Some(pos);
+            }
+        }
+    }
+
+    fn include_span(&mut self, span: Span) {
+        self.record_start(span.start());
+        self.record_end(span.end());
+    }
+
+    fn finalize_span(&self, fallback_start: usize, fallback_end: usize) -> Span {
+        let start = self
+            .span_start
+            .map(|value| value.min(fallback_start))
+            .unwrap_or(fallback_start);
+        let end = self
+            .span_end
+            .map(|value| value.max(fallback_end))
+            .unwrap_or(fallback_end);
+        Span::new(start, end)
+    }
+}
+
 impl<'a> Parser<'a> {
     fn parse_attributes(&mut self) -> Result<PendingAttrs, ParseError> {
         let mut attrs = PendingAttrs::default();
@@ -1063,19 +1119,20 @@ impl<'a> Parser<'a> {
                 break;
             }
             let at_token = self.advance(); // consume '@'
-            if attrs.span_start.is_none() {
-                attrs.span_start = Some(at_token.range.start);
-            }
+            attrs.record_start(at_token.span.start());
+            attrs.record_end(at_token.span.end());
             // Attribute name
             let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
-            let name_span = Self::token_span(name_tok);
+            let name_span = name_tok.span;
             let name = self.span_text(&name_span).to_string();
+            attrs.include_span(name_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
             match name.as_str() {
                 "runtime" => {
                     let sym_tok =
                         self.consume(TokenKind::StringLiteral, "Expected runtime symbol string")?;
-                    let sym = Self::token_span(sym_tok).text(self.source);
+                    let sym_span = sym_tok.span;
+                    let sym = sym_span.text(self.source);
                     let sym_clean = sym.trim_matches('"').to_string();
                     self.consume(TokenKind::RightParen, "Expected ')' after attribute")?;
                     if attrs.runtime.is_some() {
@@ -1091,7 +1148,8 @@ impl<'a> Parser<'a> {
                         TokenKind::StringLiteral,
                         "Expected repr string literal (\"C\")",
                     )?;
-                    let arg_text = Self::token_span(arg_tok).text(self.source);
+                    let arg_span = arg_tok.span;
+                    let arg_text = arg_span.text(self.source);
                     let val = arg_text.trim_matches('"');
                     if val != "C" {
                         return Err(ParseError::InvalidAttributeUsage {
@@ -1115,8 +1173,8 @@ impl<'a> Parser<'a> {
                     });
                 }
             }
-            let end_pos = self.previous().range.end;
-            attrs.span_end = Some(end_pos);
+            let end_pos = self.previous().span.end();
+            attrs.record_end(end_pos);
             self.skip_newlines();
         }
         Ok(attrs)

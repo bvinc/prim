@@ -1,0 +1,7 @@
+fn main() {
+    let x = 42
+    // This should cause a type error - condition must be boolean
+    if x {
+        println(x)
+    }
+}

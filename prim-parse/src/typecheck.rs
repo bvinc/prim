@@ -112,7 +112,7 @@ impl TypeChecker {
                 impl_methods.insert(mname, (params, m.return_type.clone()));
             }
             for (mname, (tparams, tret)) in trait_methods.iter() {
-                match impl_methods.get(mname) {
+                match impl_methods.get(mname.as_str()) {
                     None => {
                         return Err(TypeCheckError::MissingImplMethod {
                             trait_name: tname.clone(),

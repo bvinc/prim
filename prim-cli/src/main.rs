@@ -878,21 +878,21 @@ fn prefix_functions_with_module(src: &str, module_name: &str) -> Result<String, 
         let t = &tokens[i];
         if matches!(t.kind, TokenKind::Fn) {
             // emit up to 'fn'
-            out.push_str(&src[cursor..t.range.start]);
+            out.push_str(&src[cursor..t.span.start()]);
             // emit 'fn'
             out.push_str("fn");
-            cursor = t.range.end;
+            cursor = t.span.end();
             // skip whitespace between fn and name by copying as-is until next token
             i += 1;
             if i < tokens.len() {
                 let name_tok = &tokens[i];
                 if matches!(name_tok.kind, TokenKind::Identifier) {
                     // emit whitespace between and then the prefixed name
-                    out.push_str(&src[cursor..name_tok.range.start]);
+                    out.push_str(&src[cursor..name_tok.span.start()]);
                     out.push_str(module_name);
                     out.push_str("__");
-                    out.push_str(&src[name_tok.range.clone()]);
-                    cursor = name_tok.range.end;
+                    out.push_str(name_tok.span.text(src));
+                    cursor = name_tok.span.end();
                     i += 1;
                     continue;
                 }

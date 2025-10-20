@@ -1,0 +1,5 @@
+import std.io.print_str
+
+fn main() {
+    print_str("selective fn")
+}

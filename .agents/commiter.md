@@ -20,3 +20,4 @@ Given a diff, summary, or task description, produce a single, high-quality commi
 # Output Format
 - Run git commit with the commit message
 - Delete the files /request.txt and /design.md
+- Ensure that the commit has been applied

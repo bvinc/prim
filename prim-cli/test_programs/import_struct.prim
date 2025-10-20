@@ -1,0 +1,6 @@
+import geom.point.{Point, new_point, announce}
+
+fn main() {
+    let _p: Point = new_point();
+    announce();
+}

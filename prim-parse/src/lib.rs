@@ -3,8 +3,7 @@ use prim_tok::Tokenizer;
 mod error;
 pub use error::ParseError;
 
-mod span;
-pub use span::Span;
+pub use prim_tok::Span;
 
 // Parser implementation
 pub mod parser;
