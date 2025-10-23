@@ -1,6 +1,15 @@
 mod string
 
-@repr("C") struct Str { data: *const u8, len: usize }
+@repr("C")
+struct Str {
+    data: *const u8,
+    len: usize
+}
 
-@repr("C") struct String { data: *const u8, len: usize }
+@repr("C")
+struct String {
+    data: *const u8,
+    len: usize,
+    cap: usize,
+}
 
