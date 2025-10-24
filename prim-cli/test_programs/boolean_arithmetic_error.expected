@@ -1,0 +1,1 @@
+ERROR: Type check error: Invalid binary operands for '+' (left: bool, right: bool)

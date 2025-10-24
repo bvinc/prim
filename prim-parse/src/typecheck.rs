@@ -1,12 +1,19 @@
-use crate::{Expr, Function, Program, Stmt, Type};
+use crate::{BinaryOp, Expr, Function, Program, Stmt, Type};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+
+#[derive(Clone, Debug)]
+struct FunctionRecord {
+    params: Option<Vec<Type>>,
+    return_type: Option<Type>,
+}
 
 #[derive(Debug)]
 pub struct TypeChecker {
     /// Variable name -> Type mapping for current scope
     variables: HashMap<String, Type>,
     /// Function name -> return type mapping
-    functions: HashMap<String, Option<Type>>,
+    functions: HashMap<String, FunctionRecord>,
     /// Source text for span lookups
     source: String,
     #[allow(clippy::type_complexity)]
@@ -21,6 +28,11 @@ pub enum TypeCheckError {
     TypeMismatch {
         expected: Type,
         found: Type,
+    },
+    InvalidBinaryOperands {
+        op: BinaryOp,
+        left: Type,
+        right: Type,
     },
     InvalidDereference(Type),
     UnknownTrait(String),
@@ -40,7 +52,139 @@ pub enum TypeCheckError {
     },
 }
 
+impl fmt::Display for TypeCheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeCheckError::UndefinedVariable(name) => {
+                write!(f, "Undefined variable '{}'", name)
+            }
+            TypeCheckError::UndefinedFunction(name) => {
+                write!(f, "Undefined function '{}'", name)
+            }
+            TypeCheckError::TypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Type mismatch: expected {}, found {}",
+                    type_name(expected),
+                    type_name(found)
+                )
+            }
+            TypeCheckError::InvalidBinaryOperands { op, left, right } => {
+                write!(
+                    f,
+                    "Invalid binary operands for '{}' (left: {}, right: {})",
+                    binary_op_symbol(op),
+                    type_name(left),
+                    type_name(right)
+                )
+            }
+            TypeCheckError::InvalidDereference(ty) => {
+                write!(f, "Cannot dereference value of type {}", type_name(ty))
+            }
+            TypeCheckError::UnknownTrait(name) => {
+                write!(f, "Unknown trait '{}'", name)
+            }
+            TypeCheckError::DuplicateImpl {
+                trait_name,
+                struct_name,
+            } => {
+                write!(
+                    f,
+                    "Duplicate impl of trait '{}' for struct '{}'",
+                    trait_name, struct_name
+                )
+            }
+            TypeCheckError::MissingImplMethod {
+                trait_name,
+                struct_name,
+                method,
+            } => {
+                write!(
+                    f,
+                    "Missing method '{}' in impl of trait '{}' for struct '{}'",
+                    method, trait_name, struct_name
+                )
+            }
+            TypeCheckError::MethodSignatureMismatch {
+                trait_name,
+                struct_name,
+                method,
+            } => {
+                write!(
+                    f,
+                    "Signature mismatch for method '{}' in impl of trait '{}' for struct '{}'",
+                    method, trait_name, struct_name
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TypeCheckError {}
+
+impl TypeCheckError {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            TypeCheckError::UndefinedVariable(_) => "TYP001",
+            TypeCheckError::UndefinedFunction(_) => "TYP002",
+            TypeCheckError::TypeMismatch { .. } => "TYP003",
+            TypeCheckError::InvalidBinaryOperands { .. } => "TYP004",
+            TypeCheckError::InvalidDereference(_) => "TYP005",
+            TypeCheckError::UnknownTrait(_) => "TYP006",
+            TypeCheckError::DuplicateImpl { .. } => "TYP007",
+            TypeCheckError::MissingImplMethod { .. } => "TYP008",
+            TypeCheckError::MethodSignatureMismatch { .. } => "TYP009",
+        }
+    }
+
+    pub fn category(&self) -> &'static str {
+        match self {
+            TypeCheckError::UnknownTrait(_)
+            | TypeCheckError::DuplicateImpl { .. }
+            | TypeCheckError::MissingImplMethod { .. }
+            | TypeCheckError::MethodSignatureMismatch { .. } => "Trait checking",
+            _ => "Type checking",
+        }
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        None
+    }
+
+    pub fn context(&self) -> Option<&'static str> {
+        match self {
+            TypeCheckError::InvalidBinaryOperands { .. } => Some("binary expression"),
+            TypeCheckError::TypeMismatch { .. } => Some("type compatibility"),
+            TypeCheckError::InvalidDereference(_) => Some("dereference"),
+            TypeCheckError::UndefinedVariable(_) => Some("name resolution"),
+            TypeCheckError::UndefinedFunction(_) => Some("name resolution"),
+            TypeCheckError::UnknownTrait(_) => Some("trait lookup"),
+            TypeCheckError::DuplicateImpl { .. } => Some("trait implementation"),
+            TypeCheckError::MissingImplMethod { .. } => Some("trait implementation"),
+            TypeCheckError::MethodSignatureMismatch { .. } => Some("trait implementation"),
+        }
+    }
+}
+
 impl TypeChecker {
+    fn types_equal(&self, left: &Type, right: &Type) -> bool {
+        match (left, right) {
+            (Type::Struct(a), Type::Struct(b)) => a.text(&self.source) == b.text(&self.source),
+            (
+                Type::Pointer {
+                    mutability: mut_a,
+                    pointee: pointee_a,
+                },
+                Type::Pointer {
+                    mutability: mut_b,
+                    pointee: pointee_b,
+                },
+            ) => mut_a == mut_b && self.types_equal(pointee_a.as_ref(), pointee_b.as_ref()),
+            (Type::Array(a), Type::Array(b)) => self.types_equal(a.as_ref(), b.as_ref()),
+            _ => left == right,
+        }
+    }
+
     pub fn new(source: &str) -> Self {
         let mut checker = Self {
             variables: HashMap::new(),
@@ -51,20 +195,42 @@ impl TypeChecker {
         };
 
         // Add built-in functions
-        checker.functions.insert("println".to_string(), None);
+        checker.functions.insert(
+            "println".to_string(),
+            FunctionRecord {
+                params: None,
+                return_type: None,
+            },
+        );
         // Seed intrinsic std.mem functions (runtime-provided)
-        checker
-            .functions
-            .insert("std__mem__copy".to_string(), Some(Type::Usize));
-        checker
-            .functions
-            .insert("std__mem__move".to_string(), Some(Type::Usize));
-        checker
-            .functions
-            .insert("std__mem__set".to_string(), Some(Type::Usize));
-        checker
-            .functions
-            .insert("std__mem__len".to_string(), Some(Type::Usize));
+        checker.functions.insert(
+            "std__mem__copy".to_string(),
+            FunctionRecord {
+                params: None,
+                return_type: Some(Type::Usize),
+            },
+        );
+        checker.functions.insert(
+            "std__mem__move".to_string(),
+            FunctionRecord {
+                params: None,
+                return_type: Some(Type::Usize),
+            },
+        );
+        checker.functions.insert(
+            "std__mem__set".to_string(),
+            FunctionRecord {
+                params: None,
+                return_type: Some(Type::Usize),
+            },
+        );
+        checker.functions.insert(
+            "std__mem__len".to_string(),
+            FunctionRecord {
+                params: None,
+                return_type: Some(Type::Usize),
+            },
+        );
 
         checker
     }
@@ -135,8 +301,18 @@ impl TypeChecker {
         // First pass: collect function signatures
         for func in &program.functions {
             let func_name = func.name.text(&self.source);
-            self.functions
-                .insert(func_name.to_string(), func.return_type.clone());
+            let params = func
+                .parameters
+                .iter()
+                .map(|p| p.type_annotation.clone())
+                .collect::<Vec<_>>();
+            self.functions.insert(
+                func_name.to_string(),
+                FunctionRecord {
+                    params: Some(params),
+                    return_type: func.return_type.clone(),
+                },
+            );
         }
 
         // Second pass: type check each function (mutating in place)
@@ -209,7 +385,7 @@ impl TypeChecker {
 
                 // If there's a type annotation, verify compatibility
                 if let Some(annotated_type) = type_annotation {
-                    if *annotated_type != value_type {
+                    if !self.types_equal(annotated_type, &value_type) {
                         return Err(TypeCheckError::TypeMismatch {
                             expected: annotated_type.clone(),
                             found: value_type.clone(),
@@ -273,42 +449,107 @@ impl TypeChecker {
 
             Expr::FunctionCall { path, args, ty } => {
                 // Build function key: join path with double underscores (module__function)
-                let func_name_string = path.mangle(&self.source, "__");
-                if !self.functions.contains_key(&func_name_string) {
-                    return Err(TypeCheckError::UndefinedFunction(func_name_string));
-                }
-                for arg in args {
-                    self.check_expression(arg)?;
-                }
-                let return_type = self
+                let original_name = path.mangle(&self.source, "__");
+                let (param_types, return_type_opt) = if let Some(record) = self
                     .functions
-                    .get(&func_name_string)
-                    .unwrap()
-                    .clone()
-                    .unwrap_or(Type::I64);
+                    .get(&original_name)
+                    .map(|record| (record.params.clone(), record.return_type.clone()))
+                {
+                    record
+                } else if let Some(record) = path
+                    .segments
+                    .last()
+                    .map(|seg| seg.text(&self.source).to_string())
+                    .and_then(|name| {
+                        self.functions
+                            .get(&name)
+                            .map(|r| (r.params.clone(), r.return_type.clone()))
+                    })
+                {
+                    record
+                } else {
+                    return Err(TypeCheckError::UndefinedFunction(original_name));
+                };
+
+                if let Some(param_types) = param_types {
+                    let expected_len = param_types.len();
+                    for (arg, expected_type) in args.iter_mut().zip(param_types.iter()) {
+                        if matches!(expected_type, Type::Struct(_) | Type::Array(_)) {
+                            self.check_expression(arg)?;
+                            continue;
+                        }
+                        apply_expected_argument_type(arg, expected_type);
+                        let arg_type = self.check_expression(arg)?;
+                        if !self.types_equal(&arg_type, expected_type) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: expected_type.clone(),
+                                found: arg_type,
+                            });
+                        }
+                    }
+                    if args.len() > expected_len {
+                        for arg in args.iter_mut().skip(expected_len) {
+                            self.check_expression(arg)?;
+                        }
+                    }
+                } else {
+                    for arg in args {
+                        self.check_expression(arg)?;
+                    }
+                }
+
+                let return_type = return_type_opt.unwrap_or(Type::I64);
                 *ty = return_type.clone();
                 return_type
             }
 
             Expr::Binary {
                 left,
-                op: _,
+                op,
                 right,
                 ty,
             } => {
                 let left_type = self.check_expression(left)?;
                 let right_type = self.check_expression(right)?;
 
-                // For simplicity, assume binary operations return the left operand's type
-                if left_type != right_type {
-                    return Err(TypeCheckError::TypeMismatch {
-                        expected: left_type.clone(),
-                        found: right_type,
-                    });
-                }
+                match op {
+                    BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
+                        if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
+                            return Err(TypeCheckError::InvalidBinaryOperands {
+                                op: op.clone(),
+                                left: left_type,
+                                right: right_type,
+                            });
+                        }
+                        if !self.types_equal(&left_type, &right_type) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: left_type.clone(),
+                                found: right_type,
+                            });
+                        }
 
-                *ty = left_type.clone();
-                left_type
+                        *ty = left_type.clone();
+                        left_type
+                    }
+                    BinaryOp::Equals => {
+                        if !self.types_equal(&left_type, &right_type) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: left_type.clone(),
+                                found: right_type,
+                            });
+                        }
+                        if !is_equality_compatible(&left_type) {
+                            return Err(TypeCheckError::InvalidBinaryOperands {
+                                op: op.clone(),
+                                left: left_type.clone(),
+                                right: right_type,
+                            });
+                        }
+
+                        *ty = Type::Bool;
+                        Type::Bool
+                    }
+                }
             }
 
             Expr::Dereference { operand, ty } => {
@@ -325,12 +566,16 @@ impl TypeChecker {
             }
 
             // For other expressions, return a placeholder type for now
-            Expr::StructLiteral { ty, .. } => {
-                let placeholder_type = Type::I64; // TODO: implement struct type checking
-                *ty = placeholder_type.clone();
-                placeholder_type
+            Expr::StructLiteral { name, fields, ty } => {
+                for field in fields.iter_mut() {
+                    self.check_expression(&mut field.value)?;
+                }
+                let struct_type = Type::Struct(*name);
+                *ty = struct_type.clone();
+                struct_type
             }
-            Expr::FieldAccess { ty, .. } => {
+            Expr::FieldAccess { object, ty, .. } => {
+                self.check_expression(object)?;
                 let placeholder_type = Type::I64; // TODO: implement field type checking
                 *ty = placeholder_type.clone();
                 placeholder_type
@@ -366,6 +611,112 @@ impl TypeChecker {
         };
 
         Ok(ty)
+    }
+}
+
+fn binary_op_symbol(op: &BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Subtract => "-",
+        BinaryOp::Multiply => "*",
+        BinaryOp::Divide => "/",
+        BinaryOp::Equals => "==",
+    }
+}
+
+fn type_name(ty: &Type) -> &'static str {
+    match ty {
+        Type::U8 => "u8",
+        Type::I8 => "i8",
+        Type::U16 => "u16",
+        Type::I16 => "i16",
+        Type::U32 => "u32",
+        Type::I32 => "i32",
+        Type::U64 => "u64",
+        Type::I64 => "i64",
+        Type::Usize => "usize",
+        Type::Isize => "isize",
+        Type::F32 => "f32",
+        Type::F64 => "f64",
+        Type::Bool => "bool",
+        Type::StrSlice => "str",
+        Type::Array(_) => "array",
+        Type::Struct(_) => "struct",
+        Type::Pointer { .. } => "pointer",
+        Type::Undetermined => "undetermined",
+    }
+}
+
+fn is_numeric_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::Isize
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::Usize
+            | Type::F32
+            | Type::F64
+    )
+}
+
+fn is_integer_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::Isize
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::Usize
+    )
+}
+
+fn is_equality_compatible(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Bool
+            | Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::Isize
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::Usize
+            | Type::F32
+            | Type::F64
+            | Type::Pointer { .. }
+            | Type::Struct(_)
+    )
+}
+
+fn apply_expected_argument_type(arg: &mut Expr, expected: &Type) {
+    match (arg, expected) {
+        (Expr::IntLiteral { ty, .. }, exp) if is_integer_type(exp) => {
+            *ty = exp.clone();
+        }
+        (Expr::FloatLiteral { ty, .. }, Type::F32) => {
+            *ty = Type::F32;
+        }
+        (Expr::FloatLiteral { ty, .. }, Type::F64) => {
+            *ty = Type::F64;
+        }
+        (Expr::BoolLiteral { ty, .. }, Type::Bool) => {
+            *ty = Type::Bool;
+        }
+        _ => {}
     }
 }
 
@@ -427,6 +778,74 @@ mod tests {
         let typed = type_check(program, source).unwrap();
 
         assert_eq!(typed.functions.len(), 2);
+    }
+
+    #[test]
+    fn test_equality_expression_is_bool() {
+        let source = "fn main() { let flag = 1 == 2 }";
+        let program = parse(source).unwrap();
+        let typed = type_check(program, source).unwrap();
+
+        let main_func = typed
+            .functions
+            .iter()
+            .find(|f| f.name.text(source) == "main")
+            .unwrap();
+        if let crate::Stmt::Let { value, .. } = &main_func.body[0] {
+            if let crate::Expr::Binary { ty, .. } = value {
+                assert_eq!(*ty, Type::Bool);
+            } else {
+                panic!("Expected binary expression");
+            }
+        } else {
+            panic!("Expected let statement");
+        }
+    }
+
+    #[test]
+    fn test_boolean_arithmetic_is_rejected() {
+        let source = "fn main() { let flag = true + false }";
+        let program = parse(source).unwrap();
+        let result = type_check(program, source);
+
+        match result {
+            Err(TypeCheckError::InvalidBinaryOperands { op, left, right }) => {
+                assert_eq!(op, BinaryOp::Add);
+                assert_eq!(left, Type::Bool);
+                assert_eq!(right, Type::Bool);
+            }
+            other => panic!("Expected InvalidBinaryOperands error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_boolean_division_is_rejected() {
+        let source = "fn main() { let flag = false / true }";
+        let program = parse(source).unwrap();
+        let result = type_check(program, source);
+
+        assert!(matches!(
+            result,
+            Err(TypeCheckError::InvalidBinaryOperands {
+                op: BinaryOp::Divide,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_mixed_type_equality_errors() {
+        let source = "fn main() { let flag = true == 1 }";
+        let program = parse(source).unwrap();
+        let result = type_check(program, source);
+
+        match result {
+            Err(TypeCheckError::TypeMismatch { expected, found }) => {
+                assert_eq!(expected, Type::Bool);
+                assert_eq!(found, Type::I64);
+            }
+            other => panic!("Expected TypeMismatch, got {:?}", other),
+        }
     }
 
     #[test]

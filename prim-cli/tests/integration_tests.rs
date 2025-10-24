@@ -1,6 +1,11 @@
-use prim_codegen::{CodegenError, generate_object_code};
-use prim_parse::{ParseError, parse};
+use prim_codegen::generate_object_code;
+use prim_parse::{ParseError, TypeCheckError, parse, type_check};
 use prim_tok::TokenError;
+
+fn type_check_program(source: &str) -> Result<prim_parse::Program, TypeCheckError> {
+    let program = parse(source).unwrap();
+    type_check(program, source)
+}
 
 #[test]
 fn test_tokenizer_error_unexpected_character() {
@@ -36,30 +41,31 @@ fn test_parser_error_unexpected_token() {
 #[test]
 fn test_codegen_error_undefined_variable() {
     let source = "fn main() { let x = unknown_var }";
-    let program = parse(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let result = type_check_program(source);
 
     match result {
-        Err(CodegenError::UndefinedVariable { name, context: _ }) => {
+        Err(TypeCheckError::UndefinedVariable(name)) => {
             assert_eq!(name, "unknown_var");
         }
-        _ => panic!("Expected CodegenError::UndefinedVariable, got {:?}", result),
+        other => panic!(
+            "Expected TypeCheckError::UndefinedVariable, got {:?}",
+            other
+        ),
     }
 }
 
 #[test]
 fn test_codegen_error_unsupported_function() {
     let source = "fn main() { unsupported_func() }";
-    let program = parse(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let result = type_check_program(source);
 
     match result {
-        Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
+        Err(TypeCheckError::UndefinedFunction(name)) => {
             assert_eq!(name, "unsupported_func");
         }
-        _ => panic!(
-            "Expected CodegenError::UnsupportedFunctionCall, got {:?}",
-            result
+        other => panic!(
+            "Expected TypeCheckError::UndefinedFunction, got {:?}",
+            other
         ),
     }
 }
@@ -67,7 +73,7 @@ fn test_codegen_error_unsupported_function() {
 #[test]
 fn test_successful_compilation() {
     let source = "fn main() { let x: u32 = 42\nprintln(x) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -82,7 +88,7 @@ fn test_successful_compilation() {
 #[test]
 fn test_arithmetic_expression() {
     let source = "fn main() { let result = 2 + 3 * 4\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -118,7 +124,7 @@ fn test_parser_error_statements_outside_function() {
 #[test]
 fn test_multiple_functions_compilation() {
     let source = "fn helper() -> u32 { let x = 10\nlet y = 5\nx + y }\nfn main() { println(42) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -131,7 +137,7 @@ fn test_multiple_functions_compilation() {
 #[test]
 fn test_function_with_return_type() {
     let source = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(5) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -215,9 +221,8 @@ fn test_cli_run_command() {
 
 #[test]
 fn test_byte_array_literal_codegen() {
-    use prim_parse::parse;
     let source = "fn main() { let a: [u8] = [1, 2, 3] }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
     assert!(
         result.is_ok(),
@@ -253,24 +258,35 @@ fn test_unified_error_handling() {
         Ok(_) => panic!("Expected error for invalid syntax"),
     }
 
-    // Test codegen error codes
-    let source = "fn main() { let x = unknown_var }";
-    let program = parse(source).unwrap();
+    // Test type check error codes
+    let type_check_result = type_check_program("fn main() { let v = true + false }");
+    match type_check_result {
+        Err(err) => {
+            assert_eq!(err.error_code(), "TYP004");
+            assert_eq!(err.category(), "Type checking");
+            assert_eq!(err.context(), Some("binary expression"));
+        }
+        Ok(_) => panic!("Expected type check error for boolean arithmetic"),
+    }
+
+    // Test codegen error codes with unsupported println argument
+    let source = "fn main() { println(\"hi\") }";
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
     match result {
         Err(err) => {
-            assert_eq!(err.error_code(), "COD001"); // UndefinedVariable
+            assert_eq!(err.error_code(), "COD008"); // InvalidExpression
             assert_eq!(err.category(), "Code Generation");
-            assert_eq!(err.context(), Some("expression evaluation"));
+            assert_eq!(err.context(), Some("println"));
         }
-        Ok(_) => panic!("Expected error for undefined variable"),
+        Ok(_) => panic!("Expected error for unsupported println argument"),
     }
 }
 
 #[test]
 fn test_parentheses_precedence_override() {
     let source = "fn main() { let result = (2 + 3) * 4\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -283,7 +299,7 @@ fn test_parentheses_precedence_override() {
 #[test]
 fn test_nested_parentheses_compilation() {
     let source = "fn main() { let result = ((1 + 2) * (3 + 4)) + 5\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -296,7 +312,7 @@ fn test_nested_parentheses_compilation() {
 #[test]
 fn test_parentheses_in_function_calls() {
     let source = "fn main() { println((10 + 5) * 2) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -309,7 +325,7 @@ fn test_parentheses_in_function_calls() {
 #[test]
 fn test_complex_parentheses_expression() {
     let source = "fn main() { let x = 2\nlet y = 3\nlet result = (x + y) * (x - y) + (x * y)\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -322,7 +338,7 @@ fn test_complex_parentheses_expression() {
 #[test]
 fn test_subtraction_basic_compilation() {
     let source = "fn main() { let result = 10 - 3\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -335,7 +351,7 @@ fn test_subtraction_basic_compilation() {
 #[test]
 fn test_subtraction_with_variables_compilation() {
     let source = "fn main() { let x = 15\nlet y = 5\nlet result = x - y\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -348,7 +364,7 @@ fn test_subtraction_with_variables_compilation() {
 #[test]
 fn test_subtraction_precedence_compilation() {
     let source = "fn main() { let result = 20 - 3 * 2\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -361,7 +377,7 @@ fn test_subtraction_precedence_compilation() {
 #[test]
 fn test_subtraction_chained_compilation() {
     let source = "fn main() { let result = 50 - 20 - 10\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -374,7 +390,7 @@ fn test_subtraction_chained_compilation() {
 #[test]
 fn test_division_basic_compilation() {
     let source = "fn main() { let result = 20 / 4\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -387,7 +403,7 @@ fn test_division_basic_compilation() {
 #[test]
 fn test_division_with_variables_compilation() {
     let source = "fn main() { let numerator = 100\nlet denominator = 5\nlet result = numerator / denominator\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -400,7 +416,7 @@ fn test_division_with_variables_compilation() {
 #[test]
 fn test_division_precedence_compilation() {
     let source = "fn main() { let result = 10 + 20 / 4\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -413,7 +429,7 @@ fn test_division_precedence_compilation() {
 #[test]
 fn test_division_chained_compilation() {
     let source = "fn main() { let result = 100 / 5 / 2\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -426,7 +442,7 @@ fn test_division_chained_compilation() {
 #[test]
 fn test_mixed_operations_compilation() {
     let source = "fn main() { let result = 20 - 10 / 2 + 3 * 4\nprintln(result) }";
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(
@@ -471,7 +487,7 @@ fn main() {
     println(final_result)
 }
 "#;
-    let program = parse(source).unwrap();
+    let program = type_check_program(source).unwrap();
     let result = generate_object_code(&program, source);
 
     assert!(

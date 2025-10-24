@@ -111,6 +111,55 @@ impl CraneliftCodeGenerator {
         Ok(product.emit()?)
     }
 
+    fn scalar_lane(ty: &Type) -> (cranelift::prelude::Type, i64) {
+        match ty {
+            Type::Bool | Type::I8 | Type::U8 => (types::I8, 1),
+            Type::I16 | Type::U16 => (types::I16, 2),
+            Type::I32 | Type::U32 => (types::I32, 4),
+            Type::I64 | Type::U64 | Type::Isize | Type::Usize => (types::I64, 8),
+            Type::Pointer { .. } | Type::Struct(_) | Type::Array(_) => (types::I64, 8),
+            Type::F32 => (types::F32, 4),
+            Type::F64 => (types::F64, 8),
+            Type::StrSlice => (types::I64, 8),
+            Type::Undetermined => {
+                panic!("Type checker must resolve all expression types before code generation")
+            }
+        }
+    }
+
+    fn zero_value(builder: &mut FunctionBuilder, lane: cranelift::prelude::Type) -> Value {
+        if lane.is_int() {
+            builder.ins().iconst(lane, 0)
+        } else if lane == types::F32 {
+            builder.ins().f32const(Ieee32::with_bits(0))
+        } else if lane == types::F64 {
+            builder.ins().f64const(Ieee64::with_bits(0))
+        } else {
+            builder.ins().iconst(lane, 0)
+        }
+    }
+
+    fn ensure_value_type(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        target: cranelift::prelude::Type,
+    ) -> Value {
+        let current = builder.func.dfg.value_type(value);
+        if current == target {
+            value
+        } else if current.is_int() && target.is_int() {
+            if current.bits() > target.bits() {
+                builder.ins().ireduce(target, value)
+            } else if current.bits() < target.bits() {
+                builder.ins().uextend(target, value)
+            } else {
+                value
+            }
+        } else {
+            value
+        }
+    }
+
     fn generate_function(
         &mut self,
         function: &Function,
@@ -136,8 +185,6 @@ impl CraneliftCodeGenerator {
         // Add parameters to signature (flatten aggregates)
         for param in &function.parameters {
             match &param.type_annotation {
-                prim_parse::Type::Bool => sig.params.push(AbiParam::new(types::I8)),
-                prim_parse::Type::Pointer { .. } => sig.params.push(AbiParam::new(types::I64)),
                 prim_parse::Type::StrSlice => {
                     sig.params.push(AbiParam::new(types::I64));
                     sig.params.push(AbiParam::new(types::I64));
@@ -152,15 +199,20 @@ impl CraneliftCodeGenerator {
                         sig.params.push(AbiParam::new(types::I64));
                     }
                 }
-                _ => sig.params.push(AbiParam::new(types::I64)),
+                prim_parse::Type::Array(_) => sig.params.push(AbiParam::new(types::I64)),
+                _ => {
+                    let (lane, _) = Self::scalar_lane(&param.type_annotation);
+                    sig.params.push(AbiParam::new(lane));
+                }
             }
         }
 
         // Add return type to signature
         if function.name.text(source) == "main" {
             sig.returns.push(AbiParam::new(types::I32)); // main returns int
-        } else if let Some(_return_type) = &function.return_type {
-            sig.returns.push(AbiParam::new(types::I64)); // For now, all returns are i64
+        } else if let Some(return_type) = &function.return_type {
+            let (lane, _) = Self::scalar_lane(return_type);
+            sig.returns.push(AbiParam::new(lane));
         }
 
         sig
@@ -253,12 +305,6 @@ impl CraneliftCodeGenerator {
         for param in &function.parameters {
             let name = param.name.text(source).to_string();
             match &param.type_annotation {
-                prim_parse::Type::Bool => {
-                    let var = builder.declare_var(types::I8);
-                    builder.def_var(var, block_params[i]);
-                    variables.insert(name, Var::One(var));
-                    i += 1;
-                }
                 prim_parse::Type::StrSlice => {
                     let a = builder.declare_var(types::I64);
                     let b = builder.declare_var(types::I64);
@@ -268,7 +314,8 @@ impl CraneliftCodeGenerator {
                     i += 2;
                 }
                 prim_parse::Type::Pointer { .. } => {
-                    let var = builder.declare_var(types::I64);
+                    let (lane, _) = Self::scalar_lane(&param.type_annotation);
+                    let var = builder.declare_var(lane);
                     builder.def_var(var, block_params[i]);
                     variables.insert(name, Var::One(var));
                     i += 1;
@@ -293,8 +340,16 @@ impl CraneliftCodeGenerator {
                         variables.insert(name, Var::Many(vs));
                     }
                 }
+                prim_parse::Type::Array(_) => {
+                    let (lane, _) = Self::scalar_lane(&param.type_annotation);
+                    let var = builder.declare_var(lane);
+                    builder.def_var(var, block_params[i]);
+                    variables.insert(name, Var::One(var));
+                    i += 1;
+                }
                 _ => {
-                    let var = builder.declare_var(types::I64);
+                    let (lane, _) = Self::scalar_lane(&param.type_annotation);
+                    let var = builder.declare_var(lane);
                     builder.def_var(var, block_params[i]);
                     variables.insert(name, Var::One(var));
                     i += 1;
@@ -320,7 +375,13 @@ impl CraneliftCodeGenerator {
             if let Some(return_val) = last_expr_value {
                 match return_val {
                     Val::One(v) => {
-                        builder.ins().return_(&[v]);
+                        let expected_lane = function
+                            .return_type
+                            .as_ref()
+                            .map(|ty| Self::scalar_lane(ty).0)
+                            .unwrap_or(types::I64);
+                        let coerced = Self::ensure_value_type(builder, v, expected_lane);
+                        builder.ins().return_(&[coerced]);
                     }
                     Val::Many(_) => {
                         return Err(CodegenError::InvalidExpression {
@@ -331,7 +392,12 @@ impl CraneliftCodeGenerator {
                 }
             } else {
                 // Return a default value if no expression
-                let zero = builder.ins().iconst(types::I64, 0);
+                let expected_lane = function
+                    .return_type
+                    .as_ref()
+                    .map(|ty| Self::scalar_lane(ty).0)
+                    .unwrap_or(types::I64);
+                let zero = Self::zero_value(builder, expected_lane);
                 builder.ins().return_(&[zero]);
             }
         } else {
@@ -370,12 +436,10 @@ impl CraneliftCodeGenerator {
                 )?;
                 match val {
                     Val::One(v) => {
-                        let vt = match value {
-                            Expr::BoolLiteral { .. } => types::I8,
-                            _ => types::I64,
-                        };
-                        let var = builder.declare_var(vt);
-                        builder.def_var(var, v);
+                        let (lane, _) = Self::scalar_lane(value.resolved_type());
+                        let coerced = Self::ensure_value_type(builder, v, lane);
+                        let var = builder.declare_var(lane);
+                        builder.def_var(var, coerced);
                         variables.insert(name.text(source).to_string(), Var::One(var));
                     }
                     Val::Many(vals) => {
@@ -526,7 +590,7 @@ impl CraneliftCodeGenerator {
 
                 Ok(Val::One(header_ptr))
             }
-            Expr::IntLiteral { span: value, .. } => {
+            Expr::IntLiteral { span: value, ty } => {
                 // Parse the literal (handle type suffixes like 42u32)
                 let value_text = value.text(source);
                 let num_part = value_text
@@ -539,7 +603,8 @@ impl CraneliftCodeGenerator {
                         message: format!("Invalid integer literal: {}", value_text),
                         context: "number parsing".to_string(),
                     })?;
-                Ok(Val::One(builder.ins().iconst(types::I64, num)))
+                let (lane, _) = Self::scalar_lane(ty);
+                Ok(Val::One(builder.ins().iconst(lane, num)))
             }
             Expr::FloatLiteral { span: value, .. } => Err(CodegenError::InvalidExpression {
                 message: format!(
@@ -634,8 +699,15 @@ impl CraneliftCodeGenerator {
                     BinaryOp::Multiply => builder.ins().imul(l, r),
                     BinaryOp::Divide => builder.ins().sdiv(l, r),
                     BinaryOp::Equals => {
-                        let cmp = builder.ins().icmp(IntCC::Equal, l, r);
-                        builder.ins().uextend(types::I64, cmp)
+                        let left_ty = left.resolved_type();
+                        let cmp = match left_ty {
+                            Type::F32 => builder.ins().fcmp(FloatCC::Equal, l, r),
+                            Type::F64 => builder.ins().fcmp(FloatCC::Equal, l, r),
+                            _ => builder.ins().icmp(IntCC::Equal, l, r),
+                        };
+                        let one = builder.ins().iconst(types::I8, 1);
+                        let zero = builder.ins().iconst(types::I8, 0);
+                        builder.ins().select(cmp, one, zero)
                     }
                 };
                 Ok(Val::One(result))
@@ -970,7 +1042,7 @@ impl CraneliftCodeGenerator {
                     }
                 }
             }
-            Expr::Dereference { operand, .. } => {
+            Expr::Dereference { operand, ty } => {
                 // Generate the pointer expression
                 let ptr_val = Self::generate_expression_impl_static(
                     struct_layouts,
@@ -992,15 +1064,9 @@ impl CraneliftCodeGenerator {
                     }
                 };
 
-                // LIMITATION: Always loads 8 bytes (i64) regardless of pointee type
-                //
-                // Examples of incorrect behavior:
-                //   *ptr_u8   loads 8 bytes instead of 1 byte
-                //   *ptr_i32  loads 8 bytes instead of 4 bytes
-                //
-                // This can cause memory safety issues and incorrect values.
-                // To fix: implement type tracking for expressions or require explicit type annotations.
-                let loaded_val = builder.ins().load(types::I64, MemFlags::new(), ptr_val, 0);
+                // Load using the pointee lane determined by the type checker
+                let (lane, _) = Self::scalar_lane(ty);
+                let loaded_val = builder.ins().load(lane, MemFlags::new(), ptr_val, 0);
                 Ok(Val::One(loaded_val))
             }
         }
@@ -1113,12 +1179,9 @@ impl CraneliftCodeGenerator {
     fn get_or_create_println_bool_function(
         module: &mut ObjectModule,
     ) -> Result<cranelift_module::FuncId, CodegenError> {
-        // Try to get existing function first
-        if let Ok(func_id) = module.declare_function("println_bool_cached", Linkage::Local, &{
-            let mut sig = module.make_signature();
-            sig.params.push(AbiParam::new(types::I8));
-            sig
-        }) {
+        if let Some(cranelift_module::FuncOrDataId::Func(func_id)) =
+            module.get_name("println_bool_cached")
+        {
             return Ok(func_id);
         }
 
@@ -1306,12 +1369,13 @@ pub fn generate_object_code(program: &Program, source: &str) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prim_parse::parse;
+    use prim_parse::{TypeCheckError, parse, type_check};
 
     #[test]
     fn test_generate_simple_let() {
         let source = "fn main() { let x: u32 = 5 }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
         // Just check that we get some object code without panicking
@@ -1324,6 +1388,7 @@ mod tests {
     fn test_generate_arithmetic() {
         let source = "fn main() { let result = 3 }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
@@ -1335,6 +1400,7 @@ mod tests {
     fn test_generate_println() {
         let source = "fn main() { println(5) }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
@@ -1346,6 +1412,7 @@ mod tests {
     fn test_generate_complex_expression() {
         let source = "fn main() { let result = 2 + 3 * 4 }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
         assert!(object_code.is_ok());
@@ -1357,13 +1424,13 @@ mod tests {
     fn test_error_undefined_variable() {
         let source = "fn main() { let result = unknown_var }";
         let program = parse(source).unwrap();
-        let result = generate_object_code(&program, source);
+        let result = type_check(program, source);
 
         match result {
-            Err(CodegenError::UndefinedVariable { name, context: _ }) => {
+            Err(TypeCheckError::UndefinedVariable(name)) => {
                 assert_eq!(name, "unknown_var");
             }
-            _ => panic!("Expected UndefinedVariable error, got {:?}", result),
+            other => panic!("Expected UndefinedVariable error, got {:?}", other),
         }
     }
 
@@ -1371,13 +1438,13 @@ mod tests {
     fn test_error_unsupported_function() {
         let source = "fn main() { unsupported_func() }";
         let program = parse(source).unwrap();
-        let result = generate_object_code(&program, source);
+        let result = type_check(program, source);
 
         match result {
-            Err(CodegenError::UnsupportedFunctionCall { name, context: _ }) => {
+            Err(TypeCheckError::UndefinedFunction(name)) => {
                 assert_eq!(name, "unsupported_func");
             }
-            _ => panic!("Expected UnsupportedFunctionCall error, got {:?}", result),
+            other => panic!("Expected UndefinedFunction error, got {:?}", other),
         }
     }
 
@@ -1385,11 +1452,9 @@ mod tests {
     fn test_generate_boolean_literals() {
         let source = "fn main() { let flag: bool = true; println(flag) }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
-        if let Err(e) = &object_code {
-            println!("Error generating boolean literals: {:?}", e);
-        }
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
         assert!(!code.is_empty());
@@ -1399,11 +1464,45 @@ mod tests {
     fn test_generate_boolean_false() {
         let source = "fn main() { println(false) }";
         let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
         let object_code = generate_object_code(&program, source);
 
-        if let Err(e) = &object_code {
-            println!("Error generating boolean false: {:?}", e);
-        }
+        assert!(object_code.is_ok());
+        let code = object_code.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[test]
+    fn test_generate_boolean_equality_expression() {
+        let source = "fn main() { let flag = 1 == 1; println(flag) }";
+        let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
+        let object_code = generate_object_code(&program, source);
+
+        assert!(object_code.is_ok());
+        let code = object_code.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[test]
+    fn test_generate_function_return_bool() {
+        let source = "fn is_zero(x: i64) -> bool { x == 0 } fn main() { let result = is_zero(0); println(result) }";
+        let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
+        let object_code = generate_object_code(&program, source);
+
+        assert!(object_code.is_ok());
+        let code = object_code.unwrap();
+        assert!(!code.is_empty());
+    }
+
+    #[test]
+    fn test_generate_boolean_array_literal() {
+        let source = "fn main() { let flags = [true, false, true] }";
+        let program = parse(source).unwrap();
+        let program = type_check(program, source).unwrap();
+        let object_code = generate_object_code(&program, source);
+
         assert!(object_code.is_ok());
         let code = object_code.unwrap();
         assert!(!code.is_empty());

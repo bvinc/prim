@@ -28,6 +28,16 @@ mod test_programs {
         "test_programs/arithmetic.expected"
     );
     test_program!(
+        boolean_literals,
+        "test_programs/boolean_literals.prim",
+        "test_programs/boolean_literals.expected"
+    );
+    test_program!(
+        boolean_arithmetic_error,
+        "test_programs/boolean_arithmetic_error.prim",
+        "test_programs/boolean_arithmetic_error.expected"
+    );
+    test_program!(
         semicolon_termination,
         "test_programs/semicolon_termination.prim",
         "test_programs/semicolon_termination.expected"

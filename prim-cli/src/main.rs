@@ -1,6 +1,6 @@
 use indexmap::IndexSet;
 use prim_codegen::generate_object_code;
-use prim_parse::{self, parse};
+use prim_parse::{self, parse, type_check};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -347,7 +347,9 @@ import std.io
     // Parse the combined source code
     let program =
         parse(&combined_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    Ok((program, combined_source))
+    let typed_program = type_check(program, &combined_source)
+        .map_err(|err| MainError::CompilationError(format!("Type check error: {}", err)))?;
+    Ok((typed_program, combined_source))
 }
 
 fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainError> {
@@ -458,8 +460,10 @@ fn compile_module_dir(dir: &Path) -> Result<(prim_parse::Program, String), MainE
 
     let program =
         parse(&combined_source).map_err(|err| MainError::CompilationError(err.to_string()))?;
+    let typed_program = type_check(program, &combined_source)
+        .map_err(|err| MainError::CompilationError(format!("Type check error: {}", err)))?;
 
-    Ok((program, combined_source))
+    Ok((typed_program, combined_source))
 }
 
 fn module_search_path(module_root: &Path, std_root: &Path, segments: &[String]) -> PathBuf {

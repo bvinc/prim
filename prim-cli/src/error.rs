@@ -4,7 +4,7 @@
 //! implement to ensure consistent error handling and reporting.
 
 use prim_codegen::CodegenError;
-use prim_parse::ParseError;
+use prim_parse::{ParseError, TypeCheckError};
 use prim_tok::TokenError;
 
 /// A unified trait for all compiler errors
@@ -31,6 +31,7 @@ pub enum CompilerError {
     Token(TokenError),
     Parse(ParseError),
     Codegen(CodegenError),
+    TypeCheck(TypeCheckError),
 }
 
 impl std::fmt::Display for CompilerError {
@@ -39,6 +40,7 @@ impl std::fmt::Display for CompilerError {
             CompilerError::Token(err) => err.fmt(f),
             CompilerError::Parse(err) => err.fmt(f),
             CompilerError::Codegen(err) => err.fmt(f),
+            CompilerError::TypeCheck(err) => err.fmt(f),
         }
     }
 }
@@ -63,12 +65,19 @@ impl From<CodegenError> for CompilerError {
     }
 }
 
+impl From<TypeCheckError> for CompilerError {
+    fn from(err: TypeCheckError) -> Self {
+        CompilerError::TypeCheck(err)
+    }
+}
+
 impl PrimError for CompilerError {
     fn error_code(&self) -> &'static str {
         match self {
             CompilerError::Token(err) => err.error_code(),
             CompilerError::Parse(err) => err.error_code(),
             CompilerError::Codegen(err) => err.error_code(),
+            CompilerError::TypeCheck(err) => err.error_code(),
         }
     }
 
@@ -77,6 +86,7 @@ impl PrimError for CompilerError {
             CompilerError::Token(err) => err.category(),
             CompilerError::Parse(err) => err.category(),
             CompilerError::Codegen(err) => err.category(),
+            CompilerError::TypeCheck(err) => err.category(),
         }
     }
 
@@ -85,6 +95,7 @@ impl PrimError for CompilerError {
             CompilerError::Token(err) => err.position(),
             CompilerError::Parse(err) => err.position(),
             CompilerError::Codegen(err) => err.position(),
+            CompilerError::TypeCheck(err) => err.position(),
         }
     }
 
@@ -93,6 +104,7 @@ impl PrimError for CompilerError {
             CompilerError::Token(err) => err.context(),
             CompilerError::Parse(err) => err.context(),
             CompilerError::Codegen(err) => err.context(),
+            CompilerError::TypeCheck(err) => err.context(),
         }
     }
 }

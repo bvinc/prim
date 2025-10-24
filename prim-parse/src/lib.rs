@@ -103,6 +103,28 @@ pub enum Expr {
     },
 }
 
+impl Expr {
+    pub fn resolved_type(&self) -> &Type {
+        match self {
+            Expr::IntLiteral { ty, .. }
+            | Expr::FloatLiteral { ty, .. }
+            | Expr::BoolLiteral { ty, .. }
+            | Expr::StringLiteral { ty, .. }
+            | Expr::Identifier { ty, .. }
+            | Expr::Binary { ty, .. }
+            | Expr::FunctionCall { ty, .. }
+            | Expr::StructLiteral { ty, .. }
+            | Expr::FieldAccess { ty, .. }
+            | Expr::Dereference { ty, .. }
+            | Expr::ArrayLiteral { ty, .. } => ty,
+        }
+    }
+
+    pub fn resolved_type_cloned(&self) -> Type {
+        self.resolved_type().clone()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
