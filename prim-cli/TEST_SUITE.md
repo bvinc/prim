@@ -18,6 +18,7 @@ This directory contains the official test programs for the Prim language, along 
 - `type_annotations.prim` - Explicit type annotations
 - `precedence.prim` - Operator precedence (multiplication before addition)
 - `parentheses.prim` - Parentheses override precedence
+- `loop_break.prim` - `loop {}` with `break` exiting to subsequent statements
 
 ### Statement Termination
 - `semicolon_termination.prim` - Multiple statements with semicolons

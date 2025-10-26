@@ -1,4 +1,4 @@
-use crate::{BinaryOp, Expr, Function, Program, Stmt, Type};
+use crate::{BinaryOp, Expr, Function, Program, Span, Stmt, Type};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -19,6 +19,7 @@ pub struct TypeChecker {
     #[allow(clippy::type_complexity)]
     traits: HashMap<String, HashMap<String, (Vec<Type>, Option<Type>)>>,
     seen_impls: HashSet<(String, String)>,
+    loop_depth: usize,
 }
 
 #[derive(Debug)]
@@ -49,6 +50,9 @@ pub enum TypeCheckError {
         trait_name: String,
         struct_name: String,
         method: String,
+    },
+    BreakOutsideLoop {
+        span: Span,
     },
 }
 
@@ -116,6 +120,9 @@ impl fmt::Display for TypeCheckError {
                     method, trait_name, struct_name
                 )
             }
+            TypeCheckError::BreakOutsideLoop { .. } => {
+                write!(f, "'break' is only allowed inside a loop")
+            }
         }
     }
 }
@@ -134,6 +141,7 @@ impl TypeCheckError {
             TypeCheckError::DuplicateImpl { .. } => "TYP007",
             TypeCheckError::MissingImplMethod { .. } => "TYP008",
             TypeCheckError::MethodSignatureMismatch { .. } => "TYP009",
+            TypeCheckError::BreakOutsideLoop { .. } => "TYP010",
         }
     }
 
@@ -148,7 +156,10 @@ impl TypeCheckError {
     }
 
     pub fn position(&self) -> Option<usize> {
-        None
+        match self {
+            TypeCheckError::BreakOutsideLoop { span } => Some(span.start()),
+            _ => None,
+        }
     }
 
     pub fn context(&self) -> Option<&'static str> {
@@ -162,6 +173,7 @@ impl TypeCheckError {
             TypeCheckError::DuplicateImpl { .. } => Some("trait implementation"),
             TypeCheckError::MissingImplMethod { .. } => Some("trait implementation"),
             TypeCheckError::MethodSignatureMismatch { .. } => Some("trait implementation"),
+            TypeCheckError::BreakOutsideLoop { .. } => Some("loop control flow"),
         }
     }
 }
@@ -192,6 +204,7 @@ impl TypeChecker {
             source: source.to_string(),
             traits: HashMap::new(),
             seen_impls: HashSet::new(),
+            loop_depth: 0,
         };
 
         // Add built-in functions
@@ -326,6 +339,7 @@ impl TypeChecker {
     fn check_function(&mut self, function: &mut Function) -> Result<(), TypeCheckError> {
         // Enter function scope - clear variables and add parameters
         self.variables.clear();
+        self.loop_depth = 0;
 
         // Add parameters to variable scope
         for param in &function.parameters {
@@ -402,6 +416,20 @@ impl TypeChecker {
             }
             Stmt::Expr(expr) => {
                 self.check_expression(expr)?;
+                Ok(())
+            }
+            Stmt::Loop { body, .. } => {
+                self.loop_depth += 1;
+                for inner in body.iter_mut() {
+                    self.check_statement(inner)?;
+                }
+                self.loop_depth -= 1;
+                Ok(())
+            }
+            Stmt::Break { span } => {
+                if self.loop_depth == 0 {
+                    return Err(TypeCheckError::BreakOutsideLoop { span: *span });
+                }
                 Ok(())
             }
         }
@@ -830,6 +858,24 @@ mod tests {
                 op: BinaryOp::Divide,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn test_loop_with_break_type_checks() {
+        let source = "fn main() { loop { break } }";
+        let program = parse(source).unwrap();
+        assert!(type_check(program, source).is_ok());
+    }
+
+    #[test]
+    fn test_break_outside_loop_is_error() {
+        let source = "fn main() { break }";
+        let program = parse(source).unwrap();
+        let result = type_check(program, source);
+        assert!(matches!(
+            result,
+            Err(TypeCheckError::BreakOutsideLoop { .. })
         ));
     }
 

@@ -45,6 +45,11 @@ impl Point {
 if x == 5 {
     println("It is 5")
 }
+
+loop {
+    println(x)
+    break
+}
 ```
 
 ## Git Hooks

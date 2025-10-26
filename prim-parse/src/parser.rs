@@ -938,6 +938,8 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
         match self.peek_kind() {
             Some(TokenKind::Let) => self.parse_let_statement(),
+            Some(TokenKind::Loop) => self.parse_loop_statement(),
+            Some(TokenKind::Break) => self.parse_break_statement(),
             _ => {
                 // Expression statement (no semicolon required)
                 let expr = self.parse_expression(Precedence::NONE)?;
@@ -974,6 +976,27 @@ impl<'a> Parser<'a> {
             type_annotation,
             value,
         })
+    }
+
+    fn parse_loop_statement(&mut self) -> Result<Stmt, ParseError> {
+        let loop_start = {
+            let token = self.consume(TokenKind::Loop, "Expected 'loop'")?;
+            token.span.start()
+        };
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace, "Expected '{' after 'loop'")?;
+        let body = self.parse_statement_list()?;
+        let end = self.consume(TokenKind::RightBrace, "Expected '}' to end loop body")?;
+
+        Ok(Stmt::Loop {
+            body,
+            span: Span::new(loop_start, end.span.end()),
+        })
+    }
+
+    fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {
+        let token = self.consume(TokenKind::Break, "Expected 'break'")?;
+        Ok(Stmt::Break { span: token.span })
     }
 
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token, ParseError> {

@@ -1,0 +1,10 @@
+fn main() {
+    loop {
+        println(1)
+        println(2)
+        break
+        println(999)
+    }
+
+    println(3)
+}

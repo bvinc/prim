@@ -27,8 +27,10 @@ Notes:
 
 ### Statements
 ```
-statement      → let_stmt | expr_stmt
+statement      → let_stmt | loop_stmt | break_stmt | expr_stmt
 let_stmt       → "let" IDENTIFIER ( ":" type )? "=" expression terminator
+loop_stmt      → "loop" block
+break_stmt     → "break" terminator
 expr_stmt      → expression terminator
 terminator     → ";" | NEWLINE | "}"
 ```
@@ -54,7 +56,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 ## Lexical Rules
 
 ### Tokens
-- **Keywords**: `fn`, `let`, `if`, `true`, `false`, `mod`, `import`
+- **Keywords**: `fn`, `let`, `loop`, `break`, `if`, `true`, `false`, `mod`, `import`
 - **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`, `bool`
 - **Operators**: `+`, `-`, `*`, `/`, `=`, `==`, `->`, `(`, `)`, `{`, `}`, `,`, `:`, `;`
 - **Literals**: 
@@ -104,6 +106,12 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - Boolean type: `bool` (values: `true`, `false`)
 - No implicit type conversions
 - Type inference for `let` bindings without explicit types
+
+### Control Flow
+- `loop { ... }` executes its body repeatedly without an implicit exit condition.
+- `break` terminates the innermost enclosing `loop` and resumes execution after that loop's block.
+- `break` requires a statement terminator (newline, `;`, or `}`) and is rejected outside of loops.
+- Code that appears after a `break` inside the same block is still parsed and type-checked even though it is unreachable at runtime.
 
 ### Operator Precedence (highest to lowest)
 1. Function calls `()`

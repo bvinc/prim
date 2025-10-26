@@ -22,6 +22,8 @@ pub enum TokenKind {
     Import,
     Mod,
     If,
+    Loop,
+    Break,
     Println,
     For,
     True,
@@ -313,6 +315,8 @@ impl<'a> Tokenizer<'a> {
             "impl" => TokenKind::Impl,
             "trait" => TokenKind::Trait,
             "if" => TokenKind::If,
+            "loop" => TokenKind::Loop,
+            "break" => TokenKind::Break,
             "import" => TokenKind::Import,
             "mod" => TokenKind::Mod,
             "println" => TokenKind::Println,
@@ -673,6 +677,19 @@ mod tests {
         assert_eq!(tokens[4].span.text(src), "mut");
         assert_eq!(tokens[5].kind, TokenKind::I32);
         assert_eq!(tokens[5].span.text(src), "i32");
+    }
+
+    #[test]
+    fn test_loop_and_break_tokens() {
+        let src = "loop { break looped }";
+        let mut tokenizer = Tokenizer::new(src);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(tokens[0].kind, TokenKind::Loop);
+        assert_eq!(tokens[1].kind, TokenKind::LeftBrace);
+        assert_eq!(tokens[2].kind, TokenKind::Break);
+        assert_eq!(tokens[3].kind, TokenKind::Identifier);
+        assert_eq!(tokens[3].span.text(src), "looped");
     }
 
     #[test]

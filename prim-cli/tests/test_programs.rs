@@ -38,6 +38,11 @@ mod test_programs {
         "test_programs/boolean_arithmetic_error.expected"
     );
     test_program!(
+        loop_break,
+        "test_programs/loop_break.prim",
+        "test_programs/loop_break.expected"
+    );
+    test_program!(
         semicolon_termination,
         "test_programs/semicolon_termination.prim",
         "test_programs/semicolon_termination.expected"

@@ -43,6 +43,19 @@ struct FieldLayout {
     cranelift_type: cranelift::prelude::Type,
 }
 
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct LoopContext {
+    header: Block,
+    exit: Block,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockStatus {
+    Reachable,
+    Terminated,
+}
+
 impl CraneliftCodeGenerator {
     pub fn new() -> Result<Self, CodegenError> {
         let mut flag_builder = settings::builder();
@@ -254,6 +267,7 @@ impl CraneliftCodeGenerator {
 
         let mut variables = variables;
         let mut last_expr_value = None;
+        let mut loop_stack = Vec::new();
 
         for stmt in &function.body {
             match stmt {
@@ -270,7 +284,7 @@ impl CraneliftCodeGenerator {
                     )?);
                 }
                 _ => {
-                    Self::generate_statement_impl_static(
+                    let _ = Self::generate_statement_impl_static(
                         &self.struct_layouts,
                         &mut variables,
                         &mut self.module,
@@ -279,13 +293,14 @@ impl CraneliftCodeGenerator {
                         println_func_id,
                         function_ids,
                         source,
+                        &mut loop_stack,
                     )?;
                     last_expr_value = None;
                 }
             }
         }
         Self::generate_function_return(&mut builder, function, last_expr_value, source)?;
-
+        builder.seal_all_blocks();
         builder.finalize();
         Ok(())
     }
@@ -416,7 +431,8 @@ impl CraneliftCodeGenerator {
         println_func_id: cranelift_module::FuncId,
         function_ids: &HashMap<String, cranelift_module::FuncId>,
         source: &str,
-    ) -> Result<(), CodegenError> {
+        loop_stack: &mut Vec<LoopContext>,
+    ) -> Result<BlockStatus, CodegenError> {
         match stmt {
             Stmt::Let {
                 name,
@@ -453,7 +469,7 @@ impl CraneliftCodeGenerator {
                     }
                 }
 
-                Ok(())
+                Ok(BlockStatus::Reachable)
             }
             Stmt::Expr(expr) => {
                 Self::generate_expression_impl_static(
@@ -466,7 +482,71 @@ impl CraneliftCodeGenerator {
                     function_ids,
                     source,
                 )?;
-                Ok(())
+                Ok(BlockStatus::Reachable)
+            }
+            Stmt::Loop { body, .. } => {
+                let loop_header = builder.create_block();
+                let loop_body = builder.create_block();
+                let loop_exit = builder.create_block();
+
+                builder.ins().jump(loop_header, &[]);
+
+                builder.switch_to_block(loop_header);
+                builder.ins().jump(loop_body, &[]);
+
+                builder.switch_to_block(loop_body);
+                loop_stack.push(LoopContext {
+                    header: loop_header,
+                    exit: loop_exit,
+                });
+
+                let mut body_status = BlockStatus::Reachable;
+                for stmt in body {
+                    body_status = Self::generate_statement_impl_static(
+                        struct_layouts,
+                        variables,
+                        module,
+                        builder,
+                        stmt,
+                        println_func_id,
+                        function_ids,
+                        source,
+                        loop_stack,
+                    )?;
+                    if matches!(body_status, BlockStatus::Terminated) {
+                        break;
+                    }
+                }
+
+                loop_stack.pop();
+
+                if matches!(body_status, BlockStatus::Reachable) {
+                    let resume_block = builder
+                        .current_block()
+                        .expect("loop body should have an active block");
+                    builder.ins().jump(loop_header, &[]);
+                    builder.seal_block(resume_block);
+                }
+                builder.seal_block(loop_header);
+                builder.switch_to_block(loop_exit);
+
+                Ok(BlockStatus::Reachable)
+            }
+            Stmt::Break { span } => {
+                let ctx = loop_stack
+                    .last()
+                    .ok_or_else(|| CodegenError::InvalidExpression {
+                        message: format!(
+                            "'break' used outside of a loop near byte {}",
+                            span.start()
+                        ),
+                        context: "loop lowering".to_string(),
+                    })?;
+                builder.ins().jump(ctx.exit, &[]);
+                if let Some(active) = builder.current_block() {
+                    builder.seal_block(active);
+                }
+                Ok(BlockStatus::Terminated)
             }
         }
     }

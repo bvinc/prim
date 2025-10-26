@@ -162,6 +162,13 @@ pub enum Stmt {
         value: Expr,
     },
     Expr(Expr),
+    Loop {
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    Break {
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -299,6 +306,42 @@ mod tests {
                 }
             }
             _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_loop_with_break() {
+        let source = "fn main() { loop { break } }";
+        let program = parse(source).unwrap();
+        let main_func = &program.functions[0];
+        assert_eq!(main_func.body.len(), 1);
+        match &main_func.body[0] {
+            Stmt::Loop { body, span } => {
+                assert_eq!(body.len(), 1);
+                assert_eq!(span.text(source), "loop { break }");
+                assert!(matches!(body[0], Stmt::Break { .. }));
+            }
+            other => panic!("Expected loop statement, found {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_loops_preserve_spans() {
+        let source = "fn main() {\n    loop {\n        loop {\n            break\n        }\n        break\n    }\n}";
+        let program = parse(source).unwrap();
+        let main_func = &program.functions[0];
+        match &main_func.body[0] {
+            Stmt::Loop { body, .. } => {
+                assert_eq!(body.len(), 2);
+                match &body[0] {
+                    Stmt::Loop { body: inner, .. } => {
+                        assert!(matches!(inner[0], Stmt::Break { .. }));
+                    }
+                    other => panic!("Expected inner loop, found {:?}", other),
+                }
+                assert!(matches!(body[1], Stmt::Break { .. }));
+            }
+            other => panic!("Expected outer loop, found {:?}", other),
         }
     }
 
