@@ -1,0 +1,13 @@
+fn main() {
+    println(3.5f32);
+    println(1.25f64);
+
+    let sum_f32: f32 = 1.5f32 + 2.25f32;
+    println(sum_f32);
+
+    let div_f64: f64 = 7.5f64 / 2.5f64;
+    println(div_f64);
+
+    let eq: bool = 1.5f32 * 2.0f32 == 3.0f32;
+    println(eq);
+}

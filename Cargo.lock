@@ -381,6 +381,7 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "prim-codegen",
+ "prim-compiler",
  "prim-parse",
  "prim-tok",
  "tempfile",
@@ -395,6 +396,15 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
+ "prim-compiler",
+ "prim-parse",
+ "tempfile",
+]
+
+[[package]]
+name = "prim-compiler"
+version = "0.1.0"
+dependencies = [
  "prim-parse",
 ]
 

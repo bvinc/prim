@@ -1,0 +1,4 @@
+fn main() {
+    let too_big: u8 = 300;
+    let bad_float: f32 = 1e50f32;
+}

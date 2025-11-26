@@ -11,8 +11,12 @@ path = "src/main.rs"
 prim-tok = { path = "../prim-tok" }
 prim-parse = { path = "../prim-parse" }
 prim-codegen = { path = "../prim-codegen" }
+prim-compiler = { path = "../prim-compiler" }
 tempfile = "3.8"
 indexmap = "2.2"
+
+[dev-dependencies]
+tempfile = "3.8"
 
 [lints]
 workspace = true

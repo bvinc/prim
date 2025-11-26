@@ -7,9 +7,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+prim-compiler = { path = "../prim-compiler" }
 prim-parse = { path = "../prim-parse" }
 cranelift = "0.122"
 cranelift-module = "0.122"
 cranelift-object = "0.122"
 cranelift-jit = "0.122"
 cranelift-native = "0.122"
+
+[dev-dependencies]
+tempfile = "3.8"

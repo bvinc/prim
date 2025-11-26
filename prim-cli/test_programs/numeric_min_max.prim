@@ -1,0 +1,36 @@
+fn main() {
+    println(0u8);
+    println(255u8);
+
+    let min_i8: i8 = -128i8;
+    println(min_i8);
+    println(127i8);
+
+    println(0u16);
+    println(65535u16);
+
+    let min_i16: i16 = -32768i16;
+    println(min_i16);
+    println(32767i16);
+
+    println(0u32);
+    println(4294967295u32);
+
+    let min_i32: i32 = -2147483648i32;
+    println(min_i32);
+    println(2147483647i32);
+
+    println(0u64);
+    println(18446744073709551615u64);
+
+    let min_i64: i64 = -9223372036854775808i64;
+    println(min_i64);
+    println(9223372036854775807i64);
+
+    println(0usize);
+    println(18446744073709551615usize);
+
+    let min_isize: isize = -9223372036854775808isize;
+    println(min_isize);
+    println(9223372036854775807isize);
+}

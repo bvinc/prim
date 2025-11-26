@@ -1,10 +1,21 @@
 use prim_codegen::generate_object_code;
-use prim_parse::{ParseError, TypeCheckError, parse, type_check};
+use prim_compiler::{Program as LoadedProgram, load_program, type_check_program};
+use prim_parse::{ParseError, TypeCheckError, parse};
 use prim_tok::TokenError;
+use std::fs;
+use std::io::Write;
+use tempfile::tempdir;
 
-fn type_check_program(source: &str) -> Result<prim_parse::Program, TypeCheckError> {
-    let program = parse(source).unwrap();
-    type_check(program, source)
+fn load_and_type_check(source: &str) -> Result<LoadedProgram, String> {
+    let dir = tempdir().map_err(|e| e.to_string())?;
+    let path = dir.path().join("main.prim");
+    let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
+    file.write_all(source.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let mut loaded = load_program(&path).map_err(|e| e.to_string())?;
+    type_check_program(&mut loaded.program).map_err(|e| e.to_string())?;
+    Ok(loaded.program)
 }
 
 #[test]
@@ -41,7 +52,11 @@ fn test_parser_error_unexpected_token() {
 #[test]
 fn test_codegen_error_undefined_variable() {
     let source = "fn main() { let x = unknown_var }";
-    let result = type_check_program(source);
+    let dir = tempdir().expect("tmpdir");
+    let path = dir.path().join("main.prim");
+    fs::write(&path, source).expect("write");
+    let mut loaded = load_program(&path).expect("load");
+    let result = type_check_program(&mut loaded.program);
 
     match result {
         Err(TypeCheckError::UndefinedVariable(name)) => {
@@ -57,7 +72,11 @@ fn test_codegen_error_undefined_variable() {
 #[test]
 fn test_codegen_error_unsupported_function() {
     let source = "fn main() { unsupported_func() }";
-    let result = type_check_program(source);
+    let dir = tempdir().expect("tmpdir");
+    let path = dir.path().join("main.prim");
+    fs::write(&path, source).expect("write");
+    let mut loaded = load_program(&path).expect("load");
+    let result = type_check_program(&mut loaded.program);
 
     match result {
         Err(TypeCheckError::UndefinedFunction(name)) => {
@@ -73,8 +92,8 @@ fn test_codegen_error_unsupported_function() {
 #[test]
 fn test_successful_compilation() {
     let source = "fn main() { let x: u32 = 42\nprintln(x) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -88,8 +107,8 @@ fn test_successful_compilation() {
 #[test]
 fn test_arithmetic_expression() {
     let source = "fn main() { let result = 2 + 3 * 4\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -124,8 +143,8 @@ fn test_parser_error_statements_outside_function() {
 #[test]
 fn test_multiple_functions_compilation() {
     let source = "fn helper() -> u32 { let x = 10\nlet y = 5\nx + y }\nfn main() { println(42) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -137,8 +156,8 @@ fn test_multiple_functions_compilation() {
 #[test]
 fn test_function_with_return_type() {
     let source = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(5) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -222,8 +241,8 @@ fn test_cli_run_command() {
 #[test]
 fn test_byte_array_literal_codegen() {
     let source = "fn main() { let a: [u8] = [1, 2, 3] }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
     assert!(
         result.is_ok(),
         "Array literal codegen should succeed: {:?}",
@@ -259,8 +278,11 @@ fn test_unified_error_handling() {
     }
 
     // Test type check error codes
-    let type_check_result = type_check_program("fn main() { let v = true + false }");
-    match type_check_result {
+    let dir = tempdir().expect("tmpdir");
+    let path = dir.path().join("main.prim");
+    fs::write(&path, "fn main() { let v = true + false }").expect("write");
+    let mut loaded = load_program(&path).expect("load");
+    match type_check_program(&mut loaded.program) {
         Err(err) => {
             assert_eq!(err.error_code(), "TYP004");
             assert_eq!(err.category(), "Type checking");
@@ -271,8 +293,8 @@ fn test_unified_error_handling() {
 
     // Test codegen error codes with unsupported println argument
     let source = "fn main() { println(\"hi\") }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
     match result {
         Err(err) => {
             assert_eq!(err.error_code(), "COD008"); // InvalidExpression
@@ -286,8 +308,8 @@ fn test_unified_error_handling() {
 #[test]
 fn test_parentheses_precedence_override() {
     let source = "fn main() { let result = (2 + 3) * 4\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -299,8 +321,8 @@ fn test_parentheses_precedence_override() {
 #[test]
 fn test_nested_parentheses_compilation() {
     let source = "fn main() { let result = ((1 + 2) * (3 + 4)) + 5\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -312,8 +334,8 @@ fn test_nested_parentheses_compilation() {
 #[test]
 fn test_parentheses_in_function_calls() {
     let source = "fn main() { println((10 + 5) * 2) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -325,8 +347,8 @@ fn test_parentheses_in_function_calls() {
 #[test]
 fn test_complex_parentheses_expression() {
     let source = "fn main() { let x = 2\nlet y = 3\nlet result = (x + y) * (x - y) + (x * y)\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -338,8 +360,8 @@ fn test_complex_parentheses_expression() {
 #[test]
 fn test_subtraction_basic_compilation() {
     let source = "fn main() { let result = 10 - 3\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -351,8 +373,8 @@ fn test_subtraction_basic_compilation() {
 #[test]
 fn test_subtraction_with_variables_compilation() {
     let source = "fn main() { let x = 15\nlet y = 5\nlet result = x - y\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -364,8 +386,8 @@ fn test_subtraction_with_variables_compilation() {
 #[test]
 fn test_subtraction_precedence_compilation() {
     let source = "fn main() { let result = 20 - 3 * 2\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -377,8 +399,8 @@ fn test_subtraction_precedence_compilation() {
 #[test]
 fn test_subtraction_chained_compilation() {
     let source = "fn main() { let result = 50 - 20 - 10\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -390,8 +412,8 @@ fn test_subtraction_chained_compilation() {
 #[test]
 fn test_division_basic_compilation() {
     let source = "fn main() { let result = 20 / 4\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -403,8 +425,8 @@ fn test_division_basic_compilation() {
 #[test]
 fn test_division_with_variables_compilation() {
     let source = "fn main() { let numerator = 100\nlet denominator = 5\nlet result = numerator / denominator\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -416,8 +438,8 @@ fn test_division_with_variables_compilation() {
 #[test]
 fn test_division_precedence_compilation() {
     let source = "fn main() { let result = 10 + 20 / 4\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -429,8 +451,8 @@ fn test_division_precedence_compilation() {
 #[test]
 fn test_division_chained_compilation() {
     let source = "fn main() { let result = 100 / 5 / 2\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -442,8 +464,8 @@ fn test_division_chained_compilation() {
 #[test]
 fn test_mixed_operations_compilation() {
     let source = "fn main() { let result = 20 - 10 / 2 + 3 * 4\nprintln(result) }";
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),
@@ -487,8 +509,8 @@ fn main() {
     println(final_result)
 }
 "#;
-    let program = type_check_program(source).unwrap();
-    let result = generate_object_code(&program, source);
+    let program = load_and_type_check(source).unwrap();
+    let result = generate_object_code(&program);
 
     assert!(
         result.is_ok(),

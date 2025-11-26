@@ -15,6 +15,10 @@ pub enum ParseError {
         message: String,
         position: usize,
     },
+    InvalidIntegerLiteral {
+        literal: String,
+        position: usize,
+    },
 }
 
 impl From<TokenError> for ParseError {
@@ -52,6 +56,9 @@ impl std::fmt::Display for ParseError {
             ParseError::InvalidAttributeUsage { message, position } => {
                 write!(f, "Parse error at position {}: {}", position, message)
             }
+            ParseError::InvalidIntegerLiteral { literal, .. } => {
+                write!(f, "Invalid integer literal: {}", literal)
+            }
         }
     }
 }
@@ -68,6 +75,7 @@ impl ParseError {
             ParseError::MissingMainFunction => "PAR003",
             ParseError::StatementsOutsideFunction => "PAR004",
             ParseError::InvalidAttributeUsage { .. } => "PAR005",
+            ParseError::InvalidIntegerLiteral { .. } => "PAR006",
         }
     }
 
@@ -86,6 +94,7 @@ impl ParseError {
             ParseError::MissingMainFunction => None,
             ParseError::StatementsOutsideFunction => None,
             ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
+            ParseError::InvalidIntegerLiteral { position, .. } => Some(*position),
         }
     }
 
@@ -97,6 +106,7 @@ impl ParseError {
             ParseError::MissingMainFunction => Some("program structure"),
             ParseError::StatementsOutsideFunction => Some("program structure"),
             ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
+            ParseError::InvalidIntegerLiteral { .. } => Some("literal parsing"),
         }
     }
 }

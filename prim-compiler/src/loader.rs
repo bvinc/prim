@@ -1,0 +1,730 @@
+use crate::program::{
+    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
+    ModuleOrigin, Program,
+};
+use prim_parse::{self, ImportDecl, ImportSelector, ParseError};
+use std::collections::HashMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// A fully loaded program.
+pub struct LoadedProgram {
+    pub program: Program,
+}
+
+#[derive(Debug)]
+pub enum LoadError {
+    Io(std::io::Error),
+    Parse(ParseError),
+    InvalidModule(String),
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadError::Io(err) => write!(f, "IO error: {}", err),
+            LoadError::Parse(err) => write!(f, "Parse error: {}", err),
+            LoadError::InvalidModule(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+impl From<std::io::Error> for LoadError {
+    fn from(err: std::io::Error) -> Self {
+        LoadError::Io(err)
+    }
+}
+
+impl From<ParseError> for LoadError {
+    fn from(err: ParseError) -> Self {
+        LoadError::Parse(err)
+    }
+}
+
+/// Options that control how the loader resolves a program.
+#[derive(Clone, Debug)]
+pub struct LoadOptions {
+    /// Automatically include the standard prelude when compiling a single file.
+    pub include_prelude: bool,
+    /// Optional override for the std root. Defaults to `<workspace>/prim-std/src`.
+    pub std_root: Option<PathBuf>,
+}
+
+impl Default for LoadOptions {
+    fn default() -> Self {
+        Self {
+            include_prelude: true,
+            std_root: None,
+        }
+    }
+}
+
+/// Load a program starting at `entry_path` (either a single file or a module directory).
+pub fn load_program(entry_path: impl AsRef<Path>) -> Result<LoadedProgram, LoadError> {
+    load_program_with_options(entry_path, LoadOptions::default())
+}
+
+pub fn load_program_with_options(
+    entry_path: impl AsRef<Path>,
+    options: LoadOptions,
+) -> Result<LoadedProgram, LoadError> {
+    let entry_path = entry_path.as_ref();
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| std::io::Error::other("invalid workspace root"))?;
+    let std_root = options
+        .std_root
+        .clone()
+        .unwrap_or_else(|| workspace_root.join("prim-std").join("src"));
+
+    if entry_path.is_dir() {
+        let module_root = if entry_path.file_name().is_some_and(|n| n == "cmd") {
+            entry_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| entry_path.to_path_buf())
+        } else {
+            entry_path.to_path_buf()
+        };
+        let mut loader = Loader::new(module_root, std_root, options);
+        loader.load_directory(entry_path)
+    } else {
+        let module_root = entry_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut loader = Loader::new(module_root, std_root, options);
+        loader.load_single_file(entry_path)
+    }
+}
+
+struct Loader {
+    module_root: PathBuf,
+    std_root: PathBuf,
+    options: LoadOptions,
+    program: Program,
+    module_cache: HashMap<String, ModuleCacheEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct ModuleCacheEntry {
+    fragments: Vec<DefinitionFragment>,
+    imports: Vec<ImportRequest>,
+    files: Vec<ModuleFile>,
+}
+
+#[derive(Clone, Debug)]
+struct DefinitionFragment {
+    text: String,
+}
+
+impl Loader {
+    fn new(module_root: PathBuf, std_root: PathBuf, options: LoadOptions) -> Self {
+        Self {
+            module_root,
+            std_root,
+            options,
+            program: Program {
+                modules: Vec::new(),
+                root: ModuleId(0),
+                module_index: HashMap::new(),
+            },
+            module_cache: HashMap::new(),
+        }
+    }
+
+    fn load_single_file(&mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
+        let source = std::fs::read_to_string(path)?;
+        let ast = prim_parse::parse_unit(&source)?;
+
+        let module_name = ast
+            .module_name
+            .as_ref()
+            .map(|span| span.text(&source).to_string())
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("main")
+                    .to_string()
+            });
+
+        let planned =
+            plan_import_requests(&ast.imports, &source, &self.module_root, &self.std_root)?;
+        let mut imports = Vec::new();
+        let mut import_index = HashMap::new();
+        for ImportRequest { module, coverage } in planned {
+            merge_import_request(&mut imports, &mut import_index, module, coverage);
+        }
+        if self.options.include_prelude {
+            merge_import_request(
+                &mut imports,
+                &mut import_index,
+                vec!["std".into(), "string".into()],
+                ImportCoverage::All,
+            );
+            merge_import_request(
+                &mut imports,
+                &mut import_index,
+                vec!["std".into(), "io".into()],
+                ImportCoverage::All,
+            );
+        }
+
+        let module_files = vec![ModuleFile {
+            path: path.to_path_buf(),
+            source: Arc::from(source.clone()),
+            ast: ast.clone(),
+        }];
+
+        let exports = collect_exports(&module_files);
+        let body_source = strip_to_body(&ast, &source);
+        let key = ModuleKey::Path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        let module_id = ModuleId(self.program.modules.len() as u32);
+        let module = Module {
+            id: module_id,
+            key: key.clone(),
+            name: vec![module_name],
+            origin: ModuleOrigin::User,
+            files: module_files,
+            imports: imports.clone(),
+            exports,
+            body_source: body_source.clone(),
+        };
+
+        self.program.module_index.insert(key, module_id);
+        self.program.root = module_id;
+        self.program.modules.push(module);
+
+        // Ensure dependencies are loaded.
+        let mut stack = Vec::new();
+        for ImportRequest { module, .. } in &imports {
+            self.ensure_module(module, &mut stack)?;
+        }
+        self.validate_imports(&imports)?;
+
+        Ok(LoadedProgram {
+            program: self.program.clone(),
+        })
+    }
+
+    fn load_directory(&mut self, dir: &Path) -> Result<LoadedProgram, LoadError> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "prim"))
+            .collect();
+        files.sort();
+
+        if files.is_empty() {
+            return Err(LoadError::InvalidModule(format!(
+                "No .prim files found in {}",
+                dir.display()
+            )));
+        }
+
+        let mut module_name: Option<String> = None;
+        let mut module_files = Vec::new();
+        let mut stripped_sources = Vec::new();
+        let mut imports = Vec::new();
+        let mut import_index = HashMap::new();
+
+        for file in &files {
+            let source = std::fs::read_to_string(file)?;
+            let ast = prim_parse::parse_unit(&source)
+                .map_err(|err| LoadError::InvalidModule(format!("{}: {}", file.display(), err)))?;
+
+            let this_name = ast
+                .module_name
+                .as_ref()
+                .map(|span| span.text(&source).to_string())
+                .ok_or_else(|| {
+                    LoadError::InvalidModule(format!(
+                        "{}: missing 'mod <name>' declaration at top of file",
+                        file.display()
+                    ))
+                })?;
+
+            match &module_name {
+                None => module_name = Some(this_name.clone()),
+                Some(existing) if existing == &this_name => {}
+                Some(existing) => {
+                    return Err(LoadError::InvalidModule(format!(
+                        "Module name mismatch: {} declares '{}', expected '{}'",
+                        file.display(),
+                        this_name,
+                        existing
+                    )));
+                }
+            }
+
+            let planned =
+                plan_import_requests(&ast.imports, &source, &self.module_root, &self.std_root)?;
+            for ImportRequest { module, coverage } in planned {
+                merge_import_request(&mut imports, &mut import_index, module, coverage);
+            }
+
+            stripped_sources.push(strip_to_body(&ast, &source));
+            module_files.push(ModuleFile {
+                path: file.clone(),
+                source: Arc::from(source.clone()),
+                ast,
+            });
+        }
+
+        let module_name = module_name.unwrap();
+        if module_name != "main" {
+            return Err(LoadError::InvalidModule(format!(
+                "Binary module must be named 'main', found '{}'",
+                module_name
+            )));
+        }
+
+        let exports = collect_exports(&module_files);
+        let body_source = stripped_sources.join("\n");
+        let module_segments = vec![module_name.clone()];
+        let key = ModuleKey::Name(module_segments.clone());
+        let module_id = ModuleId(self.program.modules.len() as u32);
+        let module = Module {
+            id: module_id,
+            key: key.clone(),
+            name: module_segments.clone(),
+            origin: ModuleOrigin::User,
+            files: module_files,
+            imports: imports.clone(),
+            exports,
+            body_source: body_source.clone(),
+        };
+
+        self.program.module_index.insert(key, module_id);
+        self.program.root = module_id;
+        self.program.modules.push(module);
+
+        let mut stack = Vec::new();
+        for ImportRequest { module, .. } in &imports {
+            self.ensure_module(module, &mut stack)?;
+        }
+        self.validate_imports(&imports)?;
+
+        Ok(LoadedProgram {
+            program: self.program.clone(),
+        })
+    }
+
+    fn ensure_module(
+        &mut self,
+        module_segments: &[String],
+        stack: &mut Vec<String>,
+    ) -> Result<ModuleId, LoadError> {
+        let module_key = module_segments.join(".");
+        if stack.contains(&module_key) {
+            let mut cycle = stack.clone();
+            cycle.push(module_key.clone());
+            return Err(LoadError::InvalidModule(format!(
+                "Import cycle detected: {}",
+                cycle.join(" -> ")
+            )));
+        }
+        stack.push(module_key.clone());
+
+        let key = ModuleKey::Name(module_segments.to_vec());
+        if let Some(id) = self.program.module_index.get(&key) {
+            stack.pop();
+            return Ok(*id);
+        }
+
+        let entry = self.load_module_entry(module_segments)?.clone();
+        let exports = collect_exports(&entry.files);
+        let body_source = join_fragments(&entry.fragments);
+        let id = ModuleId(self.program.modules.len() as u32);
+        let module = Module {
+            id,
+            key: key.clone(),
+            name: module_segments.to_vec(),
+            origin: module_origin(module_segments),
+            files: entry.files.clone(),
+            imports: entry.imports.clone(),
+            exports,
+            body_source,
+        };
+        self.program.module_index.insert(key, id);
+        self.program.modules.push(module);
+
+        // Validate imports of this module (including selective symbol imports)
+        self.validate_imports(&entry.imports)?;
+
+        // Load dependencies of this module as well.
+        for ImportRequest { module, .. } in &entry.imports {
+            self.ensure_module(module, stack)?;
+        }
+
+        stack.pop();
+
+        Ok(id)
+    }
+
+    fn load_module_entry(
+        &mut self,
+        module_segments: &[String],
+    ) -> Result<&ModuleCacheEntry, LoadError> {
+        let module_key = module_segments.join(".");
+        if !self.module_cache.contains_key(&module_key) {
+            let search_path =
+                module_search_path(&self.module_root, &self.std_root, module_segments);
+            let mut files: Vec<PathBuf> = if search_path.is_dir() {
+                std::fs::read_dir(&search_path)?
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "prim"))
+                    .collect()
+            } else {
+                let file_candidate = search_path.with_extension("prim");
+                if file_candidate.exists() {
+                    vec![file_candidate]
+                } else {
+                    Vec::new()
+                }
+            };
+            files.sort();
+
+            if files.is_empty() {
+                return Err(LoadError::InvalidModule(format!(
+                    "Imported module '{}' not found at {}",
+                    module_key,
+                    search_path.display()
+                )));
+            }
+
+            let mut module_name: Option<String> = None;
+            let mut fragments = Vec::new();
+            let mut imports = Vec::new();
+            let mut import_index = HashMap::new();
+            let mut module_files = Vec::new();
+
+            for file in &files {
+                let source = std::fs::read_to_string(file)?;
+                let program = prim_parse::parse_unit(&source).map_err(|err| {
+                    LoadError::InvalidModule(format!("{}: {}", file.display(), err))
+                })?;
+
+                let this_name = program
+                    .module_name
+                    .as_ref()
+                    .map(|span| span.text(&source).to_string())
+                    .ok_or_else(|| {
+                        LoadError::InvalidModule(format!(
+                            "{}: missing 'mod <name>' declaration at top of file",
+                            file.display()
+                        ))
+                    })?;
+
+                match &module_name {
+                    None => module_name = Some(this_name.clone()),
+                    Some(existing) if existing == &this_name => {}
+                    Some(existing) => {
+                        return Err(LoadError::InvalidModule(format!(
+                            "Module name mismatch: {} declares '{}', expected '{}'",
+                            file.display(),
+                            this_name,
+                            existing
+                        )));
+                    }
+                }
+
+                fragments.extend(extract_definitions(&program, &source));
+                let planned = plan_import_requests(
+                    &program.imports,
+                    &source,
+                    &self.module_root,
+                    &self.std_root,
+                )?;
+                for ImportRequest { module, coverage } in planned {
+                    merge_import_request(&mut imports, &mut import_index, module, coverage);
+                }
+
+                module_files.push(ModuleFile {
+                    path: file.clone(),
+                    source: Arc::from(source.clone()),
+                    ast: program,
+                });
+            }
+
+            self.module_cache.insert(
+                module_key.clone(),
+                ModuleCacheEntry {
+                    fragments,
+                    imports,
+                    files: module_files,
+                },
+            );
+        }
+
+        Ok(self.module_cache.get(&module_key).unwrap())
+    }
+}
+
+impl Loader {
+    fn validate_imports(&self, imports: &[ImportRequest]) -> Result<(), LoadError> {
+        for ImportRequest { module, coverage } in imports {
+            if let ImportCoverage::Symbols(symbols) = coverage {
+                let key = ModuleKey::Name(module.clone());
+                let Some(&module_id) = self.program.module_index.get(&key) else {
+                    return Err(LoadError::InvalidModule(format!(
+                        "Imported module '{}' not found",
+                        module.join(".")
+                    )));
+                };
+                let module = &self.program.modules[module_id.0 as usize];
+                for sym in symbols {
+                    if !module.exports.contains(sym) {
+                        return Err(LoadError::InvalidModule(format!(
+                            "Module '{}' does not define '{}'",
+                            module.name.join("."),
+                            sym
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn module_origin(module_segments: &[String]) -> ModuleOrigin {
+    if module_segments.first().is_some_and(|s| s == "std") {
+        ModuleOrigin::Stdlib
+    } else {
+        ModuleOrigin::User
+    }
+}
+
+fn collect_exports(files: &[ModuleFile]) -> ExportTable {
+    let mut exports = ExportTable::default();
+    for file in files {
+        let source = &file.source;
+        for s in &file.ast.structs {
+            exports.structs.push(s.name.text(source).to_string());
+        }
+        for f in &file.ast.functions {
+            exports.functions.push(f.name.text(source).to_string());
+        }
+        for t in &file.ast.traits {
+            exports.traits.push(t.name.text(source).to_string());
+        }
+        for im in &file.ast.impls {
+            let trait_name = im.trait_name.text(source);
+            let struct_name = im.struct_name.text(source);
+            exports
+                .impls
+                .push(format!("impl {} for {}", trait_name, struct_name));
+        }
+    }
+    exports
+}
+
+fn plan_import_requests(
+    imports: &[ImportDecl],
+    source: &str,
+    module_root: &Path,
+    std_root: &Path,
+) -> Result<Vec<ImportRequest>, LoadError> {
+    let mut acc = Vec::new();
+    let mut index = HashMap::new();
+    for decl in imports {
+        let (module, coverage) = convert_import_decl(decl, source, module_root, std_root)?;
+        merge_import_request(&mut acc, &mut index, module, coverage);
+    }
+    Ok(acc)
+}
+
+fn convert_import_decl(
+    decl: &ImportDecl,
+    source: &str,
+    module_root: &Path,
+    std_root: &Path,
+) -> Result<(Vec<String>, ImportCoverage), LoadError> {
+    let mut module_segments = decl.module_segments(source);
+    if module_segments.is_empty() {
+        return Err(LoadError::InvalidModule(
+            "Import must specify at least one segment".into(),
+        ));
+    }
+
+    match &decl.selector {
+        ImportSelector::All => {
+            if module_exists(module_root, std_root, &module_segments) {
+                return Ok((module_segments, ImportCoverage::All));
+            }
+            if let Some(trailing) = &decl.trailing_symbol {
+                if module_segments.len() < 2 {
+                    let module_display = module_segments.join(".");
+                    let search_path = module_search_path(module_root, std_root, &module_segments);
+                    return Err(LoadError::InvalidModule(format!(
+                        "Imported module '{}' not found at {}",
+                        module_display,
+                        search_path.display()
+                    )));
+                }
+                let symbol_name = trailing.text(source).to_string();
+                module_segments.pop();
+                if !module_exists(module_root, std_root, &module_segments) {
+                    let module_display = module_segments.join(".");
+                    let search_path = module_search_path(module_root, std_root, &module_segments);
+                    return Err(LoadError::InvalidModule(format!(
+                        "Imported module '{}' not found at {}",
+                        module_display,
+                        search_path.display()
+                    )));
+                }
+                Ok((module_segments, ImportCoverage::Symbols(vec![symbol_name])))
+            } else {
+                let module_display = module_segments.join(".");
+                let search_path = module_search_path(module_root, std_root, &module_segments);
+                Err(LoadError::InvalidModule(format!(
+                    "Imported module '{}' not found at {}",
+                    module_display,
+                    search_path.display()
+                )))
+            }
+        }
+        ImportSelector::Named(_) => {
+            if !module_exists(module_root, std_root, &module_segments) {
+                let module_display = module_segments.join(".");
+                let search_path = module_search_path(module_root, std_root, &module_segments);
+                return Err(LoadError::InvalidModule(format!(
+                    "Imported module '{}' not found at {}",
+                    module_display,
+                    search_path.display()
+                )));
+            }
+            let mut symbols = Vec::new();
+            if let Some(names) = decl.selector_names(source) {
+                symbols.extend(names);
+            }
+            Ok((module_segments, ImportCoverage::Symbols(symbols)))
+        }
+    }
+}
+
+fn merge_import_request(
+    acc: &mut Vec<ImportRequest>,
+    index: &mut HashMap<String, usize>,
+    module: Vec<String>,
+    coverage: ImportCoverage,
+) {
+    let key = module.join(".");
+    if let Some(&slot) = index.get(&key) {
+        match (&mut acc[slot].coverage, coverage) {
+            (ImportCoverage::All, _) => {}
+            (_, ImportCoverage::All) => {
+                acc[slot].coverage = ImportCoverage::All;
+            }
+            (ImportCoverage::Symbols(existing), ImportCoverage::Symbols(mut symbols)) => {
+                existing.append(&mut symbols);
+                existing.sort();
+                existing.dedup();
+            }
+        }
+    } else {
+        index.insert(key, acc.len());
+        acc.push(ImportRequest { module, coverage });
+    }
+}
+
+fn module_exists(module_root: &Path, std_root: &Path, segments: &[String]) -> bool {
+    if segments.is_empty() {
+        return false;
+    }
+    let search_path = module_search_path(module_root, std_root, segments);
+    if search_path.is_dir() {
+        std::fs::read_dir(&search_path)
+            .ok()
+            .into_iter()
+            .flat_map(|iter| iter.filter_map(|e| e.ok()))
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "prim"))
+    } else {
+        search_path.with_extension("prim").exists()
+    }
+}
+
+fn module_search_path(module_root: &Path, std_root: &Path, segments: &[String]) -> PathBuf {
+    if segments.first().is_some_and(|s| s == "std") {
+        let mut path = std_root.to_path_buf();
+        for seg in segments {
+            path.push(seg);
+        }
+        path
+    } else {
+        let mut path = module_root.to_path_buf();
+        for seg in segments {
+            path.push(seg);
+        }
+        path
+    }
+}
+
+fn extract_definitions(program: &prim_parse::Program, source: &str) -> Vec<DefinitionFragment> {
+    let mut annotated = Vec::new();
+
+    for s in &program.structs {
+        annotated.push((
+            s.span.start(),
+            DefinitionFragment {
+                text: s.span.text(source).to_string(),
+            },
+        ));
+    }
+
+    for f in &program.functions {
+        annotated.push((
+            f.span.start(),
+            DefinitionFragment {
+                text: f.span.text(source).to_string(),
+            },
+        ));
+    }
+
+    for t in &program.traits {
+        annotated.push((
+            t.span.start(),
+            DefinitionFragment {
+                text: t.span.text(source).to_string(),
+            },
+        ));
+    }
+
+    for im in &program.impls {
+        annotated.push((
+            im.span.start(),
+            DefinitionFragment {
+                text: im.span.text(source).to_string(),
+            },
+        ));
+    }
+
+    annotated.sort_by_key(|(start, _)| *start);
+    annotated
+        .into_iter()
+        .map(|(_, fragment)| fragment)
+        .collect()
+}
+
+fn strip_to_body(program: &prim_parse::Program, source: &str) -> String {
+    extract_definitions(program, source)
+        .into_iter()
+        .map(|fragment| fragment.text)
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn join_fragments(fragments: &[DefinitionFragment]) -> String {
+    fragments
+        .iter()
+        .map(|fragment| fragment.text.clone())
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}

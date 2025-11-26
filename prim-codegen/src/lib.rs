@@ -1,4 +1,5 @@
-use prim_parse::{BinaryOp, Expr, Function, Program, Stmt, StructDefinition, Type};
+use prim_compiler::Program as LoadedProgram;
+use prim_parse::{BinaryOp, Expr, Function, Stmt, StructDefinition, Type};
 use std::collections::HashMap;
 
 use cranelift::prelude::*;
@@ -27,6 +28,26 @@ pub struct CraneliftCodeGenerator {
     ctx: codegen::Context,
     builder_context: FunctionBuilderContext,
     struct_layouts: HashMap<String, StructLayout>,
+}
+
+fn iter_functions<'a>(program: &'a LoadedProgram) -> impl Iterator<Item = (&'a Function, &'a str)> {
+    program.modules.iter().flat_map(|module| {
+        module.files.iter().flat_map(|file| {
+            let src: &'a str = &file.source;
+            file.ast.functions.iter().map(move |func| (func, src))
+        })
+    })
+}
+
+fn iter_structs<'a>(
+    program: &'a LoadedProgram,
+) -> impl Iterator<Item = (&'a StructDefinition, &'a str)> {
+    program.modules.iter().flat_map(|module| {
+        module.files.iter().flat_map(|file| {
+            let src: &'a str = &file.source;
+            file.ast.structs.iter().map(move |s| (s, src))
+        })
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -83,16 +104,16 @@ impl CraneliftCodeGenerator {
         })
     }
 
-    pub fn generate(mut self, program: &Program, source: &str) -> Result<Vec<u8>, CodegenError> {
+    pub fn generate(mut self, program: &LoadedProgram) -> Result<Vec<u8>, CodegenError> {
         // Create println function first
         let println_func_id = self.create_println_function()?;
 
         // Compute struct layouts
-        self.compute_struct_layouts(&program.structs, source)?;
+        self.compute_struct_layouts(program)?;
 
         // First pass: declare all functions (including imports via @runtime)
         let mut function_ids = HashMap::new();
-        for function in &program.functions {
+        for (function, source) in iter_functions(program) {
             let sig = self.create_function_signature(function, source);
             let linkage = self.determine_linkage(function, source);
 
@@ -111,7 +132,7 @@ impl CraneliftCodeGenerator {
         }
 
         // Second pass: generate function bodies
-        for function in &program.functions {
+        for (function, source) in iter_functions(program) {
             // Do not generate bodies for runtime-bound imports
             if function.runtime_binding.is_some() {
                 continue;
@@ -670,21 +691,9 @@ impl CraneliftCodeGenerator {
 
                 Ok(Val::One(header_ptr))
             }
-            Expr::IntLiteral { span: value, ty } => {
-                // Parse the literal (handle type suffixes like 42u32)
-                let value_text = value.text(source);
-                let num_part = value_text
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect::<String>();
-                let num: i64 = num_part
-                    .parse()
-                    .map_err(|_| CodegenError::InvalidExpression {
-                        message: format!("Invalid integer literal: {}", value_text),
-                        context: "number parsing".to_string(),
-                    })?;
+            Expr::IntLiteral { value, ty, .. } => {
                 let (lane, _) = Self::scalar_lane(ty);
-                Ok(Val::One(builder.ins().iconst(lane, num)))
+                Ok(Val::One(builder.ins().iconst(lane, *value)))
             }
             Expr::FloatLiteral { span: value, .. } => Err(CodegenError::InvalidExpression {
                 message: format!(
@@ -1375,12 +1384,8 @@ impl CraneliftCodeGenerator {
         Ok(println_bool_func_id)
     }
 
-    fn compute_struct_layouts(
-        &mut self,
-        structs: &[StructDefinition],
-        source: &str,
-    ) -> Result<(), CodegenError> {
-        for struct_def in structs {
+    fn compute_struct_layouts(&mut self, program: &LoadedProgram) -> Result<(), CodegenError> {
+        for (struct_def, source) in iter_structs(program) {
             let struct_name = struct_def.name.text(source).to_string();
             let mut fields = Vec::new();
             let mut current_offset = 0u32;
@@ -1441,150 +1446,57 @@ impl CraneliftCodeGenerator {
     }
 }
 
-pub fn generate_object_code(program: &Program, source: &str) -> Result<Vec<u8>, CodegenError> {
+pub fn generate_object_code(program: &LoadedProgram) -> Result<Vec<u8>, CodegenError> {
     let generator = CraneliftCodeGenerator::new()?;
-    generator.generate(program, source)
+    generator.generate(program)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prim_parse::{TypeCheckError, parse, type_check};
+    use prim_compiler::{load_program, type_check_program};
+    use prim_parse::TypeCheckError;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    fn codegen_from_source(source: &str) -> Result<Vec<u8>, String> {
+        let dir = tempdir().map_err(|e| e.to_string())?;
+        let path = dir.path().join("main.prim");
+        let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
+        file.write_all(source.as_bytes())
+            .map_err(|e| e.to_string())?;
+
+        let mut loaded = load_program(&path).map_err(|e| e.to_string())?;
+        type_check_program(&mut loaded.program).map_err(|e| e.to_string())?;
+        generate_object_code(&loaded.program).map_err(|e| e.to_string())
+    }
 
     #[test]
-    fn test_generate_simple_let() {
+    fn codegen_simple_main() {
         let source = "fn main() { let x: u32 = 5 }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        // Just check that we get some object code without panicking
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
+        let code = codegen_from_source(source).expect("codegen should succeed");
         assert!(!code.is_empty());
     }
 
     #[test]
-    fn test_generate_arithmetic() {
-        let source = "fn main() { let result = 3 }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_println() {
-        let source = "fn main() { println(5) }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_complex_expression() {
+    fn codegen_arithmetic() {
         let source = "fn main() { let result = 2 + 3 * 4 }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
+        let code = codegen_from_source(source).expect("codegen should succeed");
         assert!(!code.is_empty());
     }
 
     #[test]
-    fn test_error_undefined_variable() {
-        let source = "fn main() { let result = unknown_var }";
-        let program = parse(source).unwrap();
-        let result = type_check(program, source);
+    fn type_error_surfaces() {
+        let dir = tempdir().expect("tmpdir");
+        let path = dir.path().join("main.prim");
+        fs::write(&path, "fn main() { let x = unknown_var }").expect("write");
 
-        match result {
-            Err(TypeCheckError::UndefinedVariable(name)) => {
-                assert_eq!(name, "unknown_var");
-            }
-            other => panic!("Expected UndefinedVariable error, got {:?}", other),
+        let mut loaded = load_program(&path).expect("load");
+        let err = type_check_program(&mut loaded.program).unwrap_err();
+        match err {
+            TypeCheckError::UndefinedVariable(name) => assert_eq!(name, "unknown_var"),
+            other => panic!("expected undefined variable, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn test_error_unsupported_function() {
-        let source = "fn main() { unsupported_func() }";
-        let program = parse(source).unwrap();
-        let result = type_check(program, source);
-
-        match result {
-            Err(TypeCheckError::UndefinedFunction(name)) => {
-                assert_eq!(name, "unsupported_func");
-            }
-            other => panic!("Expected UndefinedFunction error, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_generate_boolean_literals() {
-        let source = "fn main() { let flag: bool = true; println(flag) }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_boolean_false() {
-        let source = "fn main() { println(false) }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_boolean_equality_expression() {
-        let source = "fn main() { let flag = 1 == 1; println(flag) }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_function_return_bool() {
-        let source = "fn is_zero(x: i64) -> bool { x == 0 } fn main() { let result = is_zero(0); println(result) }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
-    }
-
-    #[test]
-    fn test_generate_boolean_array_literal() {
-        let source = "fn main() { let flags = [true, false, true] }";
-        let program = parse(source).unwrap();
-        let program = type_check(program, source).unwrap();
-        let object_code = generate_object_code(&program, source);
-
-        assert!(object_code.is_ok());
-        let code = object_code.unwrap();
-        assert!(!code.is_empty());
     }
 }

@@ -231,9 +231,28 @@ impl<'a> Parser<'a> {
         }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
-                let token = self.advance();
+                let token_span = {
+                    let token = self.advance();
+                    token.span
+                };
+                let owned_source = self.source.to_string();
+                let literal_text = token_span.text(&owned_source).to_string();
+                let num_part = literal_text
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>();
+                let value: i64 = match num_part.parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Err(ParseError::InvalidIntegerLiteral {
+                            literal: literal_text.clone(),
+                            position: token_span.start(),
+                        });
+                    }
+                };
                 Ok(Expr::IntLiteral {
-                    span: token.span,
+                    span: token_span,
+                    value,
                     ty: Type::Undetermined,
                 })
             }
@@ -342,6 +361,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Binary {
                     left: Box::new(Expr::IntLiteral {
                         span: Span::new(0, 1),
+                        value: 0,
                         ty: Type::Undetermined,
                     }), // placeholder "0"
                     op: BinaryOp::Subtract,

@@ -53,6 +53,7 @@ pub enum Type {
 pub enum Expr {
     IntLiteral {
         span: Span,
+        value: i64,
         ty: Type,
     },
     FloatLiteral {
