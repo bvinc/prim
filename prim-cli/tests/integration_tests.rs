@@ -5,6 +5,8 @@ use prim_tok::TokenError;
 use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
+mod common;
+use common::staged_prim_root;
 
 fn load_and_type_check(source: &str) -> Result<LoadedProgram, String> {
     let dir = tempdir().map_err(|e| e.to_string())?;
@@ -170,6 +172,7 @@ fn test_function_with_return_type() {
 fn test_cli_build_command() {
     use std::fs;
     use std::process::Command;
+    let prim_root = staged_prim_root();
 
     // Create a simple test program
     let test_program = "fn main() { println(42) }";
@@ -179,6 +182,7 @@ fn test_cli_build_command() {
     // Test build command
     let output = Command::new("cargo")
         .args(["run", "--", "build", test_file])
+        .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute build command");
 
@@ -215,6 +219,7 @@ fn test_cli_build_command() {
 fn test_cli_run_command() {
     use std::fs;
     use std::process::Command;
+    let prim_root = staged_prim_root();
 
     // Create a simple test program
     let test_program = "fn main() { println(123) }";
@@ -224,6 +229,7 @@ fn test_cli_run_command() {
     // Test run command
     let output = Command::new("cargo")
         .args(["run", "--", "run", test_file])
+        .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute run command");
 
@@ -523,6 +529,7 @@ fn main() {
 fn test_chained_function_calls_execution() {
     use std::fs;
     use std::process::Command;
+    let prim_root = staged_prim_root();
 
     // Create the chained function calls program
     let test_program = r#"
@@ -564,6 +571,7 @@ fn main() {
     // Test run command
     let output = Command::new("cargo")
         .args(["run", "--", "run", test_file])
+        .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute run command");
 

@@ -383,6 +383,7 @@ dependencies = [
  "prim-codegen",
  "prim-compiler",
  "prim-parse",
+ "prim-rt",
  "prim-tok",
  "tempfile",
 ]

@@ -4,6 +4,7 @@ use crate::program::{
 };
 use prim_parse::{self, ImportDecl, ImportSelector, ParseError};
 use std::collections::HashMap;
+use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,6 +12,11 @@ use std::sync::Arc;
 /// A fully loaded program.
 pub struct LoadedProgram {
     pub program: Program,
+}
+
+/// Resolve the Prim root directory from `PRIM_ROOT` or the current executable location.
+pub fn prim_root() -> Result<PathBuf, LoadError> {
+    prim_root_from_env_or_exe()
 }
 
 #[derive(Debug)]
@@ -49,7 +55,7 @@ impl From<ParseError> for LoadError {
 pub struct LoadOptions {
     /// Automatically include the standard prelude when compiling a single file.
     pub include_prelude: bool,
-    /// Optional override for the std root. Defaults to `<workspace>/prim-std/src`.
+    /// Optional override for the std root. Defaults to `<prim_root>/src` (or `<prim_root>/prim-std/src` as a fallback).
     pub std_root: Option<PathBuf>,
 }
 
@@ -72,13 +78,9 @@ pub fn load_program_with_options(
     options: LoadOptions,
 ) -> Result<LoadedProgram, LoadError> {
     let entry_path = entry_path.as_ref();
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .ok_or_else(|| std::io::Error::other("invalid workspace root"))?;
-    let std_root = options
-        .std_root
-        .clone()
-        .unwrap_or_else(|| workspace_root.join("prim-std").join("src"));
+    let prim_root = prim_root_from_env_or_exe()?;
+    let default_std_root = default_std_root(&prim_root);
+    let std_root = options.std_root.clone().unwrap_or(default_std_root);
 
     if entry_path.is_dir() {
         let module_root = if entry_path.file_name().is_some_and(|n| n == "cmd") {
@@ -727,4 +729,50 @@ fn join_fragments(fragments: &[DefinitionFragment]) -> String {
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn prim_root_from_env_or_exe() -> Result<PathBuf, LoadError> {
+    if let Ok(path) = env::var("PRIM_ROOT") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let exe = env::current_exe()?;
+    let mut cur = exe.parent().ok_or_else(|| {
+        LoadError::Io(std::io::Error::other("current_exe has no parent directory"))
+    })?;
+
+    // Walk up looking for .../bin/, which would indicate PRIM_ROOT/bin/<binary>.
+    for _ in 0..8 {
+        if let Some(name) = cur.file_name().and_then(|n| n.to_str()) {
+            if name == "bin" {
+                if let Some(root) = cur.parent() {
+                    return Ok(root.to_path_buf());
+                }
+            }
+        }
+        if cur.join("prim-std").exists() || cur.join("src").join("std").exists() {
+            return Ok(cur.to_path_buf());
+        }
+        if let Some(parent) = cur.parent() {
+            cur = parent;
+        } else {
+            break;
+        }
+    }
+
+    Err(LoadError::Io(std::io::Error::other(
+        "could not determine PRIM_ROOT; set PRIM_ROOT env var",
+    )))
+}
+
+fn default_std_root(prim_root: &Path) -> PathBuf {
+    let direct = prim_root.join("src");
+    if direct.join("std").exists() {
+        return direct;
+    }
+    let alt = prim_root.join("prim-std").join("src");
+    if alt.exists() {
+        return alt;
+    }
+    direct
 }

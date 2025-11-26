@@ -60,6 +60,10 @@ To enforce formatting, linting, and tests on each commit, this repo includes a p
 - `cargo clippy --workspace --all-targets --all-features -D warnings`
 - `cargo test --workspace --all-targets`
 
+## Running / Staging
+
+The CLI resolves the standard library and runtime via `PRIM_ROOT`. For reliable local runs, use `./build.sh` to stage a runnable tree under `target/{debug,release}/dist` and run `bin/prim` from there (or set `PRIM_ROOT` yourself to point at the staging root).
+
 Enable it for your local clone:
 
 ```

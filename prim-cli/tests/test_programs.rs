@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+mod common;
+use common::staged_prim_root;
 
 /// Generate individual tests for each .prim file in test_programs/
 #[cfg(test)]
@@ -137,8 +139,10 @@ fn run_test_program(prim_file: &str, expected_file: &str) {
         .to_string();
 
     // Run the prim program
+    let prim_root = staged_prim_root();
     let output = Command::new("cargo")
         .args(["run", "--", "run", prim_file])
+        .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .unwrap_or_else(|_| panic!("Failed to execute prim compiler for: {}", prim_file));
 
@@ -302,9 +306,11 @@ fn test_module_directories_run() {
             .to_string();
 
         // Run the prim compiler on the directory
+        let prim_root = staged_prim_root();
         let output = Command::new("cargo")
             .args(["run", "--", "run"])
             .arg(run_path.to_string_lossy().to_string())
+            .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
             .output()
             .unwrap_or_else(|_| panic!("Failed to execute prim compiler for: {}", path.display()));
 
