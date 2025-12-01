@@ -7,7 +7,8 @@ pub fn staged_prim_root() -> PathBuf {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
         let dir = tempdir().expect("create staging dir");
-        let root = dir.keep();
+        #[allow(deprecated)]
+        let root = dir.into_path();
 
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
