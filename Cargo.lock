@@ -410,6 +410,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prim-hir"
+version = "0.1.0"
+
+[[package]]
 name = "prim-parse"
 version = "0.1.0"
 dependencies = [
