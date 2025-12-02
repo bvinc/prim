@@ -1,0 +1,31 @@
+fn level4() -> i64 {
+    println(4)
+    42
+}
+
+fn level3() -> i64 {
+    println(3)
+    let result = level4()
+    println(300 + result)
+    result
+}
+
+fn level2() -> i64 {
+    println(2)
+    let result = level3()
+    println(200 + result)
+    result
+}
+
+fn level1() -> i64 {
+    println(1)
+    let result = level2()
+    println(100 + result)
+    result
+}
+
+fn main() {
+    println(0)
+    let final_result = level1()
+    println(final_result)
+}

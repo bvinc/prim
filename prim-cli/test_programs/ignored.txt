@@ -1,7 +1,7 @@
+float_ops
 if_basic
 if_else
 if_nested
-float_ops
 if_errors
 literal_errors
 numeric_min_max
