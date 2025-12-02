@@ -2,7 +2,12 @@ mod common;
 use common::staged_prim_root;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
+
+fn prim_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_prim"))
+}
 
 fn run_test_program(prim_path: &Path, expected_path: &Path) {
     // Read expected output
@@ -13,8 +18,8 @@ fn run_test_program(prim_path: &Path, expected_path: &Path) {
 
     // Run the prim program
     let prim_root = staged_prim_root();
-    let output = Command::new("cargo")
-        .args(["run", "--", "run", prim_path.to_string_lossy().as_ref()])
+    let output = Command::new(prim_bin())
+        .args(["run", prim_path.to_string_lossy().as_ref()])
         .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .unwrap_or_else(|_| {

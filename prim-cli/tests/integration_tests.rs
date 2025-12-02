@@ -4,9 +4,25 @@ use prim_parse::{ParseError, TypeCheckError, parse};
 use prim_tok::TokenError;
 use std::fs;
 use std::io::Write;
-use tempfile::tempdir;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::{tempdir, tempdir_in};
 mod common;
 use common::staged_prim_root;
+
+fn prim_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_prim"))
+}
+
+fn target_tempdir() -> tempfile::TempDir {
+    let target_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .join("target")
+        .join("tests-tmp");
+    fs::create_dir_all(&target_dir).expect("create target tests tmp");
+    tempdir_in(target_dir).expect("create tempdir in target")
+}
 
 fn load_and_type_check(source: &str) -> Result<LoadedProgram, String> {
     let dir = tempdir().map_err(|e| e.to_string())?;
@@ -170,18 +186,16 @@ fn test_function_with_return_type() {
 
 #[test]
 fn test_cli_build_command() {
-    use std::fs;
-    use std::process::Command;
     let prim_root = staged_prim_root();
+    let temp = target_tempdir();
 
-    // Create a simple test program
     let test_program = "fn main() { println(42) }";
-    let test_file = "test_cli_build.prim";
-    fs::write(test_file, test_program).expect("Failed to write test file");
+    let test_file = temp.path().join("test_cli_build.prim");
+    fs::write(&test_file, test_program).expect("Failed to write test file");
 
     // Test build command
-    let output = Command::new("cargo")
-        .args(["run", "--", "build", test_file])
+    let output = Command::new(prim_bin())
+        .args(["build", test_file.to_string_lossy().as_ref()])
         .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute build command");
@@ -193,14 +207,11 @@ fn test_cli_build_command() {
     );
 
     // Check that executable was created
-    let executable_name = "test_cli_build";
-    assert!(
-        fs::metadata(executable_name).is_ok(),
-        "Executable was not created"
-    );
+    let executable_name = temp.path().join("test_cli_build");
+    assert!(executable_name.exists(), "Executable was not created");
 
     // Test that executable runs correctly
-    let run_output = Command::new(format!("./{}", executable_name))
+    let run_output = Command::new(&executable_name)
         .output()
         .expect("Failed to run generated executable");
 
@@ -209,26 +220,21 @@ fn test_cli_build_command() {
         "Generated executable failed to run"
     );
     assert_eq!(String::from_utf8_lossy(&run_output.stdout).trim(), "42");
-
-    // Clean up
-    let _ = fs::remove_file(test_file);
-    let _ = fs::remove_file(executable_name);
 }
 
 #[test]
 fn test_cli_run_command() {
-    use std::fs;
-    use std::process::Command;
     let prim_root = staged_prim_root();
+    let temp = target_tempdir();
 
     // Create a simple test program
     let test_program = "fn main() { println(123) }";
-    let test_file = "test_cli_run.prim";
-    fs::write(test_file, test_program).expect("Failed to write test file");
+    let test_file = temp.path().join("test_cli_run.prim");
+    fs::write(&test_file, test_program).expect("Failed to write test file");
 
     // Test run command
-    let output = Command::new("cargo")
-        .args(["run", "--", "run", test_file])
+    let output = Command::new(prim_bin())
+        .args(["run", test_file.to_string_lossy().as_ref()])
         .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute run command");
@@ -239,9 +245,6 @@ fn test_cli_run_command() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "123");
-
-    // Clean up
-    let _ = fs::remove_file(test_file);
 }
 
 #[test]
@@ -528,8 +531,8 @@ fn main() {
 #[test]
 fn test_chained_function_calls_execution() {
     use std::fs;
-    use std::process::Command;
     let prim_root = staged_prim_root();
+    let temp = tempdir().expect("tmpdir");
 
     // Create the chained function calls program
     let test_program = r#"
@@ -565,12 +568,12 @@ fn main() {
     println(final_result)
 }
 "#;
-    let test_file = "test_chained_function_calls.prim";
-    fs::write(test_file, test_program).expect("Failed to write test file");
+    let test_file = temp.path().join("test_chained_function_calls.prim");
+    fs::write(&test_file, test_program).expect("Failed to write test file");
 
     // Test run command
-    let output = Command::new("cargo")
-        .args(["run", "--", "run", test_file])
+    let output = std::process::Command::new(prim_bin())
+        .args(["run", test_file.to_string_lossy().as_ref()])
         .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
         .output()
         .expect("Failed to execute run command");
