@@ -406,12 +406,16 @@ dependencies = [
 name = "prim-compiler"
 version = "0.1.0"
 dependencies = [
+ "prim-hir",
  "prim-parse",
 ]
 
 [[package]]
 name = "prim-hir"
 version = "0.1.0"
+dependencies = [
+ "prim-tok",
+]
 
 [[package]]
 name = "prim-parse"

@@ -1,3 +1,4 @@
+use prim_tok::Span;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -28,6 +29,7 @@ pub struct HirProgram {
     pub items: Items,
     pub symbols: SymbolTable,
     pub files: Vec<FileInfo>,
+    pub spans: Vec<Span>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,4 +242,5 @@ pub enum Type {
     Array(Box<Type>),
     Struct(StructId),
     Pointer { mutable: bool, pointee: Box<Type> },
+    Undetermined,
 }

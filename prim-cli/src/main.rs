@@ -1,5 +1,5 @@
 use prim_codegen::generate_object_code;
-use prim_compiler::{load_program, type_check_program};
+use prim_compiler::{load_program, type_check_and_lower};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -118,7 +118,7 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let (program, parse_ms, type_ms) = compile_source(filename)?;
+    let (program, _hir, parse_ms, type_ms) = compile_source(filename)?;
     let link_start = Instant::now();
 
     // Generate object code directly using Cranelift
@@ -165,7 +165,7 @@ fn build_program(filename: &str) -> Result<(), MainError> {
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
-    let (program, _, _) = compile_source(filename)?;
+    let (program, _hir, _, _) = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
     let object_code = generate_object_code(&program)
@@ -221,18 +221,28 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     Ok(run_result.status.code().unwrap_or(0))
 }
 
-fn compile_source(path: &str) -> Result<(prim_compiler::Program, u128, u128), MainError> {
+fn compile_source(
+    path: &str,
+) -> Result<
+    (
+        prim_compiler::Program,
+        prim_compiler::HirProgram,
+        u128,
+        u128,
+    ),
+    MainError,
+> {
     let parse_start = Instant::now();
     let mut loaded =
         load_program(path).map_err(|err| MainError::CompilationError(err.to_string()))?;
     let parse_ms = parse_start.elapsed().as_millis();
 
     let type_start = Instant::now();
-    type_check_program(&mut loaded.program)
+    let hir = type_check_and_lower(&mut loaded.program)
         .map_err(|err| MainError::CompilationError(format!("Type check error: {}", err)))?;
     let type_ms = type_start.elapsed().as_millis();
 
-    Ok((loaded.program, parse_ms, type_ms))
+    Ok((loaded.program, hir, parse_ms, type_ms))
 }
 
 /// Return a path to the runtime static library
