@@ -1,4 +1,5 @@
 use crate::program::Program;
+use crate::resolver::resolve_names;
 use prim_parse::{BinaryOp, Expr, Function, Program as AstProgram, Stmt, Type, TypeCheckError};
 use std::collections::{HashMap, HashSet};
 
@@ -6,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 /// operates over the structured `Program` (modules/files) without concatenating
 /// source text.
 pub fn type_check_program(program: &mut Program) -> Result<(), TypeCheckError> {
+    // Populate name resolution before type checking to allow richer errors later.
+    let _ = resolve_names(program);
+
     let mut checker = TypeChecker::new();
 
     // First pass: collect trait signatures from all modules.

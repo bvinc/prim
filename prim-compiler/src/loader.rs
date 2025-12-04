@@ -1,6 +1,6 @@
 use crate::program::{
-    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
-    ModuleOrigin, Program,
+    ExportTable, FileId, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
+    ModuleOrigin, NameResolution, Program,
 };
 use prim_parse::{self, ImportDecl, ImportSelector, ParseError};
 use std::collections::HashMap;
@@ -109,6 +109,7 @@ struct Loader {
     options: LoadOptions,
     program: Program,
     module_cache: HashMap<String, ModuleCacheEntry>,
+    next_file_id: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -133,8 +134,28 @@ impl Loader {
                 modules: Vec::new(),
                 root: ModuleId(0),
                 module_index: HashMap::new(),
+                file_index: HashMap::new(),
+                name_resolution: NameResolution::default(),
             },
             module_cache: HashMap::new(),
+            next_file_id: 0,
+        }
+    }
+
+    fn alloc_file(
+        &mut self,
+        path: PathBuf,
+        source: Arc<str>,
+        ast: prim_parse::Program,
+    ) -> ModuleFile {
+        let file_id = FileId(self.next_file_id);
+        self.next_file_id += 1;
+        self.program.file_index.insert(path.clone(), file_id);
+        ModuleFile {
+            file_id,
+            path,
+            source,
+            ast,
         }
     }
 
@@ -175,11 +196,8 @@ impl Loader {
             );
         }
 
-        let module_files = vec![ModuleFile {
-            path: path.to_path_buf(),
-            source: Arc::from(source.clone()),
-            ast: ast.clone(),
-        }];
+        let module_files =
+            vec![self.alloc_file(path.to_path_buf(), Arc::from(source.clone()), ast.clone())];
 
         let exports = collect_exports(&module_files);
         let body_source = strip_to_body(&ast, &source);
@@ -269,11 +287,7 @@ impl Loader {
             }
 
             stripped_sources.push(strip_to_body(&ast, &source));
-            module_files.push(ModuleFile {
-                path: file.clone(),
-                source: Arc::from(source.clone()),
-                ast,
-            });
+            module_files.push(self.alloc_file(file.clone(), Arc::from(source.clone()), ast));
         }
 
         let module_name = module_name.unwrap();
@@ -446,11 +460,11 @@ impl Loader {
                     merge_import_request(&mut imports, &mut import_index, module, coverage);
                 }
 
-                module_files.push(ModuleFile {
-                    path: file.clone(),
-                    source: Arc::from(source.clone()),
-                    ast: program,
-                });
+                module_files.push(self.alloc_file(
+                    file.clone(),
+                    Arc::from(source.clone()),
+                    program,
+                ));
             }
 
             self.module_cache.insert(

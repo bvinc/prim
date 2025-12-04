@@ -1,10 +1,14 @@
 use prim_parse as ast;
+use prim_parse::Span;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileId(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ModuleKey {
@@ -24,6 +28,8 @@ pub struct Program {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
+    pub file_index: HashMap<PathBuf, FileId>,
+    pub name_resolution: NameResolution,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +46,7 @@ pub struct Module {
 
 #[derive(Clone, Debug)]
 pub struct ModuleFile {
+    pub file_id: FileId,
     pub path: PathBuf,
     pub source: Arc<str>,
     pub ast: ast::Program,
@@ -72,4 +79,42 @@ impl ExportTable {
             || self.traits.iter().any(|n| n == name)
             || self.impls.iter().any(|n| n == name)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SymbolKind {
+    Module,
+    Function,
+    Struct,
+    Trait,
+    Impl,
+    Global,
+    Param,
+    Local,
+    Field,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SymbolId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NameRef {
+    pub file: FileId,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct SymbolInfo {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub module: Option<ModuleId>,
+    pub file: FileId,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NameResolution {
+    pub symbols: Vec<SymbolInfo>,
+    pub uses: HashMap<NameRef, SymbolId>,
 }
