@@ -209,9 +209,16 @@ pub struct Symbol {
 
 #[derive(Clone, Debug)]
 pub enum SymbolKind {
+    Module,
     Function(FuncId),
     Struct(StructId),
     Global(GlobalId),
+    Param,
+    Local,
+    Field,
+    Trait,
+    Impl,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
