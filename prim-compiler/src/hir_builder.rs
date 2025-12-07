@@ -27,6 +27,7 @@ struct LoweringContext<'a> {
     def_lookup: HashMap<(ProgFileId, Span), ResSymbolId>,
     uses: &'a HashMap<NameRef, ResSymbolId>,
     symbols_info: &'a [SymbolInfo],
+    span_files: Vec<FileId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -39,6 +40,7 @@ impl<'a> LoweringContext<'a> {
             .map(|m| m + 1)
             .unwrap_or(0);
         let mut files = vec![None; max_file];
+        let span_files = Vec::new();
         for module in &program.modules {
             for file in &module.files {
                 let id = FileId(file.file_id.0);
@@ -75,6 +77,7 @@ impl<'a> LoweringContext<'a> {
             def_lookup,
             uses: &program.name_resolution.uses,
             symbols_info: &program.name_resolution.symbols,
+            span_files,
         }
     }
 
@@ -104,11 +107,12 @@ impl<'a> LoweringContext<'a> {
                     } else {
                         StructId(self.items.structs.len() as u32)
                     };
-                    let span = self.span_id(s.span);
+                    let span = self.span_id(s.span, FileId(file.file_id.0));
                     self.items.structs.push(HirStruct {
                         id: sid,
                         name: sym_id,
                         module: module_id,
+                        file: FileId(file.file_id.0),
                         fields: Vec::new(),
                         span,
                     });
@@ -126,11 +130,12 @@ impl<'a> LoweringContext<'a> {
                     } else {
                         FuncId(self.items.functions.len() as u32)
                     };
-                    let span = self.span_id(f.span);
+                    let span = self.span_id(f.span, FileId(file.file_id.0));
                     self.items.functions.push(HirFunction {
                         id: fid,
                         name: sym_id,
                         module: module_id,
+                        file: FileId(file.file_id.0),
                         params: Vec::new(),
                         ret: None,
                         body: HirBlock { stmts: Vec::new() },
@@ -167,7 +172,7 @@ impl<'a> LoweringContext<'a> {
                             HirField {
                                 name: sym_id,
                                 ty: self.lower_type(&f.field_type, file.file_id, source),
-                                span: self.span_id(f.name),
+                                span: self.span_id(f.name, FileId(file.file_id.0)),
                             }
                         })
                         .collect();
@@ -194,7 +199,7 @@ impl<'a> LoweringContext<'a> {
                                 SymbolId::dummy()
                             },
                             ty: self.lower_type(&p.type_annotation, file.file_id, source),
-                            span: self.span_id(p.name),
+                            span: self.span_id(p.name, FileId(file.file_id.0)),
                         })
                         .collect();
                     let ret = f
@@ -208,10 +213,12 @@ impl<'a> LoweringContext<'a> {
                             .map(|s| self.lower_stmt(s, source, module_id, file.file_id))
                             .collect(),
                     };
+                    let span = self.span_id(f.span, FileId(file.file_id.0));
                     if let Some(hir_func) = self.items.functions.get_mut(fid.0 as usize) {
                         hir_func.params = params;
                         hir_func.ret = ret;
                         hir_func.body = body;
+                        hir_func.span = span;
                     }
                 }
             }
@@ -233,6 +240,7 @@ impl<'a> LoweringContext<'a> {
             symbols: self.symbols,
             files: self.files,
             spans: self.spans,
+            span_files: self.span_files,
         }
     }
 
@@ -281,7 +289,7 @@ impl<'a> LoweringContext<'a> {
                     source,
                 ),
                 value: self.lower_expr(value, source, module, file_id),
-                span: self.span_id(*name),
+                span: self.span_id(*name, FileId(file_id.0)),
             },
             Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, source, module, file_id)),
             Stmt::Loop { body, span } => HirStmt::Loop {
@@ -291,10 +299,10 @@ impl<'a> LoweringContext<'a> {
                         .map(|s| self.lower_stmt(s, source, module, file_id))
                         .collect(),
                 },
-                span: self.span_id(*span),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Stmt::Break { span } => HirStmt::Break {
-                span: self.span_id(*span),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
         }
     }
@@ -310,7 +318,7 @@ impl<'a> LoweringContext<'a> {
             Expr::IntLiteral { span, ty, value } => HirExpr::Int {
                 value: *value,
                 ty: self.lower_type(ty, file_id, source),
-                span: self.span_id(*span),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::FloatLiteral { span, ty } => {
                 let parsed = span
@@ -320,7 +328,7 @@ impl<'a> LoweringContext<'a> {
                 HirExpr::Float {
                     value: parsed,
                     ty: self.lower_type(ty, file_id, source),
-                    span: self.span_id(*span),
+                    span: self.span_id(*span, FileId(file_id.0)),
                 }
             }
             Expr::BoolLiteral { value, ty } => HirExpr::Bool {
@@ -331,14 +339,14 @@ impl<'a> LoweringContext<'a> {
             Expr::StringLiteral { span, ty } => HirExpr::Str {
                 value: span.checked_text(source).unwrap_or_default().to_string(),
                 ty: self.lower_type(ty, file_id, source),
-                span: self.span_id(*span),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::Identifier { span, ty } => HirExpr::Ident {
                 symbol: self
                     .symbol_for_use(file_id, *span, Some(module))
                     .unwrap_or_else(SymbolId::dummy),
                 ty: self.lower_type(ty, file_id, source),
-                span: self.span_id(*span),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::Binary {
                 left,
@@ -372,7 +380,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|a| self.lower_expr(a, source, module, file_id))
                         .collect(),
                     ty: self.lower_type(ty, file_id, source),
-                    span: self.dummy_span(),
+                    span: self.span_id(call_span, FileId(file_id.0)),
                 }
             }
             Expr::StructLiteral { name, fields, ty } => {
@@ -394,7 +402,7 @@ impl<'a> LoweringContext<'a> {
                         })
                         .collect(),
                     ty: self.lower_type(ty, file_id, source),
-                    span: self.span_id(*name),
+                    span: self.span_id(*name, FileId(file_id.0)),
                 }
             }
             Expr::FieldAccess { object, field, ty } => HirExpr::Field {
@@ -403,7 +411,7 @@ impl<'a> LoweringContext<'a> {
                     .symbol_for_use(file_id, *field, Some(module))
                     .unwrap_or_else(SymbolId::dummy),
                 ty: self.lower_type(ty, file_id, source),
-                span: self.span_id(*field),
+                span: self.span_id(*field, FileId(file_id.0)),
             },
             Expr::Dereference { operand, ty } => HirExpr::Deref {
                 base: Box::new(self.lower_expr(operand, source, module, file_id)),
@@ -459,14 +467,15 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn span_id(&mut self, span: Span) -> SpanId {
+    fn span_id(&mut self, span: Span, file: FileId) -> SpanId {
         let id = SpanId(self.spans.len() as u32);
         self.spans.push(span);
+        self.span_files.push(file);
         id
     }
 
     fn dummy_span(&mut self) -> SpanId {
-        self.span_id(Span::empty_at(0))
+        self.span_id(Span::empty_at(0), FileId(u32::MAX))
     }
 
     fn res_use(&self, file_id: ProgFileId, span: Span) -> Option<ResSymbolId> {

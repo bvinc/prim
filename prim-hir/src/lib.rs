@@ -30,6 +30,7 @@ pub struct HirProgram {
     pub symbols: SymbolTable,
     pub files: Vec<FileInfo>,
     pub spans: Vec<Span>,
+    pub span_files: Vec<FileId>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +60,7 @@ pub struct HirFunction {
     pub id: FuncId,
     pub name: SymbolId,
     pub module: ModuleId,
+    pub file: FileId,
     pub params: Vec<HirParam>,
     pub ret: Option<Type>,
     pub body: HirBlock,
@@ -71,6 +73,7 @@ pub struct HirStruct {
     pub id: StructId,
     pub name: SymbolId,
     pub module: ModuleId,
+    pub file: FileId,
     pub fields: Vec<HirField>,
     pub span: SpanId,
 }
@@ -80,6 +83,7 @@ pub struct HirGlobal {
     pub id: GlobalId,
     pub name: SymbolId,
     pub module: ModuleId,
+    pub file: FileId,
     pub ty: Type,
     pub init: HirExpr,
     pub span: SpanId,

@@ -380,7 +380,7 @@ name = "prim"
 version = "0.1.0"
 dependencies = [
  "indexmap",
- "prim-codegen",
+ "prim-codegen-old",
  "prim-compiler",
  "prim-parse",
  "prim-rt",
@@ -390,6 +390,14 @@ dependencies = [
 
 [[package]]
 name = "prim-codegen"
+version = "0.1.0"
+dependencies = [
+ "prim-compiler",
+ "prim-hir",
+]
+
+[[package]]
+name = "prim-codegen-old"
 version = "0.1.0"
 dependencies = [
  "cranelift",
