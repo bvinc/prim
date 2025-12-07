@@ -4,7 +4,8 @@
 //! implement to ensure consistent error handling and reporting.
 
 use prim_codegen::CodegenError;
-use prim_parse::{ParseError, TypeCheckError};
+use prim_hir::typecheck::TypeCheckError;
+use prim_parse::ParseError;
 use prim_tok::TokenError;
 
 /// A unified trait for all compiler errors

@@ -382,6 +382,7 @@ dependencies = [
  "indexmap",
  "prim-codegen-old",
  "prim-compiler",
+ "prim-hir",
  "prim-parse",
  "prim-rt",
  "prim-tok",

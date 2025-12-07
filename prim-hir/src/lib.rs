@@ -2,6 +2,9 @@ use prim_tok::Span;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod typecheck;
+pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub u32);
 
