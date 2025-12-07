@@ -200,9 +200,47 @@ impl<'a> NameResolver<'a> {
                 {
                     local_scope.insert(param.name.text(source).to_string(), sym);
                 }
+                self.resolve_type_use(&param.type_annotation, file.file_id, source, module_scope);
+            }
+            if let Some(ret) = &func.return_type {
+                self.resolve_type_use(ret, file.file_id, source, module_scope);
             }
             for stmt in &func.body {
                 self.resolve_stmt(stmt, file.file_id, source, module_scope, local_scope);
+            }
+        }
+
+        for s in &file.ast.structs {
+            for field in &s.fields {
+                self.resolve_type_use(&field.field_type, file.file_id, source, module_scope);
+            }
+        }
+
+        for tr in &file.ast.traits {
+            for m in &tr.methods {
+                for p in &m.parameters {
+                    self.resolve_type_use(&p.type_annotation, file.file_id, source, module_scope);
+                }
+                if let Some(ret) = &m.return_type {
+                    self.resolve_type_use(ret, file.file_id, source, module_scope);
+                }
+            }
+        }
+
+        for im in &file.ast.impls {
+            self.resolve_type_use(
+                &prim_parse::Type::Struct(im.struct_name),
+                file.file_id,
+                source,
+                module_scope,
+            );
+            for m in &im.methods {
+                for p in &m.parameters {
+                    self.resolve_type_use(&p.type_annotation, file.file_id, source, module_scope);
+                }
+                if let Some(ret) = &m.return_type {
+                    self.resolve_type_use(ret, file.file_id, source, module_scope);
+                }
             }
         }
     }
@@ -216,7 +254,14 @@ impl<'a> NameResolver<'a> {
         local_scope: &mut HashMap<String, SymbolId>,
     ) {
         match stmt {
-            Stmt::Let { name, value, .. } => {
+            Stmt::Let {
+                name,
+                type_annotation,
+                value,
+            } => {
+                if let Some(ann) = type_annotation {
+                    self.resolve_type_use(ann, file_id, source, module_scope);
+                }
                 self.resolve_expr(value, file_id, source, module_scope, local_scope);
                 if let Some(sym) = self.find_symbol(name.text(source), file_id, SymbolKind::Local) {
                     local_scope.insert(name.text(source).to_string(), sym);
@@ -332,6 +377,34 @@ impl<'a> NameResolver<'a> {
             | Expr::FloatLiteral { .. }
             | Expr::BoolLiteral { .. }
             | Expr::StringLiteral { .. } => {}
+        }
+    }
+
+    fn resolve_type_use(
+        &mut self,
+        ty: &prim_parse::Type,
+        file_id: FileId,
+        source: &str,
+        module_scope: &HashMap<String, SymbolId>,
+    ) {
+        match ty {
+            prim_parse::Type::Struct(span) => {
+                let name = span.text(source).to_string();
+                if let Some(sym) = module_scope.get(&name).copied() {
+                    let key = NameRef {
+                        file: file_id,
+                        span: *span,
+                    };
+                    self.program.name_resolution.uses.insert(key, sym);
+                }
+            }
+            prim_parse::Type::Array(inner) => {
+                self.resolve_type_use(inner, file_id, source, module_scope)
+            }
+            prim_parse::Type::Pointer { pointee, .. } => {
+                self.resolve_type_use(pointee, file_id, source, module_scope)
+            }
+            _ => {}
         }
     }
 
