@@ -118,11 +118,11 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let (program, _hir, parse_ms, type_ms) = compile_source(filename)?;
+    let (program, hir, parse_ms, type_ms) = compile_source(filename)?;
     let link_start = Instant::now();
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program)
+    let object_code = generate_object_code(&program, &hir)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create executable name from source file name
@@ -165,10 +165,10 @@ fn build_program(filename: &str) -> Result<(), MainError> {
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
-    let (program, _hir, _, _) = compile_source(filename)?;
+    let (program, hir, _, _) = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program)
+    let object_code = generate_object_code(&program, &hir)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create temporary files for object code and executable

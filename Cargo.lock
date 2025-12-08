@@ -380,7 +380,7 @@ name = "prim"
 version = "0.1.0"
 dependencies = [
  "indexmap",
- "prim-codegen-old",
+ "prim-codegen",
  "prim-compiler",
  "prim-hir",
  "prim-parse",
@@ -393,6 +393,10 @@ dependencies = [
 name = "prim-codegen"
 version = "0.1.0"
 dependencies = [
+ "cranelift",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
  "prim-compiler",
  "prim-hir",
 ]

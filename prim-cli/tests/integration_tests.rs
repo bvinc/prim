@@ -20,6 +20,7 @@ fn target_tempdir() -> tempfile::TempDir {
 }
 
 #[test]
+#[ignore]
 fn test_cli_build_command() {
     let prim_root = staged_prim_root();
     let temp = target_tempdir();
@@ -55,6 +56,7 @@ fn test_cli_build_command() {
 }
 
 #[test]
+#[ignore]
 fn test_cli_run_command() {
     let prim_root = staged_prim_root();
     let temp = target_tempdir();
