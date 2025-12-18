@@ -329,6 +329,11 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (arg, expected) in args.iter_mut().zip(params.iter()) {
+                    if !matches!(expected, Type::Undetermined)
+                        && !matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
+                    {
+                        self.apply_expected_literal_type(arg, expected);
+                    }
                     let got = self.check_expr(arg, locals)?;
                     if matches!(expected, Type::Undetermined)
                         || matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
@@ -373,6 +378,11 @@ impl<'a> Checker<'a> {
                             )
                         })?
                     };
+                    if !matches!(expected, Type::Undetermined)
+                        && !matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
+                    {
+                        self.apply_expected_literal_type(val, &expected);
+                    }
                     let got = self.check_expr(val, locals)?;
                     if matches!(expected, Type::Undetermined)
                         || matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
@@ -458,6 +468,32 @@ impl<'a> Checker<'a> {
                 Ok(arr)
             }
         }
+    }
+
+    fn apply_expected_literal_type(&self, expr: &mut HirExpr, expected: &Type) {
+        match (expr, expected) {
+            (HirExpr::Int { ty, .. }, exp) if self.is_integer(exp) => *ty = exp.clone(),
+            (HirExpr::Float { ty, .. }, Type::F32) => *ty = Type::F32,
+            (HirExpr::Float { ty, .. }, Type::F64) => *ty = Type::F64,
+            (HirExpr::Bool { ty, .. }, Type::Bool) => *ty = Type::Bool,
+            _ => {}
+        }
+    }
+
+    fn is_integer(&self, t: &Type) -> bool {
+        matches!(
+            t,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::Isize
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::Usize
+        )
     }
 
     #[allow(clippy::only_used_in_recursion)]

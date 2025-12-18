@@ -28,6 +28,8 @@ struct LoweringContext<'a> {
     uses: &'a HashMap<NameRef, ResSymbolId>,
     symbols_info: &'a [SymbolInfo],
     span_files: Vec<FileId>,
+    builtin_println_i64: Option<FuncId>,
+    builtin_println_bool: Option<FuncId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -78,6 +80,8 @@ impl<'a> LoweringContext<'a> {
             uses: &program.name_resolution.uses,
             symbols_info: &program.name_resolution.symbols,
             span_files,
+            builtin_println_i64: None,
+            builtin_println_bool: None,
         }
     }
 
@@ -337,7 +341,7 @@ impl<'a> LoweringContext<'a> {
                 span: self.dummy_span(),
             },
             Expr::StringLiteral { span, ty } => HirExpr::Str {
-                value: span.checked_text(source).unwrap_or_default().to_string(),
+                value: self.parse_string_literal(*span, source),
                 ty: self.lower_type(ty, file_id, source),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
@@ -369,10 +373,31 @@ impl<'a> LoweringContext<'a> {
             Expr::FunctionCall { path, args, ty } => {
                 let call_span = *path.segments.last().unwrap_or(&Span::empty_at(0));
                 let res_id = self.res_use(file_id, call_span);
-                let fid = res_id
-                    .and_then(|rid| self.func_ids.get(&rid).copied())
-                    .unwrap_or(FuncId(u32::MAX));
-                let _ = res_id.and_then(|rid| self.ensure_symbol(rid, Some(module)));
+                let fid = if let Some(rid) = res_id {
+                    if let Some(id) = self.func_ids.get(&rid).copied() {
+                        let _ = self.ensure_symbol(rid, Some(module));
+                        id
+                    } else {
+                        // Unknown function reference; leave unresolved so codegen can error loudly.
+                        FuncId(u32::MAX)
+                    }
+                } else {
+                    // Fallback for built-in println until it lives in std with @runtime.
+                    let name = path
+                        .segments
+                        .last()
+                        .map(|s| s.text(source))
+                        .unwrap_or_default();
+                    if name == "println" {
+                        let arg_ty = args
+                            .first()
+                            .map(|a| self.lower_type(a.resolved_type(), file_id, source))
+                            .unwrap_or(prim_hir::Type::Undetermined);
+                        self.ensure_builtin_println(arg_ty, file_id)
+                    } else {
+                        FuncId(u32::MAX)
+                    }
+                };
                 HirExpr::Call {
                     func: fid,
                     args: args
@@ -429,10 +454,70 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    fn ensure_builtin_println(&mut self, arg_ty: prim_hir::Type, file_id: ProgFileId) -> FuncId {
+        let is_bool = matches!(arg_ty, prim_hir::Type::Bool);
+        // Avoid borrow conflicts by keeping the slot borrow scoped.
+        {
+            let slot = if is_bool {
+                &mut self.builtin_println_bool
+            } else {
+                &mut self.builtin_println_i64
+            };
+            if let Some(id) = *slot {
+                return id;
+            }
+            let func_id = FuncId(self.items.functions.len() as u32);
+            *slot = Some(func_id);
+        }
+        let func_id = *if is_bool {
+            self.builtin_println_bool.as_ref()
+        } else {
+            self.builtin_println_i64.as_ref()
+        }
+        .expect("slot just set");
+
+        let sym_id = SymbolId(self.symbols.entries.len() as u32);
+        let span = self.dummy_span();
+        let binding = if is_bool {
+            "prim_rt_println_bool".to_string()
+        } else {
+            "prim_rt_println_i64".to_string()
+        };
+
+        self.symbols.entries.push(Symbol {
+            id: sym_id,
+            module: ModuleId(0),
+            name: "println".to_string(),
+            kind: SymbolKind::Function(func_id),
+        });
+        let param = HirParam {
+            name: SymbolId::dummy(),
+            ty: arg_ty.clone(),
+            span,
+        };
+        self.items.functions.push(HirFunction {
+            id: func_id,
+            name: sym_id,
+            module: ModuleId(0),
+            file: FileId(file_id.0),
+            params: vec![param],
+            ret: None,
+            body: HirBlock { stmts: Vec::new() },
+            span,
+            runtime_binding: Some(binding),
+        });
+        func_id
+    }
+
     #[allow(clippy::only_used_in_recursion)]
     fn lower_type(&self, ty: &Type, file_id: ProgFileId, source: &str) -> prim_hir::Type {
         match ty {
             Type::Struct(span) => {
+                if self.res_use(file_id, *span).is_none()
+                    && span.checked_text(source).is_some_and(|s| s == "Str")
+                {
+                    return prim_hir::Type::StrSlice;
+                }
                 let sid = self
                     .res_use(file_id, *span)
                     .and_then(|rid| self.struct_ids.get(&rid).copied())
@@ -472,6 +557,36 @@ impl<'a> LoweringContext<'a> {
         self.spans.push(span);
         self.span_files.push(file);
         id
+    }
+
+    fn parse_string_literal(&self, span: Span, source: &str) -> String {
+        let raw = span.checked_text(source).unwrap_or_default();
+        let inner = raw
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(raw);
+
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                out.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        }
+        out
     }
 
     fn dummy_span(&mut self) -> SpanId {

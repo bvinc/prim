@@ -15,20 +15,116 @@ pub struct CraneliftCodeGenerator {
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
     func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
     func_param_counts: HashMap<prim_hir::FuncId, usize>,
+    func_param_types: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
+}
+
+fn coerce_value(
+    builder: &mut FunctionBuilder,
+    val: Value,
+    expected: cranelift::prelude::Type,
+) -> Value {
+    // TODO: remove this once lowering emits the correct lane types directly.
+    let got = builder.func.dfg.value_type(val);
+    if got == expected {
+        return val;
+    }
+    if got.is_int() && expected.is_int() {
+        if got.bytes() < expected.bytes() {
+            return builder.ins().uextend(expected, val);
+        }
+        return builder.ins().ireduce(expected, val);
+    }
+    if got.is_float() && expected.is_float() {
+        if got == types::F32 && expected == types::F64 {
+            return builder.ins().fpromote(expected, val);
+        }
+        if got == types::F64 && expected == types::F32 {
+            return builder.ins().fdemote(expected, val);
+        }
+    }
+    val
+}
+
+fn coerce_returns(
+    builder: &mut FunctionBuilder,
+    mut vals: Vec<Value>,
+    ty: &prim_hir::Type,
+    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+) -> Result<Vec<Value>, CodegenError> {
+    match ty {
+        prim_hir::Type::StrSlice => {
+            while vals.len() < 2 {
+                vals.push(builder.ins().iconst(types::I64, 0));
+            }
+            Ok(vals)
+        }
+        prim_hir::Type::Struct(id) => {
+            if let Some(layout) = layouts.get(id) {
+                while vals.len() < layout.order.len() {
+                    vals.push(builder.ins().iconst(types::I64, 0)); // TODO: missing fields should be an error, not zero
+                }
+                for (i, sym) in layout.order.iter().enumerate() {
+                    if let Some(f) = layout.fields.get(sym) {
+                        if let Some(v) = vals.get(i).copied() {
+                            // TODO: avoid post-hoc coercion; emit the correct lane up front.
+                            vals[i] = coerce_value(builder, v, f.ty);
+                        }
+                    }
+                }
+                Ok(vals)
+            } else {
+                // TODO: missing struct layout should be a hard error.
+                Ok(vals)
+            }
+        }
+        _ => {
+            let (lane, _) = scalar_lane(ty)?;
+            if let Some(v) = vals.first().copied() {
+                Ok(vec![coerce_value(builder, v, lane)])
+            } else {
+                Ok(vec![builder.ins().iconst(lane, 0)])
+            }
+        }
+    }
+}
+
+fn expr_type(expr: &prim_hir::HirExpr) -> &prim_hir::Type {
+    match expr {
+        prim_hir::HirExpr::Int { ty, .. }
+        | prim_hir::HirExpr::Float { ty, .. }
+        | prim_hir::HirExpr::Bool { ty, .. }
+        | prim_hir::HirExpr::Str { ty, .. }
+        | prim_hir::HirExpr::Ident { ty, .. }
+        | prim_hir::HirExpr::Binary { ty, .. }
+        | prim_hir::HirExpr::Call { ty, .. }
+        | prim_hir::HirExpr::StructLit { ty, .. }
+        | prim_hir::HirExpr::Field { ty, .. }
+        | prim_hir::HirExpr::Deref { ty, .. }
+        | prim_hir::HirExpr::ArrayLit { ty, .. } => ty,
+    }
+}
+
+trait StructTypeExt {
+    fn as_struct(&self) -> Option<prim_hir::StructId>;
+}
+
+impl StructTypeExt for prim_hir::Type {
+    fn as_struct(&self) -> Option<prim_hir::StructId> {
+        match self {
+            prim_hir::Type::Struct(id) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct StructLayout {
     fields: HashMap<prim_hir::SymbolId, FieldLayout>,
     order: Vec<prim_hir::SymbolId>,
-    size: u32,
-    align: u8,
 }
 
 #[derive(Clone, Debug)]
 struct FieldLayout {
-    offset: u32,
-    size: u32,
     ty: cranelift::prelude::Type,
 }
 
@@ -58,6 +154,7 @@ impl CraneliftCodeGenerator {
             struct_layouts: HashMap::new(),
             func_ids: HashMap::new(),
             func_param_counts: HashMap::new(),
+            func_param_types: HashMap::new(),
         })
     }
 
@@ -70,6 +167,8 @@ impl CraneliftCodeGenerator {
                 append_abi_params(&mut sig, &param.ty, &self.struct_layouts)?;
             }
             let param_count = sig.params.len();
+            let param_types: Vec<cranelift::prelude::Type> =
+                sig.params.iter().map(|p| p.value_type).collect();
             if func.name == main_symbol(program) {
                 sig.returns.push(AbiParam::new(types::I32));
             } else if let Some(ret) = &func.ret {
@@ -88,6 +187,7 @@ impl CraneliftCodeGenerator {
             let func_id = self.module.declare_function(&sym, linkage, &sig)?;
             self.func_ids.insert(func.id, func_id);
             self.func_param_counts.insert(func.id, param_count);
+            self.func_param_types.insert(func.id, param_types);
         }
 
         for func in &program.items.functions {
@@ -102,32 +202,15 @@ impl CraneliftCodeGenerator {
 
     fn compute_struct_layouts(&mut self, program: &HirProgram) -> Result<(), CodegenError> {
         for st in &program.items.structs {
-            let mut offset = 0u32;
             let mut fields = HashMap::new();
             let mut order = Vec::new();
             for f in &st.fields {
-                let (cl_ty, size) = scalar_lane(&f.ty)?;
-                fields.insert(
-                    f.name,
-                    FieldLayout {
-                        offset,
-                        size,
-                        ty: cl_ty,
-                    },
-                );
+                let (cl_ty, _) = scalar_lane(&f.ty)?;
+                fields.insert(f.name, FieldLayout { ty: cl_ty });
                 order.push(f.name);
-                offset += size;
             }
-            let size = offset.max(1);
-            self.struct_layouts.insert(
-                st.id,
-                StructLayout {
-                    fields,
-                    order,
-                    size,
-                    align: 8,
-                },
-            );
+            self.struct_layouts
+                .insert(st.id, StructLayout { fields, order });
         }
         Ok(())
     }
@@ -164,16 +247,24 @@ impl CraneliftCodeGenerator {
         bind_params_static(&mut locals, &abi_params, func, &self.struct_layouts)?;
 
         let mut last_val: Option<Vec<Value>> = None;
+        let mut loop_exits: Vec<Block> = Vec::new();
         for stmt in &func.body.stmts {
-            last_val = lower_stmt_static(
+            let flow = lower_stmt_static(
                 stmt,
                 &mut builder,
                 &mut locals,
                 &self.struct_layouts,
                 &self.func_ids,
                 &self.func_param_counts,
+                &self.func_param_types,
                 &mut self.module,
+                &mut loop_exits,
             )?;
+            match flow {
+                StmtFlow::Continue => {}
+                StmtFlow::Value(vs) => last_val = Some(vs),
+                StmtFlow::Terminated => break,
+            }
         }
 
         let rets = if func.name == main_symbol(program) {
@@ -187,7 +278,7 @@ impl CraneliftCodeGenerator {
                     &self.struct_layouts,
                 )?],
             };
-            out
+            coerce_returns(&mut builder, out, ret_ty, &self.struct_layouts)?
         } else {
             Vec::new()
         };
@@ -335,16 +426,20 @@ fn bind_params_static(
     let mut idx = 0usize;
     for param in &func.params {
         let slots = abi_slot_count(&param.ty, layouts);
-        let slice = abi_params
-            .get(idx..idx + slots)
-            .ok_or_else(|| {
-                eprintln!("param slot missing for {:?}", param.name);
-                CodegenError::Unimplemented
-            })?;
+        let slice = abi_params.get(idx..idx + slots).ok_or_else(|| {
+            eprintln!("param slot missing for {:?}", param.name);
+            CodegenError::Unimplemented
+        })?;
         locals.bind_local(param.name, slice.to_vec());
         idx += slots;
     }
     Ok(())
+}
+
+enum StmtFlow {
+    Continue,
+    Value(Vec<Value>),
+    Terminated,
 }
 
 fn lower_stmt_static(
@@ -354,8 +449,10 @@ fn lower_stmt_static(
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
     func_ids: &HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
     func_param_counts: &HashMap<prim_hir::FuncId, usize>,
+    func_param_types: &HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
     module: &mut ObjectModule,
-) -> Result<Option<Vec<Value>>, CodegenError> {
+    loop_exits: &mut Vec<Block>,
+) -> Result<StmtFlow, CodegenError> {
     match stmt {
         prim_hir::HirStmt::Let { name, value, .. } => {
             let vals = lower_expr_static(
@@ -365,10 +462,11 @@ fn lower_stmt_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?;
             locals.bind_local(*name, vals.clone());
-            Ok(None)
+            Ok(StmtFlow::Continue)
         }
         prim_hir::HirStmt::Expr(expr) => {
             let vals = lower_expr_static(
@@ -378,9 +476,10 @@ fn lower_stmt_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?;
-            Ok(Some(vals))
+            Ok(StmtFlow::Value(vals))
         }
         prim_hir::HirStmt::Loop { body, .. } => {
             let header = builder.create_block();
@@ -392,27 +491,45 @@ fn lower_stmt_static(
             builder.seal_block(header);
 
             builder.switch_to_block(body_block);
+            loop_exits.push(exit);
+            let mut terminated = false;
             for s in &body.stmts {
-                lower_stmt_static(
+                let flow = lower_stmt_static(
                     s,
                     builder,
                     locals,
                     layouts,
                     func_ids,
                     func_param_counts,
+                    func_param_types,
                     module,
+                    loop_exits,
                 )?;
+                match flow {
+                    StmtFlow::Terminated => {
+                        terminated = true;
+                        break;
+                    }
+                    StmtFlow::Continue | StmtFlow::Value(_) => {}
+                }
             }
-            builder.ins().jump(header, &[]);
+            loop_exits.pop();
+            if !terminated {
+                builder.ins().jump(header, &[]);
+            }
             builder.seal_block(body_block);
 
             builder.switch_to_block(exit);
             builder.seal_block(exit);
-            Ok(None)
+            Ok(StmtFlow::Continue)
         }
         prim_hir::HirStmt::Break { .. } => {
-            builder.ins().return_(&[]);
-            Ok(Some(Vec::new()))
+            let exit = loop_exits
+                .last()
+                .copied()
+                .ok_or(CodegenError::Unimplemented)?;
+            builder.ins().jump(exit, &[]);
+            Ok(StmtFlow::Terminated)
         }
     }
 }
@@ -424,6 +541,7 @@ fn lower_expr_static(
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
     func_ids: &HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
     func_param_counts: &HashMap<prim_hir::FuncId, usize>,
+    func_param_types: &HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
     module: &mut ObjectModule,
 ) -> Result<Vec<Value>, CodegenError> {
     Ok(match expr {
@@ -464,6 +582,7 @@ fn lower_expr_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?;
             let r = lower_expr_static(
@@ -473,6 +592,7 @@ fn lower_expr_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?;
             let (l, r) = (l[0], r[0]);
@@ -490,16 +610,8 @@ fn lower_expr_static(
             };
             vec![res]
         }
-        prim_hir::HirExpr::Call { func, args, ty, .. } => {
-            if func.0 == u32::MAX {
-                return Ok(vec![zero_value_static(builder, ty, layouts)?]);
-            }
-            let target = match func_ids.get(func) {
-                Some(id) => *id,
-                None => {
-                    return Ok(vec![zero_value_static(builder, ty, layouts)?]);
-                }
-            };
+        prim_hir::HirExpr::Call { func, args, .. } => {
+            let target = *func_ids.get(func).ok_or(CodegenError::Unimplemented)?; // TODO: replace with a specific error for missing func
             let callee = module.declare_func_in_func(target, builder.func);
             let mut lowered_args = Vec::new();
             for a in args {
@@ -510,6 +622,7 @@ fn lower_expr_static(
                     layouts,
                     func_ids,
                     func_param_counts,
+                    func_param_types,
                     module,
                 )?);
             }
@@ -518,9 +631,13 @@ fn lower_expr_static(
                     lowered_args.truncate(*expected);
                 } else if lowered_args.len() < *expected {
                     while lowered_args.len() < *expected {
-                        lowered_args
-                            .push(builder.ins().iconst(types::I64, 0));
+                        lowered_args.push(builder.ins().iconst(types::I64, 0));
                     }
+                }
+            }
+            if let Some(param_types) = func_param_types.get(func) {
+                for (arg, expected_ty) in lowered_args.iter_mut().zip(param_types.iter().copied()) {
+                    *arg = coerce_value(builder, *arg, expected_ty);
                 }
             }
             let call = builder.ins().call(callee, &lowered_args);
@@ -529,12 +646,10 @@ fn lower_expr_static(
         prim_hir::HirExpr::StructLit {
             struct_id, fields, ..
         } => {
-            let layout = layouts.get(struct_id).cloned().unwrap_or(StructLayout {
-                fields: HashMap::new(),
-                order: Vec::new(),
-                size: 0,
-                align: 8,
-            });
+            let layout = layouts
+                .get(struct_id)
+                .cloned()
+                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
             let mut values = vec![builder.ins().iconst(types::I64, 0); layout.order.len()];
             for (field_sym, expr) in fields {
                 if let Some(pos) = layout.order.iter().position(|s| s == field_sym) {
@@ -545,10 +660,17 @@ fn lower_expr_static(
                         layouts,
                         func_ids,
                         func_param_counts,
+                        func_param_types,
                         module,
                     )?;
                     if let Some(v) = vals.first() {
-                        values[pos] = *v;
+                        let target_ty = layout
+                            .fields
+                            .get(field_sym)
+                            .map(|f| f.ty)
+                            .unwrap_or(builder.func.dfg.value_type(*v));
+                        // TODO: instead of coercing after the fact, emit the right type up front.
+                        values[pos] = coerce_value(builder, *v, target_ty);
                     }
                 }
             }
@@ -562,15 +684,23 @@ fn lower_expr_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?;
-            let idx = field.0 as usize;
-            vec![
-                base_vals
-                    .get(idx)
-                    .copied()
-                    .unwrap_or_else(|| builder.ins().iconst(types::I64, 0)),
-            ]
+            let struct_id = expr_type(base)
+                .as_struct()
+                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+            let layout = layouts.get(&struct_id).ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+            let pos = layout
+                .order
+                .iter()
+                .position(|s| s == field)
+                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+            let val = base_vals
+                .get(pos)
+                .copied()
+                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+            vec![val]
         }
         prim_hir::HirExpr::Deref { base, .. } => {
             let ptr = lower_expr_static(
@@ -580,6 +710,7 @@ fn lower_expr_static(
                 layouts,
                 func_ids,
                 func_param_counts,
+                func_param_types,
                 module,
             )?[0];
             let loaded = builder.ins().load(types::I64, MemFlags::new(), ptr, 0);
@@ -597,6 +728,7 @@ fn lower_expr_static(
                     layouts,
                     func_ids,
                     func_param_counts,
+                    func_param_types,
                     module,
                 )?
             }

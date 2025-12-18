@@ -1,5 +1,6 @@
 use crate::program::{
-    FileId, ModuleFile, ModuleId, NameRef, Program, SymbolId, SymbolInfo, SymbolKind,
+    FileId, ImportCoverage, ImportRequest, ModuleFile, ModuleId, NameRef, Program, SymbolId,
+    SymbolInfo, SymbolKind,
 };
 use prim_parse::{Expr, Span, Stmt};
 use std::collections::HashMap;
@@ -179,9 +180,50 @@ impl<'a> NameResolver<'a> {
                 .unwrap_or_default();
             for file in &module.files {
                 let mut local_scope = HashMap::new();
-                self.resolve_file_uses(file, &module_scope, &mut local_scope);
+                let effective_scope = self.scope_with_imports(&module_scope, &module.imports);
+                self.resolve_file_uses(file, &effective_scope, &mut local_scope);
             }
         }
+    }
+
+    fn scope_with_imports(
+        &self,
+        module_scope: &HashMap<String, SymbolId>,
+        imports: &[ImportRequest],
+    ) -> HashMap<String, SymbolId> {
+        let mut scope = module_scope.clone();
+
+        for ImportRequest { module, coverage } in imports {
+            let key = crate::program::ModuleKey::Name(module.clone());
+            let Some(module_id) = self.program.module_index.get(&key).copied() else {
+                continue;
+            };
+            let Some(import_scope) = self.module_scopes.get(&module_id) else {
+                continue;
+            };
+
+            match coverage {
+                ImportCoverage::All => {
+                    // Import all top-level names unqualified (merged compilation unit behavior).
+                    let skip = module.last().map(|s| s.as_str()).unwrap_or("");
+                    for (name, sym) in import_scope {
+                        if name == skip {
+                            continue;
+                        }
+                        scope.insert(name.clone(), *sym);
+                    }
+                }
+                ImportCoverage::Symbols(names) => {
+                    for name in names {
+                        if let Some(sym) = import_scope.get(name) {
+                            scope.insert(name.clone(), *sym);
+                        }
+                    }
+                }
+            }
+        }
+
+        scope
     }
 
     fn resolve_file_uses(
@@ -196,7 +238,7 @@ impl<'a> NameResolver<'a> {
             local_scope.clear();
             for param in &func.parameters {
                 if let Some(sym) =
-                    self.find_symbol(param.name.text(source), file.file_id, SymbolKind::Param)
+                    self.find_symbol_at_span(file.file_id, param.name, SymbolKind::Param)
                 {
                     local_scope.insert(param.name.text(source).to_string(), sym);
                 }
@@ -263,22 +305,20 @@ impl<'a> NameResolver<'a> {
                     self.resolve_type_use(ann, file_id, source, module_scope);
                 }
                 self.resolve_expr(value, file_id, source, module_scope, local_scope);
-                if let Some(sym) = self.find_symbol(name.text(source), file_id, SymbolKind::Local) {
+                // Always create a fresh symbol for each `let` binding (locals are scope-based,
+                // not file-based; reusing by name breaks `def_lookup` and shadowing).
+                let sym = self
+                    .insert_symbol(SymbolInfo {
+                        id: SymbolId(0),
+                        name: name.text(source).to_string(),
+                        kind: SymbolKind::Local,
+                        module: None,
+                        file: file_id,
+                        span: *name,
+                    })
+                    .ok();
+                if let Some(sym) = sym {
                     local_scope.insert(name.text(source).to_string(), sym);
-                } else {
-                    let sym = self
-                        .insert_symbol(SymbolInfo {
-                            id: SymbolId(0),
-                            name: name.text(source).to_string(),
-                            kind: SymbolKind::Local,
-                            module: None,
-                            file: file_id,
-                            span: *name,
-                        })
-                        .ok();
-                    if let Some(sym) = sym {
-                        local_scope.insert(name.text(source).to_string(), sym);
-                    }
                 }
             }
             Stmt::Expr(expr) => {
@@ -355,6 +395,15 @@ impl<'a> NameResolver<'a> {
                     self.program.name_resolution.uses.insert(key, *sym);
                 }
                 for field in fields {
+                    if let Some(sym) =
+                        self.find_symbol(field.name.text(source), file_id, SymbolKind::Field)
+                    {
+                        let key = NameRef {
+                            file: file_id,
+                            span: field.name,
+                        };
+                        self.program.name_resolution.uses.insert(key, sym);
+                    }
                     self.resolve_expr(&field.value, file_id, source, module_scope, local_scope);
                 }
             }
@@ -362,8 +411,16 @@ impl<'a> NameResolver<'a> {
                 self.resolve_expr(left, file_id, source, module_scope, local_scope);
                 self.resolve_expr(right, file_id, source, module_scope, local_scope);
             }
-            Expr::FieldAccess { object, .. } => {
+            Expr::FieldAccess { object, field, .. } => {
                 self.resolve_expr(object, file_id, source, module_scope, local_scope);
+                if let Some(sym) = self.find_symbol(field.text(source), file_id, SymbolKind::Field)
+                {
+                    let key = NameRef {
+                        file: file_id,
+                        span: *field,
+                    };
+                    self.program.name_resolution.uses.insert(key, sym);
+                }
             }
             Expr::Dereference { operand, .. } => {
                 self.resolve_expr(operand, file_id, source, module_scope, local_scope);
@@ -421,6 +478,15 @@ impl<'a> NameResolver<'a> {
             .symbols
             .iter()
             .find(|info| info.name == name && info.file == file && info.kind == kind)
+            .map(|info| info.id)
+    }
+
+    fn find_symbol_at_span(&self, file: FileId, span: Span, kind: SymbolKind) -> Option<SymbolId> {
+        self.program
+            .name_resolution
+            .symbols
+            .iter()
+            .find(|info| info.file == file && info.span == span && info.kind == kind)
             .map(|info| info.id)
     }
 }
