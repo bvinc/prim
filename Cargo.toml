@@ -4,7 +4,6 @@ members = [
     "prim-tok",
     "prim-parse", 
     "prim-codegen",
-    "prim-codegen-old",
     "prim-rt", "prim-compiler", "prim-hir",
 ]
 resolver = "2"
