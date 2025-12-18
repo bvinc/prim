@@ -695,10 +695,10 @@ impl CraneliftCodeGenerator {
                 let (lane, _) = Self::scalar_lane(ty);
                 Ok(Val::One(builder.ins().iconst(lane, *value)))
             }
-            Expr::FloatLiteral { span: value, .. } => Err(CodegenError::InvalidExpression {
+            Expr::FloatLiteral { span, .. } => Err(CodegenError::InvalidExpression {
                 message: format!(
                     "Float literals are not yet supported: {}",
-                    value.text(source)
+                    span.text(source)
                 ),
                 context: "float literal evaluation".to_string(),
             }),

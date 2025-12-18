@@ -58,6 +58,7 @@ pub enum Expr {
     },
     FloatLiteral {
         span: Span,
+        value: f64,
         ty: Type,
     },
     BoolLiteral {

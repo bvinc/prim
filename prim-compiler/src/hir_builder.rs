@@ -334,17 +334,11 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
-            Expr::FloatLiteral { span, ty } => {
-                let parsed = span
-                    .checked_text(source)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or_default();
-                HirExpr::Float {
-                    value: parsed,
-                    ty: self.lower_type(ty, file_id),
-                    span: self.span_id(*span, FileId(file_id.0)),
-                }
-            }
+            Expr::FloatLiteral { span, value, ty } => HirExpr::Float {
+                value: *value,
+                ty: self.lower_type(ty, file_id),
+                span: self.span_id(*span, FileId(file_id.0)),
+            },
             Expr::BoolLiteral { value, ty } => HirExpr::Bool {
                 value: *value,
                 ty: self.lower_type(ty, file_id),

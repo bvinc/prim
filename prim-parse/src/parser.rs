@@ -268,9 +268,27 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::FloatLiteral) => {
-                let token = self.advance();
+                let token_span = {
+                    let token = self.advance();
+                    token.span
+                };
+                let literal_text = token_span.text(self.source).to_string();
+                let num_part = literal_text
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect::<String>();
+                let value: f64 = match num_part.parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Err(ParseError::InvalidFloatLiteral {
+                            literal: literal_text.clone(),
+                            position: token_span.start(),
+                        });
+                    }
+                };
                 Ok(Expr::FloatLiteral {
-                    span: token.span,
+                    span: token_span,
+                    value,
                     ty: Type::Undetermined,
                 })
             }

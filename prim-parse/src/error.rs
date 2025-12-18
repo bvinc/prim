@@ -19,6 +19,10 @@ pub enum ParseError {
         literal: String,
         position: usize,
     },
+    InvalidFloatLiteral {
+        literal: String,
+        position: usize,
+    },
 }
 
 impl From<TokenError> for ParseError {
@@ -59,6 +63,9 @@ impl std::fmt::Display for ParseError {
             ParseError::InvalidIntegerLiteral { literal, .. } => {
                 write!(f, "Invalid integer literal: {}", literal)
             }
+            ParseError::InvalidFloatLiteral { literal, .. } => {
+                write!(f, "Invalid float literal: {}", literal)
+            }
         }
     }
 }
@@ -76,6 +83,7 @@ impl ParseError {
             ParseError::StatementsOutsideFunction => "PAR004",
             ParseError::InvalidAttributeUsage { .. } => "PAR005",
             ParseError::InvalidIntegerLiteral { .. } => "PAR006",
+            ParseError::InvalidFloatLiteral { .. } => "PAR007",
         }
     }
 
@@ -95,6 +103,7 @@ impl ParseError {
             ParseError::StatementsOutsideFunction => None,
             ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
             ParseError::InvalidIntegerLiteral { position, .. } => Some(*position),
+            ParseError::InvalidFloatLiteral { position, .. } => Some(*position),
         }
     }
 
@@ -107,6 +116,7 @@ impl ParseError {
             ParseError::StatementsOutsideFunction => Some("program structure"),
             ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
             ParseError::InvalidIntegerLiteral { .. } => Some("literal parsing"),
+            ParseError::InvalidFloatLiteral { .. } => Some("literal parsing"),
         }
     }
 }
