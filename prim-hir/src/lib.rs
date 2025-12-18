@@ -252,7 +252,6 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    StrSlice,
     Array(Box<Type>),
     Struct(StructId),
     Pointer { mutable: bool, pointee: Box<Type> },

@@ -68,6 +68,25 @@ impl Default for LoadOptions {
     }
 }
 
+fn inject_prelude_imports(
+    imports: &mut Vec<ImportRequest>,
+    import_index: &mut HashMap<String, usize>,
+    module_segments: &[String],
+    origin: ModuleOrigin,
+) {
+    let std_string = vec!["std".into(), "string".into()];
+    if module_segments != std_string {
+        merge_import_request(imports, import_index, std_string, ImportCoverage::All);
+    }
+
+    if matches!(origin, ModuleOrigin::User) {
+        let std_io = vec!["std".into(), "io".into()];
+        if module_segments != std_io {
+            merge_import_request(imports, import_index, std_io, ImportCoverage::All);
+        }
+    }
+}
+
 /// Load a program starting at `entry_path` (either a single file or a module directory).
 pub fn load_program(entry_path: impl AsRef<Path>) -> Result<LoadedProgram, LoadError> {
     load_program_with_options(entry_path, LoadOptions::default())
@@ -182,17 +201,11 @@ impl Loader {
             merge_import_request(&mut imports, &mut import_index, module, coverage);
         }
         if self.options.include_prelude {
-            merge_import_request(
+            inject_prelude_imports(
                 &mut imports,
                 &mut import_index,
-                vec!["std".into(), "string".into()],
-                ImportCoverage::All,
-            );
-            merge_import_request(
-                &mut imports,
-                &mut import_index,
-                vec!["std".into(), "io".into()],
-                ImportCoverage::All,
+                &[module_name.clone()],
+                ModuleOrigin::User,
             );
         }
 
@@ -296,6 +309,15 @@ impl Loader {
                 "Binary module must be named 'main', found '{}'",
                 module_name
             )));
+        }
+
+        if self.options.include_prelude {
+            inject_prelude_imports(
+                &mut imports,
+                &mut import_index,
+                &[module_name.clone()],
+                ModuleOrigin::User,
+            );
         }
 
         let exports = collect_exports(&module_files);
@@ -465,6 +487,15 @@ impl Loader {
                     Arc::from(source.clone()),
                     program,
                 ));
+            }
+
+            if self.options.include_prelude {
+                inject_prelude_imports(
+                    &mut imports,
+                    &mut import_index,
+                    module_segments,
+                    module_origin(module_segments),
+                );
             }
 
             self.module_cache.insert(

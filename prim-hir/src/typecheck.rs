@@ -243,12 +243,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(ty.clone())
             }
-            HirExpr::Str { ty, .. } => {
-                if matches!(ty, Type::Undetermined) {
-                    *ty = Type::StrSlice;
-                }
-                Ok(ty.clone())
-            }
+            HirExpr::Str { ty, .. } => Ok(ty.clone()),
             HirExpr::Ident {
                 symbol,
                 ty,

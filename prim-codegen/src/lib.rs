@@ -52,12 +52,6 @@ fn coerce_returns(
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
 ) -> Result<Vec<Value>, CodegenError> {
     match ty {
-        prim_hir::Type::StrSlice => {
-            while vals.len() < 2 {
-                vals.push(builder.ins().iconst(types::I64, 0));
-            }
-            Ok(vals)
-        }
         prim_hir::Type::Struct(id) => {
             if let Some(layout) = layouts.get(id) {
                 while vals.len() < layout.order.len() {
@@ -300,7 +294,6 @@ fn scalar_lane(ty: &prim_hir::Type) -> Result<(cranelift::prelude::Type, u32), C
         I64 | U64 | Isize | Usize | Pointer { .. } | Struct(_) | Array(_) => types::I64,
         F32 => types::F32,
         F64 => types::F64,
-        StrSlice => types::I64,
         Undetermined => return Ok((types::I64, 8)),
     };
     let size = lane.bytes();
@@ -313,10 +306,6 @@ fn append_abi_params(
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
 ) -> Result<(), CodegenError> {
     match ty {
-        prim_hir::Type::StrSlice => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-        }
         prim_hir::Type::Struct(id) => {
             if let Some(layout) = layouts.get(id) {
                 for fld in &layout.order {
@@ -352,10 +341,6 @@ fn append_return(
                 let (lane, _) = scalar_lane(ty)?;
                 sig.returns.push(AbiParam::new(lane));
             }
-        }
-        prim_hir::Type::StrSlice => {
-            sig.returns.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
         }
         _ => {
             let (lane, _) = scalar_lane(ty)?;
@@ -411,7 +396,6 @@ fn abi_slot_count(
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
 ) -> usize {
     match ty {
-        prim_hir::Type::StrSlice => 2,
         prim_hir::Type::Struct(id) => layouts.get(id).map(|l| l.order.len()).unwrap_or(1),
         _ => 1,
     }
@@ -563,11 +547,8 @@ fn lower_expr_static(
         }
         prim_hir::HirExpr::Str { value, ty, .. } => {
             let (ptr, len) = make_string_data_static(builder, module, value.as_bytes())?;
-            if matches!(ty, prim_hir::Type::StrSlice) {
-                vec![ptr, len]
-            } else {
-                vec![ptr]
-            }
+            let _ = ty;
+            vec![ptr, len]
         }
         prim_hir::HirExpr::Ident { symbol, ty, .. } => locals
             .use_symbol(*symbol)
@@ -771,7 +752,6 @@ fn zero_value_static(
                 Ok(builder.ins().iconst(types::I64, 0))
             }
         }
-        prim_hir::Type::StrSlice => Ok(builder.ins().iconst(types::I64, 0)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             if lane == types::F32 {

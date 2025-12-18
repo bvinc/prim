@@ -30,6 +30,7 @@ struct LoweringContext<'a> {
     span_files: Vec<FileId>,
     builtin_println_i64: Option<FuncId>,
     builtin_println_bool: Option<FuncId>,
+    stdlib_str_struct: Option<StructId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -82,6 +83,7 @@ impl<'a> LoweringContext<'a> {
             span_files,
             builtin_println_i64: None,
             builtin_println_bool: None,
+            stdlib_str_struct: None,
         }
     }
 
@@ -98,6 +100,7 @@ impl<'a> LoweringContext<'a> {
             });
 
             for file in &module.files {
+                let source = file.source.as_ref();
                 for s in &file.ast.structs {
                     let res_id = self.def_lookup.get(&(file.file_id, s.span)).copied();
                     let sym_id = res_id
@@ -111,6 +114,14 @@ impl<'a> LoweringContext<'a> {
                     } else {
                         StructId(self.items.structs.len() as u32)
                     };
+                    if self.stdlib_str_struct.is_none()
+                        && module.name.len() == 2
+                        && module.name[0] == "std"
+                        && module.name[1] == "string"
+                        && s.name.text(source) == "Str"
+                    {
+                        self.stdlib_str_struct = Some(sid);
+                    }
                     let span = self.span_id(s.span, FileId(file.file_id.0));
                     self.items.structs.push(HirStruct {
                         id: sid,
@@ -175,7 +186,7 @@ impl<'a> LoweringContext<'a> {
                             };
                             HirField {
                                 name: sym_id,
-                                ty: self.lower_type(&f.field_type, file.file_id, source),
+                                ty: self.lower_type(&f.field_type, file.file_id),
                                 span: self.span_id(f.name, FileId(file.file_id.0)),
                             }
                         })
@@ -202,14 +213,14 @@ impl<'a> LoweringContext<'a> {
                             } else {
                                 SymbolId::dummy()
                             },
-                            ty: self.lower_type(&p.type_annotation, file.file_id, source),
+                            ty: self.lower_type(&p.type_annotation, file.file_id),
                             span: self.span_id(p.name, FileId(file.file_id.0)),
                         })
                         .collect();
                     let ret = f
                         .return_type
                         .as_ref()
-                        .map(|t| self.lower_type(t, file.file_id, source));
+                        .map(|t| self.lower_type(t, file.file_id));
                     let body = HirBlock {
                         stmts: f
                             .body
@@ -290,7 +301,6 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(
                     type_annotation.as_ref().unwrap_or(&Type::Undetermined),
                     file_id,
-                    source,
                 ),
                 value: self.lower_expr(value, source, module, file_id),
                 span: self.span_id(*name, FileId(file_id.0)),
@@ -321,7 +331,7 @@ impl<'a> LoweringContext<'a> {
         match expr {
             Expr::IntLiteral { span, ty, value } => HirExpr::Int {
                 value: *value,
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::FloatLiteral { span, ty } => {
@@ -331,25 +341,28 @@ impl<'a> LoweringContext<'a> {
                     .unwrap_or_default();
                 HirExpr::Float {
                     value: parsed,
-                    ty: self.lower_type(ty, file_id, source),
+                    ty: self.lower_type(ty, file_id),
                     span: self.span_id(*span, FileId(file_id.0)),
                 }
             }
             Expr::BoolLiteral { value, ty } => HirExpr::Bool {
                 value: *value,
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
-            Expr::StringLiteral { span, ty } => HirExpr::Str {
+            Expr::StringLiteral { span, ty: _ } => HirExpr::Str {
                 value: self.parse_string_literal(*span, source),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self
+                    .stdlib_str_struct
+                    .map(prim_hir::Type::Struct)
+                    .unwrap_or(prim_hir::Type::Undetermined),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::Identifier { span, ty } => HirExpr::Ident {
                 symbol: self
                     .symbol_for_use(file_id, *span, Some(module))
                     .unwrap_or_else(SymbolId::dummy),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::Binary {
@@ -367,7 +380,7 @@ impl<'a> LoweringContext<'a> {
                 },
                 left: Box::new(self.lower_expr(left, source, module, file_id)),
                 right: Box::new(self.lower_expr(right, source, module, file_id)),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
             Expr::FunctionCall { path, args, ty } => {
@@ -391,7 +404,7 @@ impl<'a> LoweringContext<'a> {
                     if name == "println" {
                         let arg_ty = args
                             .first()
-                            .map(|a| self.lower_type(a.resolved_type(), file_id, source))
+                            .map(|a| self.lower_type(a.resolved_type(), file_id))
                             .unwrap_or(prim_hir::Type::Undetermined);
                         self.ensure_builtin_println(arg_ty, file_id)
                     } else {
@@ -404,7 +417,7 @@ impl<'a> LoweringContext<'a> {
                         .iter()
                         .map(|a| self.lower_expr(a, source, module, file_id))
                         .collect(),
-                    ty: self.lower_type(ty, file_id, source),
+                    ty: self.lower_type(ty, file_id),
                     span: self.span_id(call_span, FileId(file_id.0)),
                 }
             }
@@ -426,7 +439,7 @@ impl<'a> LoweringContext<'a> {
                             )
                         })
                         .collect(),
-                    ty: self.lower_type(ty, file_id, source),
+                    ty: self.lower_type(ty, file_id),
                     span: self.span_id(*name, FileId(file_id.0)),
                 }
             }
@@ -435,12 +448,12 @@ impl<'a> LoweringContext<'a> {
                 field: self
                     .symbol_for_use(file_id, *field, Some(module))
                     .unwrap_or_else(SymbolId::dummy),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.span_id(*field, FileId(file_id.0)),
             },
             Expr::Dereference { operand, ty } => HirExpr::Deref {
                 base: Box::new(self.lower_expr(operand, source, module, file_id)),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
             Expr::ArrayLiteral { elements, ty } => HirExpr::ArrayLit {
@@ -448,7 +461,7 @@ impl<'a> LoweringContext<'a> {
                     .iter()
                     .map(|e| self.lower_expr(e, source, module, file_id))
                     .collect(),
-                ty: self.lower_type(ty, file_id, source),
+                ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
         }
@@ -509,30 +522,22 @@ impl<'a> LoweringContext<'a> {
         func_id
     }
 
-    #[allow(clippy::only_used_in_recursion)]
-    fn lower_type(&self, ty: &Type, file_id: ProgFileId, source: &str) -> prim_hir::Type {
+    fn lower_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {
         match ty {
             Type::Struct(span) => {
-                if self.res_use(file_id, *span).is_none()
-                    && span.checked_text(source).is_some_and(|s| s == "Str")
-                {
-                    return prim_hir::Type::StrSlice;
-                }
                 let sid = self
                     .res_use(file_id, *span)
                     .and_then(|rid| self.struct_ids.get(&rid).copied())
                     .unwrap_or(StructId(u32::MAX));
                 prim_hir::Type::Struct(sid)
             }
-            Type::Array(inner) => {
-                prim_hir::Type::Array(Box::new(self.lower_type(inner, file_id, source)))
-            }
+            Type::Array(inner) => prim_hir::Type::Array(Box::new(self.lower_type(inner, file_id))),
             Type::Pointer {
                 mutability,
                 pointee,
             } => prim_hir::Type::Pointer {
                 mutable: *mutability == prim_parse::PointerMutability::Mutable,
-                pointee: Box::new(self.lower_type(pointee, file_id, source)),
+                pointee: Box::new(self.lower_type(pointee, file_id)),
             },
             Type::Undetermined => prim_hir::Type::Undetermined,
             Type::U8 => prim_hir::Type::U8,
@@ -548,7 +553,10 @@ impl<'a> LoweringContext<'a> {
             Type::F32 => prim_hir::Type::F32,
             Type::F64 => prim_hir::Type::F64,
             Type::Bool => prim_hir::Type::Bool,
-            Type::StrSlice => prim_hir::Type::StrSlice,
+            Type::StrSlice => self
+                .stdlib_str_struct
+                .map(prim_hir::Type::Struct)
+                .unwrap_or(prim_hir::Type::Undetermined),
         }
     }
 
