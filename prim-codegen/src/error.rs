@@ -2,11 +2,23 @@ use std::error::Error;
 
 #[derive(Debug)]
 pub enum CodegenError {
-    UnsupportedTarget { message: String },
+    UnsupportedTarget {
+        message: String,
+    },
     CraneliftSettingsError(cranelift::codegen::settings::SetError),
     CraneliftModuleError(Box<cranelift_module::ModuleError>),
     CraneliftCodegenError(cranelift::codegen::CodegenError),
     CraneliftObjectError(cranelift_object::object::write::Error),
+    UndefinedLocal(prim_hir::SymbolId),
+    ArityMismatch {
+        expected: usize,
+        found: usize,
+    },
+    MissingStructLayout(prim_hir::StructId),
+    MissingStructField {
+        struct_id: prim_hir::StructId,
+        field: prim_hir::SymbolId,
+    },
     Unimplemented,
     MissingMain,
 }
@@ -29,6 +41,16 @@ impl std::fmt::Display for CodegenError {
             CodegenError::CraneliftObjectError(error) => {
                 write!(f, "Cranelift object error: {}", error)
             }
+            CodegenError::UndefinedLocal(sym) => write!(f, "Undefined local {:?}", sym),
+            CodegenError::ArityMismatch { expected, found } => {
+                write!(f, "Arity mismatch: expected {}, found {}", expected, found)
+            }
+            CodegenError::MissingStructLayout(id) => {
+                write!(f, "Missing struct layout for {:?}", id)
+            }
+            CodegenError::MissingStructField { struct_id, field } => {
+                write!(f, "Missing field {:?} for struct {:?}", field, struct_id)
+            }
             CodegenError::Unimplemented => write!(f, "Code generation not yet implemented"),
             CodegenError::MissingMain => write!(f, "main function not found"),
         }
@@ -45,6 +67,10 @@ impl CodegenError {
             CodegenError::CraneliftModuleError(_) => "COD005",
             CodegenError::CraneliftCodegenError(_) => "COD006",
             CodegenError::CraneliftObjectError(_) => "COD007",
+            CodegenError::UndefinedLocal(_) => "COD010",
+            CodegenError::ArityMismatch { .. } => "COD011",
+            CodegenError::MissingStructLayout(_) => "COD012",
+            CodegenError::MissingStructField { .. } => "COD013",
             CodegenError::Unimplemented => "COD999",
             CodegenError::MissingMain => "COD100",
         }

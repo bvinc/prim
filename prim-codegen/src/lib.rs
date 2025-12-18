@@ -550,9 +550,9 @@ fn lower_expr_static(
             let _ = ty;
             vec![ptr, len]
         }
-        prim_hir::HirExpr::Ident { symbol, ty, .. } => locals
+        prim_hir::HirExpr::Ident { symbol, .. } => locals
             .use_symbol(*symbol)
-            .or_else(|_| zero_value_static(builder, ty, layouts).map(|v| vec![v]))?,
+            .map_err(|_| CodegenError::UndefinedLocal(*symbol))?,
         prim_hir::HirExpr::Binary {
             op, left, right, ..
         } => {
@@ -608,12 +608,11 @@ fn lower_expr_static(
                 )?);
             }
             if let Some(expected) = func_param_counts.get(func) {
-                if lowered_args.len() > *expected {
-                    lowered_args.truncate(*expected);
-                } else if lowered_args.len() < *expected {
-                    while lowered_args.len() < *expected {
-                        lowered_args.push(builder.ins().iconst(types::I64, 0));
-                    }
+                if lowered_args.len() != *expected {
+                    return Err(CodegenError::ArityMismatch {
+                        expected: *expected,
+                        found: lowered_args.len(),
+                    });
                 }
             }
             if let Some(param_types) = func_param_types.get(func) {
@@ -630,30 +629,44 @@ fn lower_expr_static(
             let layout = layouts
                 .get(struct_id)
                 .cloned()
-                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
-            let mut values = vec![builder.ins().iconst(types::I64, 0); layout.order.len()];
+                .ok_or(CodegenError::MissingStructLayout(*struct_id))?;
+            let mut provided: HashMap<prim_hir::SymbolId, Value> = HashMap::new();
             for (field_sym, expr) in fields {
-                if let Some(pos) = layout.order.iter().position(|s| s == field_sym) {
-                    let vals = lower_expr_static(
-                        expr,
-                        builder,
-                        locals,
-                        layouts,
-                        func_ids,
-                        func_param_counts,
-                        func_param_types,
-                        module,
-                    )?;
-                    if let Some(v) = vals.first() {
-                        let target_ty = layout
-                            .fields
-                            .get(field_sym)
-                            .map(|f| f.ty)
-                            .unwrap_or(builder.func.dfg.value_type(*v));
-                        // TODO: instead of coercing after the fact, emit the right type up front.
-                        values[pos] = coerce_value(builder, *v, target_ty);
-                    }
+                let vals = lower_expr_static(
+                    expr,
+                    builder,
+                    locals,
+                    layouts,
+                    func_ids,
+                    func_param_counts,
+                    func_param_types,
+                    module,
+                )?;
+                let v = *vals.first().ok_or(CodegenError::Unimplemented)?;
+                if !layout.fields.contains_key(field_sym) {
+                    return Err(CodegenError::MissingStructField {
+                        struct_id: *struct_id,
+                        field: *field_sym,
+                    });
                 }
+                provided.insert(*field_sym, v);
+            }
+            let mut values = Vec::with_capacity(layout.order.len());
+            for field_sym in &layout.order {
+                let v =
+                    provided
+                        .get(field_sym)
+                        .copied()
+                        .ok_or(CodegenError::MissingStructField {
+                            struct_id: *struct_id,
+                            field: *field_sym,
+                        })?;
+                let target_ty = layout
+                    .fields
+                    .get(field_sym)
+                    .map(|f| f.ty)
+                    .unwrap_or(builder.func.dfg.value_type(v));
+                values.push(coerce_value(builder, v, target_ty));
             }
             values
         }
