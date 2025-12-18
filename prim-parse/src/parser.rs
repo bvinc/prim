@@ -257,9 +257,13 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::StringLiteral) => {
-                let token = self.advance();
+                let token_span = {
+                    let token = self.advance();
+                    token.span
+                };
                 Ok(Expr::StringLiteral {
-                    span: token.span,
+                    span: token_span,
+                    value: Self::unescape_string_literal(token_span.text(self.source)),
                     ty: Type::Undetermined,
                 })
             }
@@ -966,6 +970,35 @@ impl<'a> Parser<'a> {
                 Ok(Stmt::Expr(expr))
             }
         }
+    }
+
+    fn unescape_string_literal(raw: &str) -> String {
+        let inner = raw
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(raw);
+
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                out.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        }
+        out
     }
 
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {

@@ -350,8 +350,8 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
-            Expr::StringLiteral { span, ty: _ } => HirExpr::Str {
-                value: self.parse_string_literal(*span, source),
+            Expr::StringLiteral { span, value, ty: _ } => HirExpr::Str {
+                value: value.clone(),
                 ty: self
                     .stdlib_str_struct
                     .map(prim_hir::Type::Struct)
@@ -565,36 +565,6 @@ impl<'a> LoweringContext<'a> {
         self.spans.push(span);
         self.span_files.push(file);
         id
-    }
-
-    fn parse_string_literal(&self, span: Span, source: &str) -> String {
-        let raw = span.checked_text(source).unwrap_or_default();
-        let inner = raw
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .unwrap_or(raw);
-
-        let mut out = String::with_capacity(inner.len());
-        let mut chars = inner.chars();
-        while let Some(ch) = chars.next() {
-            if ch != '\\' {
-                out.push(ch);
-                continue;
-            }
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('r') => out.push('\r'),
-                Some('t') => out.push('\t'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
-            }
-        }
-        out
     }
 
     fn dummy_span(&mut self) -> SpanId {

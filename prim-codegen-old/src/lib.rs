@@ -726,15 +726,8 @@ impl CraneliftCodeGenerator {
                     })
                 }
             }
-            Expr::StringLiteral { span, .. } => {
-                // Parse and materialize string bytes as a private data object.
-                let raw = span.text(source);
-                let bytes = Self::unescape_string_literal(raw).map_err(|e| {
-                    CodegenError::InvalidExpression {
-                        message: format!("Invalid string literal: {}", e),
-                        context: "string literal".to_string(),
-                    }
-                })?;
+            Expr::StringLiteral { span, value, .. } => {
+                let bytes = value.as_bytes().to_vec();
 
                 // Unique symbol by source span to avoid collisions; content dedup can come later.
                 let sym_name = format!("strlit_{}_{}", span.start(), span.end());
@@ -1159,35 +1152,6 @@ impl CraneliftCodeGenerator {
                 Ok(Val::One(loaded_val))
             }
         }
-    }
-
-    fn unescape_string_literal(src: &str) -> Result<Vec<u8>, String> {
-        // Expect a quoted string: "..."
-        let s = src
-            .strip_prefix('"')
-            .and_then(|t| t.strip_suffix('"'))
-            .ok_or_else(|| "missing quotes".to_string())?;
-        let mut out = Vec::with_capacity(s.len());
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                match chars
-                    .next()
-                    .ok_or_else(|| "trailing backslash".to_string())?
-                {
-                    'n' => out.push(b'\n'),
-                    't' => out.push(b'\t'),
-                    'r' => out.push(b'\r'),
-                    '0' => out.push(b'\0'),
-                    '"' => out.push(b'"'),
-                    '\\' => out.push(b'\\'),
-                    other => return Err(format!("unsupported escape: \\{}", other)),
-                }
-            } else {
-                out.extend(c.to_string().as_bytes());
-            }
-        }
-        Ok(out)
     }
 
     fn create_println_function(&mut self) -> Result<cranelift_module::FuncId, CodegenError> {

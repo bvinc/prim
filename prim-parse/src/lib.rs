@@ -66,6 +66,7 @@ pub enum Expr {
     },
     StringLiteral {
         span: Span,
+        value: String,
         ty: Type,
     },
     Identifier {
