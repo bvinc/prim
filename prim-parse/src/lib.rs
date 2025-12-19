@@ -8,14 +8,8 @@ pub use prim_tok::Span;
 // Parser implementation
 pub mod parser;
 
-// Type checker implementation
-pub mod typecheck;
-
 // Re-export parser for easy access
 pub use parser::Parser;
-
-// Re-export type checker
-pub use typecheck::{TypeCheckError, type_check};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerMutability {

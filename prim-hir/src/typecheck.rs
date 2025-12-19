@@ -78,19 +78,15 @@ impl std::fmt::Display for TypeCheckError {
                 write!(f, "Unknown field {:?} on struct {:?}", field, struct_id)
             }
             TypeCheckKind::TypeMismatch { expected, found } => {
-                write!(
-                    f,
-                    "Type mismatch: expected {:?}, found {:?}",
-                    expected, found
-                )
+                write!(f, "Type mismatch: expected {}, found {}", expected, found)
             }
             TypeCheckKind::InvalidBinaryOperands { op, left, right } => write!(
                 f,
-                "Invalid operands for {:?}: left {:?}, right {:?}",
+                "Invalid binary operands for '{}' (left: {}, right: {})",
                 op, left, right
             ),
             TypeCheckKind::InvalidDereference(ty) => {
-                write!(f, "Invalid dereference of type {:?}", ty)
+                write!(f, "Invalid dereference of type {}", ty)
             }
             TypeCheckKind::ArityMismatch {
                 func,

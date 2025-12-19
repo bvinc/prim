@@ -1,5 +1,6 @@
 use prim_tok::Span;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 pub mod typecheck;
@@ -237,6 +238,19 @@ pub enum BinaryOp {
     Equals,
 }
 
+impl fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let symbol = match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Subtract => "-",
+            BinaryOp::Multiply => "*",
+            BinaryOp::Divide => "/",
+            BinaryOp::Equals => "==",
+        };
+        write!(f, "{symbol}")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     U8,
@@ -256,4 +270,34 @@ pub enum Type {
     Struct(StructId),
     Pointer { mutable: bool, pointee: Box<Type> },
     Undetermined,
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::U8 => write!(f, "u8"),
+            Type::I8 => write!(f, "i8"),
+            Type::U16 => write!(f, "u16"),
+            Type::I16 => write!(f, "i16"),
+            Type::U32 => write!(f, "u32"),
+            Type::I32 => write!(f, "i32"),
+            Type::U64 => write!(f, "u64"),
+            Type::I64 => write!(f, "i64"),
+            Type::Usize => write!(f, "usize"),
+            Type::Isize => write!(f, "isize"),
+            Type::F32 => write!(f, "f32"),
+            Type::F64 => write!(f, "f64"),
+            Type::Bool => write!(f, "bool"),
+            Type::Array(elem) => write!(f, "[{elem}]"),
+            Type::Struct(id) => write!(f, "struct {:?}", id),
+            Type::Pointer { mutable, pointee } => {
+                if *mutable {
+                    write!(f, "*mut {pointee}")
+                } else {
+                    write!(f, "*const {pointee}")
+                }
+            }
+            Type::Undetermined => write!(f, "unknown"),
+        }
+    }
 }
