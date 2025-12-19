@@ -1,0 +1,7 @@
+mod print
+
+@runtime("prim_rt_println_i64")
+fn println_i64(x: i64);
+
+@runtime("prim_rt_println_bool")
+fn println_bool(b: bool);

@@ -1,4 +1,6 @@
+import std.print.println_bool
+
 fn main() {
-    println(true)
-    println(false)
+    println_bool(true)
+    println_bool(false)
 }
