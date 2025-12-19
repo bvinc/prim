@@ -1,3 +1,5 @@
+import std.print.println_i64
+
 fn test_const_ptr(ptr: *const u8) -> i32 {
     42
 }
@@ -7,5 +9,5 @@ fn test_mut_ptr(ptr: *mut i32) -> i32 {
 }
 
 fn main() {
-    println(42)
+    println_i64(42)
 }

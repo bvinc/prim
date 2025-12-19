@@ -1,31 +1,33 @@
+import std.print.println_i64
+
 fn level4() -> i64 {
-    println(4)
+    println_i64(4)
     42
 }
 
 fn level3() -> i64 {
-    println(3)
+    println_i64(3)
     let result = level4()
-    println(300 + result)
+    println_i64(300 + result)
     result
 }
 
 fn level2() -> i64 {
-    println(2)
+    println_i64(2)
     let result = level3()
-    println(200 + result)
+    println_i64(200 + result)
     result
 }
 
 fn level1() -> i64 {
-    println(1)
+    println_i64(1)
     let result = level2()
-    println(100 + result)
+    println_i64(100 + result)
     result
 }
 
 fn main() {
-    println(0)
+    println_i64(0)
     let final_result = level1()
-    println(final_result)
+    println_i64(final_result)
 }

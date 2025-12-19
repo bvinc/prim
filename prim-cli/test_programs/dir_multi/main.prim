@@ -1,8 +1,9 @@
 mod main
 
 import utils
+import std.print.println_i64
 
 fn main() {
     let x = utils.add2(5)
-    println(x)
+    println_i64(x)
 }

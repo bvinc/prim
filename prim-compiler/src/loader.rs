@@ -390,13 +390,14 @@ impl Loader {
         self.program.module_index.insert(key, id);
         self.program.modules.push(module);
 
-        // Validate imports of this module (including selective symbol imports)
-        self.validate_imports(&entry.imports)?;
-
         // Load dependencies of this module as well.
         for ImportRequest { module, .. } in &entry.imports {
             self.ensure_module(module, stack)?;
         }
+
+        // Validate imports of this module (including selective symbol imports).
+        // Validation needs the imported modules to have been loaded into `module_index`.
+        self.validate_imports(&entry.imports)?;
 
         stack.pop();
 

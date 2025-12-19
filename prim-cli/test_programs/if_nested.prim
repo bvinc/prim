@@ -1,13 +1,15 @@
+import std.print.println_i64
+
 fn main() {
     let x = 10
     let y = 20
     if x > 0 {
         if y > 0 {
-            println(x + y)
+            println_i64(x + y)
         } else {
-            println(x)
+            println_i64(x)
         }
     } else {
-        println(0)
+        println_i64(0)
     }
 }

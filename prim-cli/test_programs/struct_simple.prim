@@ -1,7 +1,9 @@
+import std.print.println_i64
+
 struct Point {
     x: i32
 }
 
 fn main() {
-    println(42)
+    println_i64(42)
 }

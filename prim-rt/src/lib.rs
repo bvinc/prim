@@ -60,6 +60,72 @@ pub extern "C" fn prim_rt_println_i64(x: i64) {
     println!("{x}");
 }
 
+/// Print an unsigned 8-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_u8(x: u8) {
+    println!("{x}");
+}
+
+/// Print a signed 8-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_i8(x: i8) {
+    println!("{x}");
+}
+
+/// Print an unsigned 16-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_u16(x: u16) {
+    println!("{x}");
+}
+
+/// Print a signed 16-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_i16(x: i16) {
+    println!("{x}");
+}
+
+/// Print an unsigned 32-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_u32(x: u32) {
+    println!("{x}");
+}
+
+/// Print a signed 32-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_i32(x: i32) {
+    println!("{x}");
+}
+
+/// Print an unsigned 64-bit integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_u64(x: u64) {
+    println!("{x}");
+}
+
+/// Print an unsigned pointer-sized integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_usize(x: usize) {
+    println!("{x}");
+}
+
+/// Print a signed pointer-sized integer followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_isize(x: isize) {
+    println!("{x}");
+}
+
+/// Print a 32-bit float followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_f32(x: f32) {
+    println!("{x}");
+}
+
+/// Print a 64-bit float followed by a newline.
+#[unsafe(no_mangle)]
+pub extern "C" fn prim_rt_println_f64(x: f64) {
+    println!("{x}");
+}
+
 /// Print a boolean (0 = false, non-zero = true) followed by a newline.
 #[unsafe(no_mangle)]
 pub extern "C" fn prim_rt_println_bool(b: i8) {

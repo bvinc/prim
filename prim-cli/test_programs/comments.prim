@@ -1,8 +1,10 @@
 // This is a line comment at the top
+import std.print.println_i64
+
 fn main() {
     let x = 42 // inline comment
     /* This is a block comment
        that spans multiple lines */
     let y = /* inline block */ 10
-    println(x + y) // prints 52
+    println_i64(x + y) // prints 52
 }

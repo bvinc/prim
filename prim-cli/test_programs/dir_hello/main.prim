@@ -1,6 +1,7 @@
 mod main
 
-fn main() {
-    println(77)
-}
+import std.print.println_i64
 
+fn main() {
+    println_i64(77)
+}

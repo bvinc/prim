@@ -1,8 +1,10 @@
+import std.print.println_i64
+
 fn main() {
     let x = -5
     if x >= 0 {
-        println(x)
+        println_i64(x)
     } else {
-        println(0)
+        println_i64(0)
     }
 }

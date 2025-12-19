@@ -1,6 +1,8 @@
+import std.print.println_i64
+
 fn main() {
     let x = 10
     let y = 5
     let result = x + y * 2
-    println(result)
+    println_i64(result)
 }

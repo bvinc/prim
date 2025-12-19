@@ -3,6 +3,4 @@ mod main
 import a
 
 fn main() {
-    println(0)
 }
-

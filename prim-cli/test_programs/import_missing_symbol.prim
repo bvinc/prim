@@ -1,5 +1,4 @@
 import geom.point.DoesNotExist
 
 fn main() {
-    println(0)
 }

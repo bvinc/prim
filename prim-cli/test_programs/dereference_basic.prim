@@ -1,7 +1,9 @@
+import std.print.println_i64
+
 fn test_deref(ptr: *const i32) -> i32 {
     *ptr
 }
 
 fn main() {
-    println(42)
+    println_i64(42)
 }

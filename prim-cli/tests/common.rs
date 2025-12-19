@@ -26,7 +26,11 @@ pub fn staged_prim_root() -> PathBuf {
         } else {
             "libprim_rt.a"
         };
-        let rt_src = workspace.join("target").join(&profile).join(lib_name);
+        let rt_src = workspace
+            .join("target")
+            .join(&profile)
+            .join("deps")
+            .join(lib_name);
         let rt_dst_dir = root.join("lib");
         fs::create_dir_all(&rt_dst_dir).expect("create lib dir");
         fs::copy(&rt_src, rt_dst_dir.join(lib_name)).expect("copy runtime lib");

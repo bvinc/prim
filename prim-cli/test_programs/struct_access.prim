@@ -1,8 +1,10 @@
+import std.print.println_i32
+
 struct Point {
     x: i32
 }
 
 fn main() {
     let p = Point { x = 42 }
-    println(p.x)
+    println_i32(p.x)
 }

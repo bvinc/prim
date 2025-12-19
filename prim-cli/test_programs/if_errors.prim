@@ -1,10 +1,12 @@
+import std.print.println_i64
+
 fn main() {
     let x = 42
     if 1 == 0 {
-        println(x)
+        println_i64(x)
     }
     // This should cause a type error - condition must be boolean
     if x {
-        println(x)
+        println_i64(x)
     }
 }
