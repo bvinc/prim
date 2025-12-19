@@ -207,14 +207,6 @@ impl TypeChecker {
             loop_depth: 0,
         };
 
-        // Add built-in functions
-        checker.functions.insert(
-            "println".to_string(),
-            FunctionRecord {
-                params: None,
-                return_type: None,
-            },
-        );
         // Seed intrinsic std.mem functions (runtime-provided)
         checker.functions.insert(
             "std__mem__copy".to_string(),

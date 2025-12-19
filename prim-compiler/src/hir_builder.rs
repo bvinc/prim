@@ -28,8 +28,6 @@ struct LoweringContext<'a> {
     uses: &'a HashMap<NameRef, ResSymbolId>,
     symbols_info: &'a [SymbolInfo],
     span_files: Vec<FileId>,
-    builtin_println_i64: Option<FuncId>,
-    builtin_println_bool: Option<FuncId>,
     stdlib_str_struct: Option<StructId>,
 }
 
@@ -81,8 +79,6 @@ impl<'a> LoweringContext<'a> {
             uses: &program.name_resolution.uses,
             symbols_info: &program.name_resolution.symbols,
             span_files,
-            builtin_println_i64: None,
-            builtin_println_bool: None,
             stdlib_str_struct: None,
         }
     }
@@ -166,7 +162,6 @@ impl<'a> LoweringContext<'a> {
         for module in &self.program.modules {
             let module_id = ModuleId(module.id.0);
             for file in &module.files {
-                let source = file.source.as_ref();
                 for s in &file.ast.structs {
                     let res_id = self.def_lookup.get(&(file.file_id, s.span)).copied();
                     let sid = res_id
@@ -225,7 +220,7 @@ impl<'a> LoweringContext<'a> {
                         stmts: f
                             .body
                             .iter()
-                            .map(|s| self.lower_stmt(s, source, module_id, file.file_id))
+                            .map(|s| self.lower_stmt(s, module_id, file.file_id))
                             .collect(),
                     };
                     let span = self.span_id(f.span, FileId(file.file_id.0));
@@ -279,13 +274,7 @@ impl<'a> LoweringContext<'a> {
         id
     }
 
-    fn lower_stmt(
-        &mut self,
-        stmt: &Stmt,
-        source: &str,
-        module: ModuleId,
-        file_id: ProgFileId,
-    ) -> HirStmt {
+    fn lower_stmt(&mut self, stmt: &Stmt, module: ModuleId, file_id: ProgFileId) -> HirStmt {
         match stmt {
             Stmt::Let {
                 name,
@@ -302,15 +291,15 @@ impl<'a> LoweringContext<'a> {
                     type_annotation.as_ref().unwrap_or(&Type::Undetermined),
                     file_id,
                 ),
-                value: self.lower_expr(value, source, module, file_id),
+                value: self.lower_expr(value, module, file_id),
                 span: self.span_id(*name, FileId(file_id.0)),
             },
-            Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, source, module, file_id)),
+            Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, module, file_id)),
             Stmt::Loop { body, span } => HirStmt::Loop {
                 body: HirBlock {
                     stmts: body
                         .iter()
-                        .map(|s| self.lower_stmt(s, source, module, file_id))
+                        .map(|s| self.lower_stmt(s, module, file_id))
                         .collect(),
                 },
                 span: self.span_id(*span, FileId(file_id.0)),
@@ -321,13 +310,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn lower_expr(
-        &mut self,
-        expr: &Expr,
-        source: &str,
-        module: ModuleId,
-        file_id: ProgFileId,
-    ) -> HirExpr {
+    fn lower_expr(&mut self, expr: &Expr, module: ModuleId, file_id: ProgFileId) -> HirExpr {
         match expr {
             Expr::IntLiteral { span, ty, value } => HirExpr::Int {
                 value: *value,
@@ -372,8 +355,8 @@ impl<'a> LoweringContext<'a> {
                     AstBinaryOp::Divide => BinaryOp::Divide,
                     AstBinaryOp::Equals => BinaryOp::Equals,
                 },
-                left: Box::new(self.lower_expr(left, source, module, file_id)),
-                right: Box::new(self.lower_expr(right, source, module, file_id)),
+                left: Box::new(self.lower_expr(left, module, file_id)),
+                right: Box::new(self.lower_expr(right, module, file_id)),
                 ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
@@ -389,27 +372,13 @@ impl<'a> LoweringContext<'a> {
                         FuncId(u32::MAX)
                     }
                 } else {
-                    // Fallback for built-in println until it lives in std with @runtime.
-                    let name = path
-                        .segments
-                        .last()
-                        .map(|s| s.text(source))
-                        .unwrap_or_default();
-                    if name == "println" {
-                        let arg_ty = args
-                            .first()
-                            .map(|a| self.lower_type(a.resolved_type(), file_id))
-                            .unwrap_or(prim_hir::Type::Undetermined);
-                        self.ensure_builtin_println(arg_ty, file_id)
-                    } else {
-                        FuncId(u32::MAX)
-                    }
+                    FuncId(u32::MAX)
                 };
                 HirExpr::Call {
                     func: fid,
                     args: args
                         .iter()
-                        .map(|a| self.lower_expr(a, source, module, file_id))
+                        .map(|a| self.lower_expr(a, module, file_id))
                         .collect(),
                     ty: self.lower_type(ty, file_id),
                     span: self.span_id(call_span, FileId(file_id.0)),
@@ -429,7 +398,7 @@ impl<'a> LoweringContext<'a> {
                             (
                                 self.symbol_for_use(file_id, f.name, Some(module))
                                     .unwrap_or_else(SymbolId::dummy),
-                                self.lower_expr(&f.value, source, module, file_id),
+                                self.lower_expr(&f.value, module, file_id),
                             )
                         })
                         .collect(),
@@ -438,7 +407,7 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             Expr::FieldAccess { object, field, ty } => HirExpr::Field {
-                base: Box::new(self.lower_expr(object, source, module, file_id)),
+                base: Box::new(self.lower_expr(object, module, file_id)),
                 field: self
                     .symbol_for_use(file_id, *field, Some(module))
                     .unwrap_or_else(SymbolId::dummy),
@@ -446,74 +415,19 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*field, FileId(file_id.0)),
             },
             Expr::Dereference { operand, ty } => HirExpr::Deref {
-                base: Box::new(self.lower_expr(operand, source, module, file_id)),
+                base: Box::new(self.lower_expr(operand, module, file_id)),
                 ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
             Expr::ArrayLiteral { elements, ty } => HirExpr::ArrayLit {
                 elements: elements
                     .iter()
-                    .map(|e| self.lower_expr(e, source, module, file_id))
+                    .map(|e| self.lower_expr(e, module, file_id))
                     .collect(),
                 ty: self.lower_type(ty, file_id),
                 span: self.dummy_span(),
             },
         }
-    }
-
-    fn ensure_builtin_println(&mut self, arg_ty: prim_hir::Type, file_id: ProgFileId) -> FuncId {
-        let is_bool = matches!(arg_ty, prim_hir::Type::Bool);
-        // Avoid borrow conflicts by keeping the slot borrow scoped.
-        {
-            let slot = if is_bool {
-                &mut self.builtin_println_bool
-            } else {
-                &mut self.builtin_println_i64
-            };
-            if let Some(id) = *slot {
-                return id;
-            }
-            let func_id = FuncId(self.items.functions.len() as u32);
-            *slot = Some(func_id);
-        }
-        let func_id = *if is_bool {
-            self.builtin_println_bool.as_ref()
-        } else {
-            self.builtin_println_i64.as_ref()
-        }
-        .expect("slot just set");
-
-        let sym_id = SymbolId(self.symbols.entries.len() as u32);
-        let span = self.dummy_span();
-        let binding = if is_bool {
-            "prim_rt_println_bool".to_string()
-        } else {
-            "prim_rt_println_i64".to_string()
-        };
-
-        self.symbols.entries.push(Symbol {
-            id: sym_id,
-            module: ModuleId(0),
-            name: "println".to_string(),
-            kind: SymbolKind::Function(func_id),
-        });
-        let param = HirParam {
-            name: SymbolId::dummy(),
-            ty: arg_ty.clone(),
-            span,
-        };
-        self.items.functions.push(HirFunction {
-            id: func_id,
-            name: sym_id,
-            module: ModuleId(0),
-            file: FileId(file_id.0),
-            params: vec![param],
-            ret: None,
-            body: HirBlock { stmts: Vec::new() },
-            span,
-            runtime_binding: Some(binding),
-        });
-        func_id
     }
 
     fn lower_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {

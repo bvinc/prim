@@ -337,18 +337,6 @@ impl<'a> Parser<'a> {
                     })
                 }
             }
-            Some(TokenKind::Println) => {
-                let token = self.advance();
-                let name_span = token.span;
-                self.consume(TokenKind::LeftParen, "Expected '(' after println")?;
-                let args = self.parse_argument_list()?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall {
-                    path: crate::NamePath::from_single(name_span),
-                    args,
-                    ty: Type::Undetermined,
-                })
-            }
             Some(TokenKind::LeftParen) => {
                 self.advance(); // consume '('
                 let expr = self.parse_expression(Precedence::NONE)?;

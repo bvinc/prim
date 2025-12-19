@@ -79,13 +79,6 @@ impl TypeChecker {
 
         // Built-ins
         checker.functions.insert(
-            "println".to_string(),
-            FunctionRecord {
-                params: None,
-                return_type: None,
-            },
-        );
-        checker.functions.insert(
             "std__mem__copy".to_string(),
             FunctionRecord {
                 params: None,
