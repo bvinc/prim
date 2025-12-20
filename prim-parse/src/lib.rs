@@ -56,6 +56,7 @@ pub enum Expr {
         ty: Type,
     },
     BoolLiteral {
+        span: Span,
         value: bool,
         ty: Type,
     },
@@ -72,6 +73,7 @@ pub enum Expr {
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
+        span: Span,
         ty: Type,
     },
     FunctionCall {
@@ -92,10 +94,12 @@ pub enum Expr {
     },
     Dereference {
         operand: Box<Expr>,
+        span: Span,
         ty: Type,
     },
     ArrayLiteral {
         elements: Vec<Expr>,
+        span: Span,
         ty: Type,
     },
 }
@@ -119,6 +123,35 @@ impl Expr {
 
     pub fn resolved_type_cloned(&self) -> Type {
         self.resolved_type().clone()
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::IntLiteral { span, .. }
+            | Expr::FloatLiteral { span, .. }
+            | Expr::BoolLiteral { span, .. }
+            | Expr::StringLiteral { span, .. }
+            | Expr::Identifier { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::StructLiteral { name: span, .. }
+            | Expr::FieldAccess { field: span, .. }
+            | Expr::Dereference { span, .. }
+            | Expr::ArrayLiteral { span, .. } => *span,
+            Expr::FunctionCall { path, args, .. } => {
+                let mut span = path
+                    .segments
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| Span::empty_at(0));
+                if let Some(last) = path.segments.last().copied() {
+                    span = span.cover(last);
+                }
+                if let Some(last_arg) = args.last() {
+                    span = span.cover(last_arg.span());
+                }
+                span
+            }
+        }
     }
 }
 

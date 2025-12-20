@@ -115,14 +115,6 @@ impl std::fmt::Display for Span {
 }
 
 #[cfg(test)]
-impl Span {
-    /// Convenience constructor for tests.
-    pub fn dummy() -> Self {
-        Span::new(0, 0)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

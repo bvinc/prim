@@ -293,15 +293,17 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::True) => {
-                self.advance();
+                let token = self.advance();
                 Ok(Expr::BoolLiteral {
+                    span: token.span,
                     value: true,
                     ty: Type::Undetermined,
                 })
             }
             Some(TokenKind::False) => {
-                self.advance();
+                let token = self.advance();
                 Ok(Expr::BoolLiteral {
+                    span: token.span,
                     value: false,
                     ty: Type::Undetermined,
                 })
@@ -345,7 +347,7 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::LeftBracket) => {
                 // Array literal: [expr, expr, ...]
-                self.advance(); // consume '['
+                let left_span = self.advance().span; // consume '['
                 let mut elements = Vec::new();
                 // Allow empty literal []
                 if !matches!(self.peek_kind(), Some(TokenKind::RightBracket)) {
@@ -355,35 +357,43 @@ impl<'a> Parser<'a> {
                         elements.push(self.parse_expression(Precedence::NONE)?);
                     }
                 }
-                self.consume(
-                    TokenKind::RightBracket,
-                    "Expected ']' to close array literal",
-                )?;
+                let right_span = self
+                    .consume(
+                        TokenKind::RightBracket,
+                        "Expected ']' to close array literal",
+                    )?
+                    .span;
+                let span = left_span.cover(right_span);
                 Ok(Expr::ArrayLiteral {
                     elements,
+                    span,
                     ty: Type::Undetermined,
                 })
             }
             Some(TokenKind::Minus) => {
-                self.advance(); // consume '-'
+                let minus_span = self.advance().span; // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
+                let span = minus_span.cover(operand.span());
                 // Represent unary minus as 0 - operand
                 Ok(Expr::Binary {
                     left: Box::new(Expr::IntLiteral {
-                        span: Span::new(0, 1),
+                        span: minus_span,
                         value: 0,
                         ty: Type::Undetermined,
                     }), // placeholder "0"
                     op: BinaryOp::Subtract,
                     right: Box::new(operand),
+                    span,
                     ty: Type::Undetermined,
                 })
             }
             Some(TokenKind::Star) => {
-                self.advance(); // consume '*'
+                let star_span = self.advance().span; // consume '*'
                 let operand = self.parse_expression(Precedence::UNARY)?;
+                let span = star_span.cover(operand.span());
                 Ok(Expr::Dereference {
                     operand: Box::new(operand),
+                    span,
                     ty: Type::Undetermined,
                 })
             }
@@ -412,11 +422,14 @@ impl<'a> Parser<'a> {
                 let precedence = get_precedence_for_token(kind);
                 self.advance(); // consume operator
                 let right = self.parse_expression(precedence)?;
+                let left_span = left.span();
+                let right_span = right.span();
 
                 return Ok(Expr::Binary {
                     left: Box::new(left),
                     op: binary_op,
                     right: Box::new(right),
+                    span: left_span.cover(right_span),
                     ty: Type::Undetermined,
                 });
             }

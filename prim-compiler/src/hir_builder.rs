@@ -322,10 +322,10 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
-            Expr::BoolLiteral { value, ty } => HirExpr::Bool {
+            Expr::BoolLiteral { span, value, ty } => HirExpr::Bool {
                 value: *value,
                 ty: self.lower_type(ty, file_id),
-                span: self.dummy_span(),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::StringLiteral { span, value, ty: _ } => HirExpr::Str {
                 value: value.clone(),
@@ -344,6 +344,7 @@ impl<'a> LoweringContext<'a> {
                 left,
                 op,
                 right,
+                span,
                 ty,
             } => HirExpr::Binary {
                 op: match op {
@@ -356,7 +357,7 @@ impl<'a> LoweringContext<'a> {
                 left: Box::new(self.lower_expr(left, module, file_id)),
                 right: Box::new(self.lower_expr(right, module, file_id)),
                 ty: self.lower_type(ty, file_id),
-                span: self.dummy_span(),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::FunctionCall { path, args, ty } => {
                 let call_span = *path.segments.last().expect("missing call span");
@@ -398,18 +399,18 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*field, FileId(file_id.0)),
             },
-            Expr::Dereference { operand, ty } => HirExpr::Deref {
+            Expr::Dereference { operand, span, ty } => HirExpr::Deref {
                 base: Box::new(self.lower_expr(operand, module, file_id)),
                 ty: self.lower_type(ty, file_id),
-                span: self.dummy_span(),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
-            Expr::ArrayLiteral { elements, ty } => HirExpr::ArrayLit {
+            Expr::ArrayLiteral { elements, span, ty } => HirExpr::ArrayLit {
                 elements: elements
                     .iter()
                     .map(|e| self.lower_expr(e, module, file_id))
                     .collect(),
                 ty: self.lower_type(ty, file_id),
-                span: self.dummy_span(),
+                span: self.span_id(*span, FileId(file_id.0)),
             },
         }
     }
@@ -455,10 +456,6 @@ impl<'a> LoweringContext<'a> {
         self.spans.push(span);
         self.span_files.push(file);
         id
-    }
-
-    fn dummy_span(&mut self) -> SpanId {
-        self.span_id(Span::empty_at(0), FileId(0))
     }
 
     fn res_use(&self, file_id: ProgFileId, span: Span) -> ResSymbolId {
