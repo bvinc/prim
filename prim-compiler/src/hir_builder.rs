@@ -444,10 +444,6 @@ impl<'a> LoweringContext<'a> {
             Type::F32 => prim_hir::Type::F32,
             Type::F64 => prim_hir::Type::F64,
             Type::Bool => prim_hir::Type::Bool,
-            Type::StrSlice => self
-                .stdlib_str_struct
-                .map(prim_hir::Type::Struct)
-                .unwrap_or(prim_hir::Type::Undetermined),
         }
     }
 

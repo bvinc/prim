@@ -32,8 +32,6 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    // String slice with runtime representation (ptr, len)
-    StrSlice,
     Array(Box<Type>),
     Struct(Span), // struct name reference
     Pointer {
