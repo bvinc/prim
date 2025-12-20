@@ -1,5 +1,5 @@
 use prim_codegen::generate_object_code;
-use prim_compiler::{load_program, type_check_and_lower};
+use prim_compiler::{CompileError, load_program, type_check_and_lower};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -238,8 +238,18 @@ fn compile_source(
     let parse_ms = parse_start.elapsed().as_millis();
 
     let type_start = Instant::now();
-    let hir = type_check_and_lower(&mut loaded.program)
-        .map_err(|err| MainError::CompilationError(format!("Type check error: {}", err)))?;
+    let hir = type_check_and_lower(&mut loaded.program).map_err(|err| match err {
+        CompileError::TypeCheck(err) => {
+            MainError::CompilationError(format!("Type check error: {}", err))
+        }
+        CompileError::Resolve(errors) => {
+            let mut msg = format!("Name resolution error(s): {}", errors.len());
+            for err in errors {
+                msg.push_str(&format!("\n- {}", err));
+            }
+            MainError::CompilationError(msg)
+        }
+    })?;
     let type_ms = type_start.elapsed().as_millis();
 
     Ok((loaded.program, hir, parse_ms, type_ms))

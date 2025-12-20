@@ -177,9 +177,7 @@ impl<'a> Checker<'a> {
                 span,
             } => {
                 let val_ty = self.check_expr(value, locals)?;
-                if matches!(ty, Type::Undetermined)
-                    || matches!(ty, Type::Struct(id) if id.0 == u32::MAX)
-                {
+                if matches!(ty, Type::Undetermined) {
                     *ty = val_ty.clone();
                 } else if !self.types_equal(ty, &val_ty) {
                     return Err(self.error(
@@ -300,10 +298,6 @@ impl<'a> Checker<'a> {
                 ty,
                 span,
             } => {
-                if func.0 == u32::MAX {
-                    *ty = Type::Undetermined;
-                    return Ok(Type::Undetermined);
-                }
                 let (params, ret) = self
                     .func_sigs
                     .get(func)
@@ -320,15 +314,11 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (arg, expected) in args.iter_mut().zip(params.iter()) {
-                    if !matches!(expected, Type::Undetermined)
-                        && !matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
-                    {
+                    if !matches!(expected, Type::Undetermined) {
                         self.apply_expected_literal_type(arg, expected);
                     }
                     let got = self.check_expr(arg, locals)?;
-                    if matches!(expected, Type::Undetermined)
-                        || matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
-                    {
+                    if matches!(expected, Type::Undetermined) {
                         // accept unknown/undetermined parameter types
                     } else if !self.types_equal(expected, &got) {
                         return Err(self.error(
@@ -351,10 +341,6 @@ impl<'a> Checker<'a> {
                 span,
             } => {
                 for (field_sym, val) in fields {
-                    if field_sym.0 == u32::MAX {
-                        let _ = self.check_expr(val, locals)?;
-                        continue;
-                    }
                     let expected = {
                         let map = self.struct_fields.get(struct_id).ok_or_else(|| {
                             self.error(*span, TypeCheckKind::UnknownStruct(*struct_id))
@@ -369,15 +355,11 @@ impl<'a> Checker<'a> {
                             )
                         })?
                     };
-                    if !matches!(expected, Type::Undetermined)
-                        && !matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
-                    {
+                    if !matches!(expected, Type::Undetermined) {
                         self.apply_expected_literal_type(val, &expected);
                     }
                     let got = self.check_expr(val, locals)?;
-                    if matches!(expected, Type::Undetermined)
-                        || matches!(expected, Type::Struct(id) if id.0 == u32::MAX)
-                    {
+                    if matches!(expected, Type::Undetermined) {
                         // Accept unknown/undetermined struct field types for now.
                     } else if !self.types_equal(&expected, &got) {
                         return Err(self.error(
@@ -411,10 +393,6 @@ impl<'a> Checker<'a> {
                     .struct_fields
                     .get(&struct_id)
                     .ok_or_else(|| self.error(*span, TypeCheckKind::UnknownStruct(struct_id)))?;
-                if field.0 == u32::MAX {
-                    *ty = Type::Undetermined;
-                    return Ok(Type::Undetermined);
-                }
                 let field_ty = fields.get(field).ok_or_else(|| {
                     self.error(
                         *span,
@@ -491,7 +469,7 @@ impl<'a> Checker<'a> {
     fn types_equal(&self, a: &Type, b: &Type) -> bool {
         match (a, b) {
             (Type::Undetermined, _) | (_, Type::Undetermined) => true,
-            (Type::Struct(x), Type::Struct(y)) => x == y || x.0 == u32::MAX || y.0 == u32::MAX,
+            (Type::Struct(x), Type::Struct(y)) => x == y,
             (
                 Type::Pointer {
                     mutable: ma,
@@ -552,7 +530,7 @@ impl<'a> Checker<'a> {
             .span_files
             .get(span.0 as usize)
             .copied()
-            .unwrap_or(FileId(u32::MAX));
+            .expect("missing span file");
         TypeCheckError { file, span, kind }
     }
 }

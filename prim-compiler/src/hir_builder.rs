@@ -98,18 +98,16 @@ impl<'a> LoweringContext<'a> {
             for file in &module.files {
                 let source = file.source.as_ref();
                 for s in &file.ast.structs {
-                    let res_id = self.def_lookup.get(&(file.file_id, s.span)).copied();
-                    let sym_id = res_id
-                        .and_then(|sid| self.ensure_symbol(sid, Some(module_id)))
-                        .unwrap_or_else(SymbolId::dummy);
-                    let sid = if let Some(rid) = res_id {
-                        *self
-                            .struct_ids
-                            .entry(rid)
-                            .or_insert_with(|| StructId(self.items.structs.len() as u32))
-                    } else {
-                        StructId(self.items.structs.len() as u32)
-                    };
+                    let res_id = self
+                        .def_lookup
+                        .get(&(file.file_id, s.span))
+                        .copied()
+                        .expect("missing struct symbol");
+                    let sym_id = self.ensure_symbol(res_id, Some(module_id));
+                    let sid = *self
+                        .struct_ids
+                        .entry(res_id)
+                        .or_insert_with(|| StructId(self.items.structs.len() as u32));
                     if self.stdlib_str_struct.is_none()
                         && module.name.len() == 2
                         && module.name[0] == "std"
@@ -129,18 +127,16 @@ impl<'a> LoweringContext<'a> {
                     });
                 }
                 for f in &file.ast.functions {
-                    let res_id = self.def_lookup.get(&(file.file_id, f.span)).copied();
-                    let sym_id = res_id
-                        .and_then(|sid| self.ensure_symbol(sid, Some(module_id)))
-                        .unwrap_or_else(SymbolId::dummy);
-                    let fid = if let Some(rid) = res_id {
-                        *self
-                            .func_ids
-                            .entry(rid)
-                            .or_insert_with(|| FuncId(self.items.functions.len() as u32))
-                    } else {
-                        FuncId(self.items.functions.len() as u32)
-                    };
+                    let res_id = self
+                        .def_lookup
+                        .get(&(file.file_id, f.span))
+                        .copied()
+                        .expect("missing function symbol");
+                    let sym_id = self.ensure_symbol(res_id, Some(module_id));
+                    let fid = *self
+                        .func_ids
+                        .entry(res_id)
+                        .or_insert_with(|| FuncId(self.items.functions.len() as u32));
                     let span = self.span_id(f.span, FileId(file.file_id.0));
                     self.items.functions.push(HirFunction {
                         id: fid,
@@ -163,22 +159,22 @@ impl<'a> LoweringContext<'a> {
             let module_id = ModuleId(module.id.0);
             for file in &module.files {
                 for s in &file.ast.structs {
-                    let res_id = self.def_lookup.get(&(file.file_id, s.span)).copied();
-                    let sid = res_id
-                        .and_then(|rid| self.struct_ids.get(&rid).copied())
-                        .unwrap_or(StructId(u32::MAX));
+                    let res_id = self
+                        .def_lookup
+                        .get(&(file.file_id, s.span))
+                        .copied()
+                        .expect("missing struct symbol");
+                    let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
                     let fields = s
                         .fields
                         .iter()
                         .map(|f| {
-                            let sym_id = if let Some(rid) =
-                                self.def_lookup.get(&(file.file_id, f.name)).copied()
-                            {
-                                self.ensure_symbol(rid, Some(module_id))
-                                    .unwrap_or_else(SymbolId::dummy)
-                            } else {
-                                SymbolId::dummy()
-                            };
+                            let res_id = self
+                                .def_lookup
+                                .get(&(file.file_id, f.name))
+                                .copied()
+                                .expect("missing field symbol");
+                            let sym_id = self.ensure_symbol(res_id, Some(module_id));
                             HirField {
                                 name: sym_id,
                                 ty: self.lower_type(&f.field_type, file.file_id),
@@ -192,21 +188,23 @@ impl<'a> LoweringContext<'a> {
                 }
 
                 for f in &file.ast.functions {
-                    let res_id = self.def_lookup.get(&(file.file_id, f.span)).copied();
-                    let fid = res_id
-                        .and_then(|rid| self.func_ids.get(&rid).copied())
-                        .unwrap_or(FuncId(u32::MAX));
+                    let res_id = self
+                        .def_lookup
+                        .get(&(file.file_id, f.span))
+                        .copied()
+                        .expect("missing function symbol");
+                    let fid = *self.func_ids.get(&res_id).expect("missing function id");
                     let params = f
                         .parameters
                         .iter()
                         .map(|p| HirParam {
-                            name: if let Some(rid) =
-                                self.def_lookup.get(&(file.file_id, p.name)).copied()
-                            {
-                                self.ensure_symbol(rid, Some(module_id))
-                                    .unwrap_or_else(SymbolId::dummy)
-                            } else {
-                                SymbolId::dummy()
+                            name: {
+                                let res_id = self
+                                    .def_lookup
+                                    .get(&(file.file_id, p.name))
+                                    .copied()
+                                    .expect("missing param symbol");
+                                self.ensure_symbol(res_id, Some(module_id))
                             },
                             ty: self.lower_type(&p.type_annotation, file.file_id),
                             span: self.span_id(p.name, FileId(file.file_id.0)),
@@ -281,11 +279,13 @@ impl<'a> LoweringContext<'a> {
                 type_annotation,
                 value,
             } => HirStmt::Let {
-                name: if let Some(rid) = self.def_lookup.get(&(file_id, *name)).copied() {
-                    self.ensure_symbol(rid, Some(module))
-                        .unwrap_or_else(SymbolId::dummy)
-                } else {
-                    SymbolId::dummy()
+                name: {
+                    let res_id = self
+                        .def_lookup
+                        .get(&(file_id, *name))
+                        .copied()
+                        .expect("missing local symbol");
+                    self.ensure_symbol(res_id, Some(module))
                 },
                 ty: self.lower_type(
                     type_annotation.as_ref().unwrap_or(&Type::Undetermined),
@@ -336,9 +336,7 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::Identifier { span, ty } => HirExpr::Ident {
-                symbol: self
-                    .symbol_for_use(file_id, *span, Some(module))
-                    .unwrap_or_else(SymbolId::dummy),
+                symbol: self.symbol_for_use(file_id, *span, Some(module)),
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
@@ -361,19 +359,10 @@ impl<'a> LoweringContext<'a> {
                 span: self.dummy_span(),
             },
             Expr::FunctionCall { path, args, ty } => {
-                let call_span = *path.segments.last().unwrap_or(&Span::empty_at(0));
+                let call_span = *path.segments.last().expect("missing call span");
                 let res_id = self.res_use(file_id, call_span);
-                let fid = if let Some(rid) = res_id {
-                    if let Some(id) = self.func_ids.get(&rid).copied() {
-                        let _ = self.ensure_symbol(rid, Some(module));
-                        id
-                    } else {
-                        // Unknown function reference; leave unresolved so codegen can error loudly.
-                        FuncId(u32::MAX)
-                    }
-                } else {
-                    FuncId(u32::MAX)
-                };
+                let fid = *self.func_ids.get(&res_id).expect("missing function id");
+                let _ = self.ensure_symbol(res_id, Some(module));
                 HirExpr::Call {
                     func: fid,
                     args: args
@@ -386,18 +375,15 @@ impl<'a> LoweringContext<'a> {
             }
             Expr::StructLiteral { name, fields, ty } => {
                 let res_id = self.res_use(file_id, *name);
-                let struct_id = res_id
-                    .and_then(|rid| self.struct_ids.get(&rid).copied())
-                    .unwrap_or(StructId(u32::MAX));
-                let _ = res_id.and_then(|rid| self.ensure_symbol(rid, Some(module)));
+                let struct_id = *self.struct_ids.get(&res_id).expect("missing struct id");
+                let _ = self.ensure_symbol(res_id, Some(module));
                 HirExpr::StructLit {
                     struct_id,
                     fields: fields
                         .iter()
                         .map(|f| {
                             (
-                                self.symbol_for_use(file_id, f.name, Some(module))
-                                    .unwrap_or_else(SymbolId::dummy),
+                                self.symbol_for_use(file_id, f.name, Some(module)),
                                 self.lower_expr(&f.value, module, file_id),
                             )
                         })
@@ -408,9 +394,7 @@ impl<'a> LoweringContext<'a> {
             }
             Expr::FieldAccess { object, field, ty } => HirExpr::Field {
                 base: Box::new(self.lower_expr(object, module, file_id)),
-                field: self
-                    .symbol_for_use(file_id, *field, Some(module))
-                    .unwrap_or_else(SymbolId::dummy),
+                field: self.symbol_for_use(file_id, *field, Some(module)),
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*field, FileId(file_id.0)),
             },
@@ -433,10 +417,8 @@ impl<'a> LoweringContext<'a> {
     fn lower_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {
         match ty {
             Type::Struct(span) => {
-                let sid = self
-                    .res_use(file_id, *span)
-                    .and_then(|rid| self.struct_ids.get(&rid).copied())
-                    .unwrap_or(StructId(u32::MAX));
+                let res_id = self.res_use(file_id, *span);
+                let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
                 prim_hir::Type::Struct(sid)
             }
             Type::Array(inner) => prim_hir::Type::Array(Box::new(self.lower_type(inner, file_id))),
@@ -476,16 +458,17 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn dummy_span(&mut self) -> SpanId {
-        self.span_id(Span::empty_at(0), FileId(u32::MAX))
+        self.span_id(Span::empty_at(0), FileId(0))
     }
 
-    fn res_use(&self, file_id: ProgFileId, span: Span) -> Option<ResSymbolId> {
+    fn res_use(&self, file_id: ProgFileId, span: Span) -> ResSymbolId {
         self.uses
             .get(&NameRef {
                 file: file_id,
                 span,
             })
             .copied()
+            .expect("missing symbol use")
     }
 
     fn symbol_for_use(
@@ -493,29 +476,29 @@ impl<'a> LoweringContext<'a> {
         file_id: ProgFileId,
         span: Span,
         module_hint: Option<ModuleId>,
-    ) -> Option<SymbolId> {
-        let res_id = self.res_use(file_id, span)?;
+    ) -> SymbolId {
+        let res_id = self.res_use(file_id, span);
         self.ensure_symbol(res_id, module_hint)
     }
 
-    fn ensure_symbol(
-        &mut self,
-        res_id: ResSymbolId,
-        module_hint: Option<ModuleId>,
-    ) -> Option<SymbolId> {
+    fn ensure_symbol(&mut self, res_id: ResSymbolId, module_hint: Option<ModuleId>) -> SymbolId {
         if let Some(sym) = self.symbol_map.get(&res_id) {
-            return Some(*sym);
+            return *sym;
         }
-        let info = self.symbols_info.iter().find(|i| i.id == res_id)?;
+        let info = self
+            .symbols_info
+            .iter()
+            .find(|i| i.id == res_id)
+            .expect("missing symbol info");
         let module = info
             .module
             .map(|m| ModuleId(m.0))
             .or(module_hint)
-            .unwrap_or(ModuleId(u32::MAX));
+            .expect("missing module for symbol");
         let kind = self.convert_kind(info.kind, res_id);
         let sym = self.insert_symbol(module, info.name.clone(), kind);
         self.symbol_map.insert(res_id, sym);
-        Some(sym)
+        sym
     }
 
     fn convert_kind(&mut self, kind: ResSymbolKind, res_id: ResSymbolId) -> SymbolKind {
@@ -534,7 +517,10 @@ impl<'a> LoweringContext<'a> {
                     .or_insert_with(|| StructId(self.items.structs.len() as u32));
                 SymbolKind::Struct(sid)
             }
-            ResSymbolKind::Global => SymbolKind::Global(GlobalId(u32::MAX)),
+            ResSymbolKind::Global => {
+                let gid = GlobalId(self.items.globals.len() as u32);
+                SymbolKind::Global(gid)
+            }
             ResSymbolKind::Param => SymbolKind::Param,
             ResSymbolKind::Local => SymbolKind::Local,
             ResSymbolKind::Field => SymbolKind::Field,
@@ -542,15 +528,5 @@ impl<'a> LoweringContext<'a> {
             ResSymbolKind::Impl => SymbolKind::Impl,
             ResSymbolKind::Module => SymbolKind::Module,
         }
-    }
-}
-
-trait DummySymbol {
-    fn dummy() -> Self;
-}
-
-impl DummySymbol for SymbolId {
-    fn dummy() -> Self {
-        SymbolId(u32::MAX)
     }
 }
