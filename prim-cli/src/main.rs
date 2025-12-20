@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use std::time::Instant;
 
 mod error;
@@ -118,7 +119,7 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let (program, hir, parse_ms, type_ms) = compile_source(filename)?;
+    let (program, hir, parse_dur, type_dur) = compile_source(filename)?;
     let link_start = Instant::now();
 
     // Generate object code directly using Cranelift
@@ -140,11 +141,13 @@ fn build_program(filename: &str) -> Result<(), MainError> {
         .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
 
     if link_output.status.success() {
-        let link_ms = link_start.elapsed().as_millis();
+        let link_dur = link_start.elapsed();
         println!("Successfully built executable: {}", executable_name);
         println!(
             "[timing] parse: {} ms, typecheck: {} ms, link: {} ms",
-            parse_ms, type_ms, link_ms
+            parse_dur.as_millis(),
+            type_dur.as_millis(),
+            link_dur.as_millis()
         );
 
         // Clean up object file
@@ -227,15 +230,15 @@ fn compile_source(
     (
         prim_compiler::Program,
         prim_compiler::HirProgram,
-        u128,
-        u128,
+        Duration,
+        Duration,
     ),
     MainError,
 > {
     let parse_start = Instant::now();
     let mut loaded =
         load_program(path).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    let parse_ms = parse_start.elapsed().as_millis();
+    let parse_dur = parse_start.elapsed();
 
     let type_start = Instant::now();
     let hir = type_check_and_lower(&mut loaded.program).map_err(|err| match err {
@@ -250,9 +253,9 @@ fn compile_source(
             MainError::CompilationError(msg)
         }
     })?;
-    let type_ms = type_start.elapsed().as_millis();
+    let type_dur = type_start.elapsed();
 
-    Ok((loaded.program, hir, parse_ms, type_ms))
+    Ok((loaded.program, hir, parse_dur, type_dur))
 }
 
 /// Return a path to the runtime static library
