@@ -1,5 +1,5 @@
 // This is a line comment at the top
-import std.print.println_i64
+import std.io.println_i64
 
 fn main() {
     let x = 42 // inline comment

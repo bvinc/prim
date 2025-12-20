@@ -1,4 +1,4 @@
-import std.print.println_i64
+import std.io.println_i64
 
 fn main() {
     let result = (2 + 3) * 4

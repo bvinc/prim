@@ -1,6 +1,6 @@
-import std.print.println_bool
-import std.print.println_f32
-import std.print.println_f64
+import std.io.println_bool
+import std.io.println_f32
+import std.io.println_f64
 
 fn main() {
     println_f32(3.5f32);

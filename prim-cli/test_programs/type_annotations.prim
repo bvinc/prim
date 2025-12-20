@@ -1,4 +1,4 @@
-import std.print.println_u32
+import std.io.println_u32
 
 fn main() {
     let x: u32 = 100

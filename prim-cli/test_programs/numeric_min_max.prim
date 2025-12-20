@@ -1,4 +1,4 @@
-import std.print
+import std.io
 
 fn main() {
     print.println_u8(0u8);

@@ -1,4 +1,4 @@
-import std.print.println_i32
+import std.io.println_i32
 
 struct Point {
     x: i32

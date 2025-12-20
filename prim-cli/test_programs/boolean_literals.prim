@@ -1,4 +1,4 @@
-import std.print.println_bool
+import std.io.println_bool
 
 fn main() {
     println_bool(true)

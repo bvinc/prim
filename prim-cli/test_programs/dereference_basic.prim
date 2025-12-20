@@ -1,4 +1,4 @@
-import std.print.println_i64
+import std.io.println_i64
 
 fn test_deref(ptr: *const i32) -> i32 {
     *ptr
