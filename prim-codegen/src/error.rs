@@ -19,7 +19,13 @@ pub enum CodegenError {
         struct_id: prim_hir::StructId,
         field: prim_hir::SymbolId,
     },
-    Unimplemented,
+    MissingStructValue {
+        struct_id: prim_hir::StructId,
+        field: prim_hir::SymbolId,
+    },
+    MissingFunction(prim_hir::FuncId),
+    InvalidFieldAccess,
+    InvalidBreak,
     MissingMain,
 }
 
@@ -51,7 +57,12 @@ impl std::fmt::Display for CodegenError {
             CodegenError::MissingStructField { struct_id, field } => {
                 write!(f, "Missing field {:?} for struct {:?}", field, struct_id)
             }
-            CodegenError::Unimplemented => write!(f, "Code generation not yet implemented"),
+            CodegenError::MissingStructValue { struct_id, field } => {
+                write!(f, "Missing value for {:?} on struct {:?}", field, struct_id)
+            }
+            CodegenError::MissingFunction(func) => write!(f, "Missing function {:?}", func),
+            CodegenError::InvalidFieldAccess => write!(f, "Invalid field access"),
+            CodegenError::InvalidBreak => write!(f, "break outside loop"),
             CodegenError::MissingMain => write!(f, "main function not found"),
         }
     }
@@ -71,7 +82,10 @@ impl CodegenError {
             CodegenError::ArityMismatch { .. } => "COD011",
             CodegenError::MissingStructLayout(_) => "COD012",
             CodegenError::MissingStructField { .. } => "COD013",
-            CodegenError::Unimplemented => "COD999",
+            CodegenError::MissingStructValue { .. } => "COD014",
+            CodegenError::MissingFunction(_) => "COD015",
+            CodegenError::InvalidFieldAccess => "COD016",
+            CodegenError::InvalidBreak => "COD017",
             CodegenError::MissingMain => "COD100",
         }
     }

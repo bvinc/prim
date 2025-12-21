@@ -224,10 +224,7 @@ impl CraneliftCodeGenerator {
             append_return(&mut sig, ret, &self.struct_layouts)?;
         }
 
-        let func_id = *self
-            .func_ids
-            .get(&func.id)
-            .ok_or(CodegenError::Unimplemented)?;
+        let func_id = *self.func_ids.get(&func.id).expect("missing function id");
         self.ctx.func.signature = sig.clone();
 
         let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
@@ -409,10 +406,9 @@ fn bind_params_static(
     let mut idx = 0usize;
     for param in &func.params {
         let slots = abi_slot_count(&param.ty, layouts);
-        let slice = abi_params.get(idx..idx + slots).ok_or_else(|| {
-            eprintln!("param slot missing for {:?}", param.name);
-            CodegenError::Unimplemented
-        })?;
+        let slice = abi_params
+            .get(idx..idx + slots)
+            .expect("missing ABI parameter slots");
         locals.bind_local(param.name, slice.to_vec());
         idx += slots;
     }
@@ -510,7 +506,7 @@ fn lower_stmt_static(
             let exit = loop_exits
                 .last()
                 .copied()
-                .ok_or(CodegenError::Unimplemented)?;
+                .ok_or(CodegenError::InvalidBreak)?;
             builder.ins().jump(exit, &[]);
             Ok(StmtFlow::Terminated)
         }
@@ -549,9 +545,7 @@ fn lower_expr_static(
             let _ = ty;
             vec![ptr, len]
         }
-        prim_hir::HirExpr::Ident { symbol, .. } => locals
-            .use_symbol(*symbol)
-            .map_err(|_| CodegenError::UndefinedLocal(*symbol))?,
+        prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(*symbol)?,
         prim_hir::HirExpr::Binary {
             op, left, right, ..
         } => {
@@ -591,7 +585,9 @@ fn lower_expr_static(
             vec![res]
         }
         prim_hir::HirExpr::Call { func, args, .. } => {
-            let target = *func_ids.get(func).ok_or(CodegenError::Unimplemented)?; // TODO: replace with a specific error for missing func
+            let target = *func_ids
+                .get(func)
+                .ok_or(CodegenError::MissingFunction(*func))?;
             let callee = module.declare_func_in_func(target, builder.func);
             let mut lowered_args = Vec::new();
             for a in args {
@@ -641,7 +637,10 @@ fn lower_expr_static(
                     func_param_types,
                     module,
                 )?;
-                let v = *vals.first().ok_or(CodegenError::Unimplemented)?;
+                let v = *vals.first().ok_or(CodegenError::MissingStructValue {
+                    struct_id: *struct_id,
+                    field: *field_sym,
+                })?;
                 if !layout.fields.contains_key(field_sym) {
                     return Err(CodegenError::MissingStructField {
                         struct_id: *struct_id,
@@ -656,7 +655,7 @@ fn lower_expr_static(
                     provided
                         .get(field_sym)
                         .copied()
-                        .ok_or(CodegenError::MissingStructField {
+                        .ok_or(CodegenError::MissingStructValue {
                             struct_id: *struct_id,
                             field: *field_sym,
                         })?;
@@ -682,17 +681,23 @@ fn lower_expr_static(
             )?;
             let struct_id = expr_type(base)
                 .as_struct()
-                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
-            let layout = layouts.get(&struct_id).ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
-            let pos = layout
-                .order
-                .iter()
-                .position(|s| s == field)
-                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+                .ok_or(CodegenError::InvalidFieldAccess)?;
+            let layout = layouts
+                .get(&struct_id)
+                .ok_or(CodegenError::MissingStructLayout(struct_id))?;
+            let pos = layout.order.iter().position(|s| s == field).ok_or(
+                CodegenError::MissingStructField {
+                    struct_id,
+                    field: *field,
+                },
+            )?;
             let val = base_vals
                 .get(pos)
                 .copied()
-                .ok_or(CodegenError::Unimplemented)?; // TODO: replace with a real error type
+                .ok_or(CodegenError::MissingStructValue {
+                    struct_id,
+                    field: *field,
+                })?;
             vec![val]
         }
         prim_hir::HirExpr::Deref { base, .. } => {
@@ -797,7 +802,7 @@ impl VarEnv {
         self.locals
             .get(&sym)
             .cloned()
-            .ok_or(CodegenError::Unimplemented)
+            .ok_or(CodegenError::UndefinedLocal(sym))
     }
 }
 
