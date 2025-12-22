@@ -194,6 +194,40 @@ pub enum HirExpr {
     },
 }
 
+impl HirExpr {
+    pub fn ty(&self) -> &Type {
+        match self {
+            HirExpr::Int { ty, .. }
+            | HirExpr::Float { ty, .. }
+            | HirExpr::Bool { ty, .. }
+            | HirExpr::Str { ty, .. }
+            | HirExpr::Ident { ty, .. }
+            | HirExpr::Binary { ty, .. }
+            | HirExpr::Call { ty, .. }
+            | HirExpr::StructLit { ty, .. }
+            | HirExpr::Field { ty, .. }
+            | HirExpr::Deref { ty, .. }
+            | HirExpr::ArrayLit { ty, .. } => ty,
+        }
+    }
+
+    pub fn span(&self) -> SpanId {
+        match self {
+            HirExpr::Int { span, .. }
+            | HirExpr::Float { span, .. }
+            | HirExpr::Bool { span, .. }
+            | HirExpr::Str { span, .. }
+            | HirExpr::Ident { span, .. }
+            | HirExpr::Binary { span, .. }
+            | HirExpr::Call { span, .. }
+            | HirExpr::StructLit { span, .. }
+            | HirExpr::Field { span, .. }
+            | HirExpr::Deref { span, .. }
+            | HirExpr::ArrayLit { span, .. } => *span,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FileInfo {
     pub id: FileId,
