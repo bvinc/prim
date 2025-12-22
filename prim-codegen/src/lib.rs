@@ -47,41 +47,59 @@ fn coerce_value(
     val
 }
 
-fn coerce_returns(
-    builder: &mut FunctionBuilder,
-    mut vals: Vec<Value>,
+fn expected_return_lanes(
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
-) -> Result<Vec<Value>, CodegenError> {
+) -> Result<Vec<cranelift::prelude::Type>, CodegenError> {
     match ty {
         prim_hir::Type::Struct(id) => {
-            if let Some(layout) = layouts.get(id) {
-                while vals.len() < layout.order.len() {
-                    vals.push(builder.ins().iconst(types::I64, 0)); // TODO: missing fields should be an error, not zero
-                }
-                for (i, sym) in layout.order.iter().enumerate() {
-                    if let Some(f) = layout.fields.get(sym) {
-                        if let Some(v) = vals.get(i).copied() {
-                            // TODO: avoid post-hoc coercion; emit the correct lane up front.
-                            vals[i] = coerce_value(builder, v, f.ty);
-                        }
-                    }
-                }
-                Ok(vals)
-            } else {
-                // TODO: missing struct layout should be a hard error.
-                Ok(vals)
+            let layout = layouts
+                .get(id)
+                .ok_or(CodegenError::MissingStructLayout(*id))?;
+            let mut lanes = Vec::with_capacity(layout.order.len());
+            for field_sym in &layout.order {
+                let field =
+                    layout
+                        .fields
+                        .get(field_sym)
+                        .ok_or(CodegenError::MissingStructField {
+                            struct_id: *id,
+                            field: *field_sym,
+                        })?;
+                lanes.push(field.ty);
             }
+            Ok(lanes)
         }
         _ => {
             let (lane, _) = scalar_lane(ty)?;
-            if let Some(v) = vals.first().copied() {
-                Ok(vec![coerce_value(builder, v, lane)])
-            } else {
-                Ok(vec![builder.ins().iconst(lane, 0)])
-            }
+            Ok(vec![lane])
         }
     }
+}
+
+fn validate_return_values(
+    builder: &mut FunctionBuilder,
+    vals: Vec<Value>,
+    ty: &prim_hir::Type,
+    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+) -> Result<Vec<Value>, CodegenError> {
+    let expected = expected_return_lanes(ty, layouts)?;
+    if vals.len() != expected.len() {
+        return Err(CodegenError::ReturnArityMismatch {
+            expected: expected.len(),
+            found: vals.len(),
+        });
+    }
+    for (val, expected_ty) in vals.iter().copied().zip(expected.into_iter()) {
+        let got = builder.func.dfg.value_type(val);
+        if got != expected_ty {
+            return Err(CodegenError::ReturnTypeMismatch {
+                expected: expected_ty,
+                found: got,
+            });
+        }
+    }
+    Ok(vals)
 }
 
 fn expr_type(expr: &prim_hir::HirExpr) -> &prim_hir::Type {
@@ -267,13 +285,9 @@ impl CraneliftCodeGenerator {
         } else if let Some(ret_ty) = &func.ret {
             let out = match last_val {
                 Some(vs) if !vs.is_empty() => vs,
-                _ => vec![zero_value_static(
-                    &mut builder,
-                    ret_ty,
-                    &self.struct_layouts,
-                )?],
+                _ => return Err(CodegenError::MissingReturnValue),
             };
-            coerce_returns(&mut builder, out, ret_ty, &self.struct_layouts)?
+            validate_return_values(&mut builder, out, ret_ty, &self.struct_layouts)?
         } else {
             Vec::new()
         };
@@ -734,7 +748,12 @@ fn lower_expr_static(
                 func_param_types,
                 module,
             )?[0];
-            let loaded = builder.ins().load(types::I64, MemFlags::new(), ptr, 0);
+            let pointee = match base.ty() {
+                prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
+                _ => return Err(CodegenError::InvalidDereference),
+            };
+            let (lane, _) = scalar_lane(pointee)?;
+            let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
             vec![loaded]
         }
         prim_hir::HirExpr::ArrayLit { elements, .. } => {
@@ -776,38 +795,6 @@ fn make_string_data_static(
     let ptr = builder.ins().global_value(types::I64, gv);
     let len = builder.ins().iconst(types::I64, bytes.len() as i64);
     Ok((ptr, len))
-}
-
-fn zero_value_static(
-    builder: &mut FunctionBuilder,
-    ty: &prim_hir::Type,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
-) -> Result<Value, CodegenError> {
-    match ty {
-        prim_hir::Type::Struct(id) => {
-            if let Some(layout) = layouts.get(id) {
-                let lane = layout
-                    .order
-                    .first()
-                    .and_then(|f| layout.fields.get(f))
-                    .map(|f| f.ty)
-                    .unwrap_or(types::I64);
-                Ok(builder.ins().iconst(lane, 0))
-            } else {
-                Ok(builder.ins().iconst(types::I64, 0))
-            }
-        }
-        _ => {
-            let (lane, _) = scalar_lane(ty)?;
-            if lane == types::F32 {
-                Ok(builder.ins().f32const(Ieee32::with_bits(0)))
-            } else if lane == types::F64 {
-                Ok(builder.ins().f64const(Ieee64::with_bits(0)))
-            } else {
-                Ok(builder.ins().iconst(lane, 0))
-            }
-        }
-    }
 }
 
 #[derive(Default)]

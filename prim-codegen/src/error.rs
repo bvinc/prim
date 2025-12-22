@@ -25,7 +25,17 @@ pub enum CodegenError {
     },
     MissingFunction(prim_hir::FuncId),
     InvalidFieldAccess,
+    InvalidDereference,
     InvalidBreak,
+    ReturnArityMismatch {
+        expected: usize,
+        found: usize,
+    },
+    ReturnTypeMismatch {
+        expected: cranelift::prelude::Type,
+        found: cranelift::prelude::Type,
+    },
+    MissingReturnValue,
     MissingMain,
 }
 
@@ -62,7 +72,27 @@ impl std::fmt::Display for CodegenError {
             }
             CodegenError::MissingFunction(func) => write!(f, "Missing function {:?}", func),
             CodegenError::InvalidFieldAccess => write!(f, "Invalid field access"),
+            CodegenError::InvalidDereference => write!(f, "Invalid dereference"),
             CodegenError::InvalidBreak => write!(f, "break outside loop"),
+            CodegenError::ReturnArityMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Return arity mismatch: expected {}, found {}",
+                    expected, found
+                )
+            }
+            CodegenError::ReturnTypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Return type mismatch: expected {expected}, found {found}"
+                )
+            }
+            CodegenError::MissingReturnValue => {
+                write!(
+                    f,
+                    "Missing return value for function with declared return type"
+                )
+            }
             CodegenError::MissingMain => write!(f, "main function not found"),
         }
     }
@@ -85,7 +115,11 @@ impl CodegenError {
             CodegenError::MissingStructValue { .. } => "COD014",
             CodegenError::MissingFunction(_) => "COD015",
             CodegenError::InvalidFieldAccess => "COD016",
-            CodegenError::InvalidBreak => "COD017",
+            CodegenError::InvalidDereference => "COD017",
+            CodegenError::InvalidBreak => "COD018",
+            CodegenError::ReturnArityMismatch { .. } => "COD019",
+            CodegenError::ReturnTypeMismatch { .. } => "COD020",
+            CodegenError::MissingReturnValue => "COD021",
             CodegenError::MissingMain => "COD100",
         }
     }

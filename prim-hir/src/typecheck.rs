@@ -36,6 +36,8 @@ pub enum TypeCheckKind {
         found: usize,
     },
     BreakOutsideLoop,
+    UndeterminedReturn,
+    MissingReturnValue,
     Legacy(String),
 }
 
@@ -51,6 +53,8 @@ impl TypeCheckError {
             TypeCheckKind::UnknownField { .. } => "TYP007",
             TypeCheckKind::ArityMismatch { .. } => "TYP008",
             TypeCheckKind::BreakOutsideLoop => "TYP010",
+            TypeCheckKind::UndeterminedReturn => "TYP011",
+            TypeCheckKind::MissingReturnValue => "TYP012",
             TypeCheckKind::Legacy(_) => "TYP999",
         }
     }
@@ -98,6 +102,12 @@ impl std::fmt::Display for TypeCheckError {
                 func, found, expected
             ),
             TypeCheckKind::BreakOutsideLoop => write!(f, "break used outside of loop"),
+            TypeCheckKind::UndeterminedReturn => {
+                write!(f, "return expression has undetermined type")
+            }
+            TypeCheckKind::MissingReturnValue => {
+                write!(f, "missing return value for declared return type")
+            }
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
     }
@@ -160,6 +170,31 @@ impl<'a> Checker<'a> {
         self.loop_depth = 0;
         for stmt in &mut func.body.stmts {
             self.check_stmt(stmt, &mut locals)?;
+        }
+        if let Some(ret_ty) = &func.ret {
+            match func.body.stmts.last_mut() {
+                Some(HirStmt::Expr(expr)) => {
+                    if !matches!(ret_ty, Type::Undetermined) {
+                        self.apply_expected_literal_type(expr, ret_ty);
+                    }
+                    let expr_ty = self.check_expr(expr, &mut locals)?;
+                    if matches!(expr_ty, Type::Undetermined) {
+                        return Err(self.error(expr.span(), TypeCheckKind::UndeterminedReturn));
+                    }
+                    if !self.types_equal(ret_ty, &expr_ty) {
+                        return Err(self.error(
+                            expr.span(),
+                            TypeCheckKind::TypeMismatch {
+                                expected: ret_ty.clone(),
+                                found: expr_ty,
+                            },
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
+                }
+            }
         }
         Ok(())
     }
