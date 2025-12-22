@@ -20,33 +20,6 @@ pub struct CraneliftCodeGenerator {
     func_param_types: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
 }
 
-fn coerce_value(
-    builder: &mut FunctionBuilder,
-    val: Value,
-    expected: cranelift::prelude::Type,
-) -> Value {
-    // TODO: remove this once lowering emits the correct lane types directly.
-    let got = builder.func.dfg.value_type(val);
-    if got == expected {
-        return val;
-    }
-    if got.is_int() && expected.is_int() {
-        if got.bytes() < expected.bytes() {
-            return builder.ins().uextend(expected, val);
-        }
-        return builder.ins().ireduce(expected, val);
-    }
-    if got.is_float() && expected.is_float() {
-        if got == types::F32 && expected == types::F64 {
-            return builder.ins().fpromote(expected, val);
-        }
-        if got == types::F64 && expected == types::F32 {
-            return builder.ins().fdemote(expected, val);
-        }
-    }
-    val
-}
-
 fn expected_return_lanes(
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
@@ -642,8 +615,18 @@ fn lower_expr_static(
                 }
             }
             if let Some(param_types) = func_param_types.get(func) {
-                for (arg, expected_ty) in lowered_args.iter_mut().zip(param_types.iter().copied()) {
-                    *arg = coerce_value(builder, *arg, expected_ty);
+                for (arg, expected_ty) in lowered_args
+                    .iter()
+                    .copied()
+                    .zip(param_types.iter().copied())
+                {
+                    let got = builder.func.dfg.value_type(arg);
+                    if got != expected_ty {
+                        return Err(CodegenError::ArgTypeMismatch {
+                            expected: expected_ty,
+                            found: got,
+                        });
+                    }
                 }
             }
             let call = builder.ins().call(callee, &lowered_args);
@@ -697,7 +680,14 @@ fn lower_expr_static(
                     .get(field_sym)
                     .map(|f| f.ty)
                     .unwrap_or(builder.func.dfg.value_type(v));
-                values.push(coerce_value(builder, v, target_ty));
+                let got = builder.func.dfg.value_type(v);
+                if got != target_ty {
+                    return Err(CodegenError::FieldTypeMismatch {
+                        expected: target_ty,
+                        found: got,
+                    });
+                }
+                values.push(v);
             }
             values
         }

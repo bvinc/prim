@@ -14,6 +14,14 @@ pub enum CodegenError {
         expected: usize,
         found: usize,
     },
+    ArgTypeMismatch {
+        expected: cranelift::prelude::Type,
+        found: cranelift::prelude::Type,
+    },
+    FieldTypeMismatch {
+        expected: cranelift::prelude::Type,
+        found: cranelift::prelude::Type,
+    },
     MissingStructLayout(prim_hir::StructId),
     MissingStructField {
         struct_id: prim_hir::StructId,
@@ -60,6 +68,15 @@ impl std::fmt::Display for CodegenError {
             CodegenError::UndefinedLocal(sym) => write!(f, "Undefined local {:?}", sym),
             CodegenError::ArityMismatch { expected, found } => {
                 write!(f, "Arity mismatch: expected {}, found {}", expected, found)
+            }
+            CodegenError::ArgTypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Argument type mismatch: expected {expected}, found {found}"
+                )
+            }
+            CodegenError::FieldTypeMismatch { expected, found } => {
+                write!(f, "Field type mismatch: expected {expected}, found {found}")
             }
             CodegenError::MissingStructLayout(id) => {
                 write!(f, "Missing struct layout for {:?}", id)
@@ -120,6 +137,8 @@ impl CodegenError {
             CodegenError::ReturnArityMismatch { .. } => "COD019",
             CodegenError::ReturnTypeMismatch { .. } => "COD020",
             CodegenError::MissingReturnValue => "COD021",
+            CodegenError::ArgTypeMismatch { .. } => "COD022",
+            CodegenError::FieldTypeMismatch { .. } => "COD023",
             CodegenError::MissingMain => "COD100",
         }
     }
