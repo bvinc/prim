@@ -364,6 +364,7 @@ dependencies = [
  "cranelift-object",
  "prim-compiler",
  "prim-hir",
+ "prim-tok",
 ]
 
 [[package]]

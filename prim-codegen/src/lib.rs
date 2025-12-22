@@ -2,10 +2,12 @@
 use cranelift::prelude::*;
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use mangle::{string_literal_symbol, symbol_name};
 use prim_hir::HirProgram;
 use std::collections::HashMap;
 
 pub mod error;
+mod mangle;
 pub use error::CodegenError;
 
 pub struct CraneliftCodeGenerator {
@@ -242,6 +244,8 @@ impl CraneliftCodeGenerator {
         for stmt in &func.body.stmts {
             let flow = lower_stmt_static(
                 stmt,
+                program,
+                func.module,
                 &mut builder,
                 &mut locals,
                 &self.struct_layouts,
@@ -377,16 +381,6 @@ fn export_symbol(
     Ok(symbol_name(func.name, program))
 }
 
-fn symbol_name(sym: prim_hir::SymbolId, program: &HirProgram) -> String {
-    program
-        .symbols
-        .entries
-        .iter()
-        .find(|e| e.id == sym)
-        .map(|e| e.name.clone())
-        .unwrap_or_else(|| format!("sym_{}", sym.0))
-}
-
 fn abi_slot_count(
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
@@ -423,6 +417,8 @@ enum StmtFlow {
 
 fn lower_stmt_static(
     stmt: &prim_hir::HirStmt,
+    program: &HirProgram,
+    module_id: prim_hir::ModuleId,
     builder: &mut FunctionBuilder,
     locals: &mut VarEnv,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
@@ -436,6 +432,8 @@ fn lower_stmt_static(
         prim_hir::HirStmt::Let { name, value, .. } => {
             let vals = lower_expr_static(
                 value,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -450,6 +448,8 @@ fn lower_stmt_static(
         prim_hir::HirStmt::Expr(expr) => {
             let vals = lower_expr_static(
                 expr,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -475,6 +475,8 @@ fn lower_stmt_static(
             for s in &body.stmts {
                 let flow = lower_stmt_static(
                     s,
+                    program,
+                    module_id,
                     builder,
                     locals,
                     layouts,
@@ -515,6 +517,8 @@ fn lower_stmt_static(
 
 fn lower_expr_static(
     expr: &prim_hir::HirExpr,
+    program: &HirProgram,
+    module_id: prim_hir::ModuleId,
     builder: &mut FunctionBuilder,
     locals: &mut VarEnv,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
@@ -540,8 +544,15 @@ fn lower_expr_static(
             let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
             vec![v]
         }
-        prim_hir::HirExpr::Str { value, ty, .. } => {
-            let (ptr, len) = make_string_data_static(builder, module, value.as_bytes())?;
+        prim_hir::HirExpr::Str { value, ty, span } => {
+            let (ptr, len) = make_string_data_static(
+                builder,
+                module,
+                program,
+                module_id,
+                *span,
+                value.as_bytes(),
+            )?;
             let _ = ty;
             vec![ptr, len]
         }
@@ -551,6 +562,8 @@ fn lower_expr_static(
         } => {
             let l = lower_expr_static(
                 left,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -561,6 +574,8 @@ fn lower_expr_static(
             )?;
             let r = lower_expr_static(
                 right,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -593,6 +608,8 @@ fn lower_expr_static(
             for a in args {
                 lowered_args.extend(lower_expr_static(
                     a,
+                    program,
+                    module_id,
                     builder,
                     locals,
                     layouts,
@@ -629,6 +646,8 @@ fn lower_expr_static(
             for (field_sym, expr) in fields {
                 let vals = lower_expr_static(
                     expr,
+                    program,
+                    module_id,
                     builder,
                     locals,
                     layouts,
@@ -671,6 +690,8 @@ fn lower_expr_static(
         prim_hir::HirExpr::Field { base, field, .. } => {
             let base_vals = lower_expr_static(
                 base,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -703,6 +724,8 @@ fn lower_expr_static(
         prim_hir::HirExpr::Deref { base, .. } => {
             let ptr = lower_expr_static(
                 base,
+                program,
+                module_id,
                 builder,
                 locals,
                 layouts,
@@ -721,6 +744,8 @@ fn lower_expr_static(
                 // For now, return the first element value as a stand-in.
                 lower_expr_static(
                     &elements[0],
+                    program,
+                    module_id,
                     builder,
                     locals,
                     layouts,
@@ -737,9 +762,12 @@ fn lower_expr_static(
 fn make_string_data_static(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
+    program: &HirProgram,
+    module_id: prim_hir::ModuleId,
+    span_id: prim_hir::SpanId,
     bytes: &[u8],
 ) -> Result<(Value, Value), CodegenError> {
-    let sym_name = format!("strlit_{}", bytes.len());
+    let sym_name = string_literal_symbol(program, module_id, span_id, bytes.len());
     let data_id = module.declare_data(&sym_name, Linkage::Local, true, false)?;
     let mut desc = cranelift_module::DataDescription::new();
     desc.define(bytes.to_vec().into_boxed_slice());
