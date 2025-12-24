@@ -6,6 +6,7 @@ pub use error::ParseError;
 pub use prim_tok::Span;
 
 // Parser implementation
+mod number;
 pub mod parser;
 
 // Re-export parser for easy access

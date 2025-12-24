@@ -523,6 +523,19 @@ fn test_leading_dot_float() {
 }
 
 #[test]
+fn test_exponent_float_tokens() {
+    let src = "12E+99_f64 2. 0.1f32";
+    let mut tokenizer = Tokenizer::new(src);
+    let tokens = tokenizer.tokenize().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+    assert_eq!(tokens[0].span.text(src), "12E+99_f64");
+    assert_eq!(tokens[1].kind, TokenKind::FloatLiteral);
+    assert_eq!(tokens[1].span.text(src), "2.");
+    assert_eq!(tokens[2].kind, TokenKind::FloatLiteral);
+    assert_eq!(tokens[2].span.text(src), "0.1f32");
+}
+
+#[test]
 fn test_struct_tokens() {
     let src = "struct Point { x: i32, y: i32 }";
     let mut tokenizer = Tokenizer::new(src);

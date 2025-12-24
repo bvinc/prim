@@ -1,3 +1,4 @@
+use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
     BinaryOp, Expr, Function, ImportDecl, ImportSelector, NamePath, Parameter, ParseError,
     PointerMutability, Program, Span, Stmt, StructDefinition, StructField, StructFieldDefinition,
@@ -235,25 +236,12 @@ impl<'a> Parser<'a> {
                     let token = self.advance();
                     token.span
                 };
-                let owned_source = self.source.to_string();
-                let literal_text = token_span.text(&owned_source).to_string();
-                let num_part = literal_text
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect::<String>();
-                let value: i64 = match num_part.parse() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        return Err(ParseError::InvalidIntegerLiteral {
-                            literal: literal_text.clone(),
-                            position: token_span.start(),
-                        });
-                    }
-                };
+                let literal_text = token_span.text(self.source).to_string();
+                let (value, ty) = parse_int_literal(&literal_text, token_span)?;
                 Ok(Expr::IntLiteral {
                     span: token_span,
                     value,
-                    ty: Type::Undetermined,
+                    ty,
                 })
             }
             Some(TokenKind::StringLiteral) => {
@@ -273,23 +261,11 @@ impl<'a> Parser<'a> {
                     token.span
                 };
                 let literal_text = token_span.text(self.source).to_string();
-                let num_part = literal_text
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit() || *c == '.')
-                    .collect::<String>();
-                let value: f64 = match num_part.parse() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        return Err(ParseError::InvalidFloatLiteral {
-                            literal: literal_text.clone(),
-                            position: token_span.start(),
-                        });
-                    }
-                };
+                let (value, ty) = parse_float_literal(&literal_text, token_span)?;
                 Ok(Expr::FloatLiteral {
                     span: token_span,
                     value,
-                    ty: Type::Undetermined,
+                    ty,
                 })
             }
             Some(TokenKind::True) => {

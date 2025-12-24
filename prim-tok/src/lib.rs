@@ -251,27 +251,91 @@ impl<'a> Tokenizer<'a> {
 
     fn read_number(&mut self, start_pos: usize) -> Result<Token, TokenError> {
         let mut is_float = false;
+        let mut seen_digit = false;
+        let mut seen_dot = false;
+        let mut seen_exp = false;
 
-        while self.current.is_some()
-            && self
-                .current_char()
-                .is_some_and(|c| c.is_ascii_digit() || c == '.')
-        {
-            if self.current_char() == Some('.') {
-                if is_float {
-                    break;
-                }
-                is_float = true;
+        let mut radix: Option<u32> = None;
+        if self.current_char() == Some('0') {
+            if let Some(next) = self.peek_ahead(1) {
+                radix = match next {
+                    'b' | 'B' => Some(2),
+                    'o' | 'O' => Some(8),
+                    'x' | 'X' => Some(16),
+                    _ => None,
+                };
             }
-            self.advance();
         }
 
-        // Handle type suffixes (e.g., 42u32, 3.14f64)
-        if self.current.is_some() && self.current_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+        if let Some(radix) = radix {
+            self.advance(); // '0'
+            self.advance(); // prefix
+            while self.current.is_some() {
+                let ch = self.current_char().unwrap_or('_');
+                let is_digit = match radix {
+                    2 => ch == '0' || ch == '1',
+                    8 => ch.is_ascii_digit() && ch < '8',
+                    16 => ch.is_ascii_hexdigit(),
+                    _ => ch.is_ascii_digit(),
+                };
+                if is_digit {
+                    seen_digit = true;
+                    self.advance();
+                    continue;
+                }
+                if ch == '_' {
+                    if self.peek_ahead(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+                        break;
+                    }
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+        } else {
+            while self.current.is_some() {
+                let ch = self.current_char().unwrap_or('_');
+                if ch.is_ascii_digit() {
+                    seen_digit = true;
+                    self.advance();
+                    continue;
+                }
+                if ch == '_' {
+                    if self.peek_ahead(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+                        break;
+                    }
+                    self.advance();
+                    continue;
+                }
+                if ch == '.' && !seen_dot && !seen_exp {
+                    seen_dot = true;
+                    is_float = true;
+                    self.advance();
+                    continue;
+                }
+                if (ch == 'e' || ch == 'E') && !seen_exp {
+                    seen_exp = true;
+                    is_float = true;
+                    self.advance();
+                    if self.current_char().is_some_and(|c| c == '+' || c == '-') {
+                        self.advance();
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // Handle type suffixes (e.g., 42u32, 3.14f64, 1e3_f64)
+        if self.current.is_some()
+            && self
+                .current_char()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        {
             while self.current.is_some()
                 && self
                     .current_char()
-                    .is_some_and(|c| c.is_ascii_alphanumeric())
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
             {
                 self.advance();
             }
@@ -280,7 +344,7 @@ impl<'a> Tokenizer<'a> {
         let text = &self.input[start_pos..self.position];
 
         // Basic validation - ensure we have at least one digit anywhere in the token
-        if !text.chars().any(|c| c.is_ascii_digit()) {
+        if !seen_digit {
             return Err(TokenError::InvalidNumber {
                 text: text.to_string(),
                 position: start_pos,
