@@ -8,24 +8,8 @@ pub struct Span {
 }
 
 impl Span {
-    /// Construct a span; in debug builds we panic if `start > end`, in release we swap.
     pub fn new(start: usize, end: usize) -> Self {
-        if cfg!(debug_assertions) {
-            assert!(
-                start <= end,
-                "Span::new expects start <= end (start: {}, end: {})",
-                start,
-                end
-            );
-            Self { start, end }
-        } else if start <= end {
-            Self { start, end }
-        } else {
-            Self {
-                start: end,
-                end: start,
-            }
-        }
+        Self { start, end }
     }
 
     /// Empty span at a single byte offset.

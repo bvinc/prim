@@ -44,6 +44,10 @@ pub enum CodegenError {
         found: cranelift::prelude::Type,
     },
     MissingReturnValue,
+    InvalidPointerLane,
+    InvalidStructLane,
+    InvalidArrayLane,
+    UndeterminedType,
     MissingMain,
 }
 
@@ -110,6 +114,18 @@ impl std::fmt::Display for CodegenError {
                     "Missing return value for function with declared return type"
                 )
             }
+            CodegenError::InvalidPointerLane => {
+                write!(f, "Pointer type must be lowered before code generation")
+            }
+            CodegenError::InvalidStructLane => {
+                write!(f, "Struct type must be lowered before code generation")
+            }
+            CodegenError::InvalidArrayLane => {
+                write!(f, "Array type must be lowered before code generation")
+            }
+            CodegenError::UndeterminedType => {
+                write!(f, "Undetermined type reached code generation")
+            }
             CodegenError::MissingMain => write!(f, "main function not found"),
         }
     }
@@ -139,6 +155,10 @@ impl CodegenError {
             CodegenError::MissingReturnValue => "COD021",
             CodegenError::ArgTypeMismatch { .. } => "COD022",
             CodegenError::FieldTypeMismatch { .. } => "COD023",
+            CodegenError::InvalidPointerLane => "COD024",
+            CodegenError::InvalidStructLane => "COD025",
+            CodegenError::InvalidArrayLane => "COD026",
+            CodegenError::UndeterminedType => "COD027",
             CodegenError::MissingMain => "COD100",
         }
     }

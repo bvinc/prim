@@ -14,6 +14,7 @@ pub struct CraneliftCodeGenerator {
     module: ObjectModule,
     ctx: codegen::Context,
     builder_context: FunctionBuilderContext,
+    pointer_type: cranelift::prelude::Type,
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
     func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
     func_param_counts: HashMap<prim_hir::FuncId, usize>,
@@ -133,11 +134,13 @@ impl CraneliftCodeGenerator {
         )?;
         let module = ObjectModule::new(builder);
         let ctx = module.make_context();
+        let pointer_type = module.isa().pointer_type();
 
         Ok(Self {
             module,
             ctx,
             builder_context: FunctionBuilderContext::new(),
+            pointer_type,
             struct_layouts: HashMap::new(),
             func_ids: HashMap::new(),
             func_param_counts: HashMap::new(),
@@ -146,12 +149,12 @@ impl CraneliftCodeGenerator {
     }
 
     pub fn generate(mut self, program: &HirProgram) -> Result<Vec<u8>, CodegenError> {
-        self.compute_struct_layouts(program)?;
+        self.compute_struct_layouts(program, self.pointer_type)?;
         // Declare all functions first to populate func_ids.
         for func in &program.items.functions {
             let mut sig = self.module.make_signature();
             for param in &func.params {
-                append_abi_params(&mut sig, &param.ty, &self.struct_layouts)?;
+                append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
             }
             let param_count = sig.params.len();
             let param_types: Vec<cranelift::prelude::Type> =
@@ -159,7 +162,7 @@ impl CraneliftCodeGenerator {
             if main_symbol(program) == Some(func.name) {
                 sig.returns.push(AbiParam::new(types::I32));
             } else if let Some(ret) = &func.ret {
-                append_return(&mut sig, ret, &self.struct_layouts)?;
+                append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
             }
 
             let sym = export_symbol(func, program)?;
@@ -187,12 +190,22 @@ impl CraneliftCodeGenerator {
         Ok(product.emit()?)
     }
 
-    fn compute_struct_layouts(&mut self, program: &HirProgram) -> Result<(), CodegenError> {
+    fn compute_struct_layouts(
+        &mut self,
+        program: &HirProgram,
+        pointer_type: cranelift::prelude::Type,
+    ) -> Result<(), CodegenError> {
         for st in &program.items.structs {
             let mut fields = HashMap::new();
             let mut order = Vec::new();
             for f in &st.fields {
-                let (cl_ty, _) = scalar_lane(&f.ty)?;
+                let cl_ty = match &f.ty {
+                    prim_hir::Type::Pointer { .. } => pointer_type,
+                    _ => {
+                        let (lane, _) = scalar_lane(&f.ty)?;
+                        lane
+                    }
+                };
                 fields.insert(f.name, FieldLayout { ty: cl_ty });
                 order.push(f.name);
             }
@@ -209,12 +222,12 @@ impl CraneliftCodeGenerator {
     ) -> Result<(), CodegenError> {
         let mut sig = self.module.make_signature();
         for param in &func.params {
-            append_abi_params(&mut sig, &param.ty, &self.struct_layouts)?;
+            append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
         }
         if main_symbol(program) == Some(func.name) {
             sig.returns.push(AbiParam::new(types::I32));
         } else if let Some(ret) = &func.ret {
-            append_return(&mut sig, ret, &self.struct_layouts)?;
+            append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
         }
 
         let func_id = *self.func_ids.get(&func.id).expect("missing function id");
@@ -279,10 +292,13 @@ fn scalar_lane(ty: &prim_hir::Type) -> Result<(cranelift::prelude::Type, u32), C
         Bool | I8 | U8 => types::I8,
         I16 | U16 => types::I16,
         I32 | U32 => types::I32,
-        I64 | U64 | Isize | Usize | Pointer { .. } | Struct(_) | Array(_) => types::I64,
+        I64 | U64 | Isize | Usize => types::I64,
         F32 => types::F32,
         F64 => types::F64,
-        Undetermined => return Ok((types::I64, 8)),
+        Pointer { .. } => return Err(CodegenError::InvalidPointerLane),
+        Struct(_) => return Err(CodegenError::InvalidStructLane),
+        Array(_) => return Err(CodegenError::InvalidArrayLane),
+        Undetermined => return Err(CodegenError::UndeterminedType),
     };
     let size = lane.bytes();
     Ok((lane, size))
@@ -292,6 +308,7 @@ fn append_abi_params(
     sig: &mut Signature,
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
         prim_hir::Type::Struct(id) => {
@@ -304,6 +321,7 @@ fn append_abi_params(
                 sig.params.push(AbiParam::new(types::I64));
             }
         }
+        prim_hir::Type::Pointer { .. } => sig.params.push(AbiParam::new(pointer_type)),
         prim_hir::Type::Array(_) => sig.params.push(AbiParam::new(types::I64)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
@@ -317,6 +335,7 @@ fn append_return(
     sig: &mut Signature,
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
         prim_hir::Type::Struct(id) => {
@@ -330,6 +349,7 @@ fn append_return(
                 sig.returns.push(AbiParam::new(lane));
             }
         }
+        prim_hir::Type::Pointer { .. } => sig.returns.push(AbiParam::new(pointer_type)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             sig.returns.push(AbiParam::new(lane));
@@ -742,7 +762,13 @@ fn lower_expr_static(
                 prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
                 _ => return Err(CodegenError::InvalidDereference),
             };
-            let (lane, _) = scalar_lane(pointee)?;
+            let lane = match pointee {
+                prim_hir::Type::Pointer { .. } => module.isa().pointer_type(),
+                _ => {
+                    let (scalar, _) = scalar_lane(pointee)?;
+                    scalar
+                }
+            };
             let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
             vec![loaded]
         }
@@ -782,7 +808,7 @@ fn make_string_data_static(
     desc.define(bytes.to_vec().into_boxed_slice());
     module.define_data(data_id, &desc)?;
     let gv = module.declare_data_in_func(data_id, builder.func);
-    let ptr = builder.ins().global_value(types::I64, gv);
+    let ptr = builder.ins().global_value(module.isa().pointer_type(), gv);
     let len = builder.ins().iconst(types::I64, bytes.len() as i64);
     Ok((ptr, len))
 }
