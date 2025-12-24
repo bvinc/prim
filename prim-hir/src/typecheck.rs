@@ -254,18 +254,8 @@ impl<'a> Checker<'a> {
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<Type, TypeCheckError> {
         match expr {
-            HirExpr::Int { ty, .. } => {
-                if matches!(ty, Type::Undetermined) {
-                    *ty = Type::I64;
-                }
-                Ok(ty.clone())
-            }
-            HirExpr::Float { ty, .. } => {
-                if matches!(ty, Type::Undetermined) {
-                    *ty = Type::F64;
-                }
-                Ok(ty.clone())
-            }
+            HirExpr::Int { ty, .. } => Ok(ty.clone()),
+            HirExpr::Float { ty, .. } => Ok(ty.clone()),
             HirExpr::Bool { ty, .. } => {
                 if matches!(ty, Type::Undetermined) {
                     *ty = Type::Bool;

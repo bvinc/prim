@@ -1,6 +1,6 @@
 import std.io.println_i64
 
 fn main() {
-    let x = 1; let y = 2;
+    let x = 1i64; let y = 2i64;
     println_i64(x + y)
 }

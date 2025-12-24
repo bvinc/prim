@@ -1,7 +1,0 @@
-import std.io.println_i64
-
-fn main() {
-    let x = 1
-    let y = 2
-    println_i64(x + y)
-}
