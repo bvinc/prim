@@ -38,6 +38,8 @@ pub enum TypeCheckKind {
     BreakOutsideLoop,
     UndeterminedReturn,
     MissingReturnValue,
+    UndeterminedParamType,
+    UndeterminedFieldType,
     Legacy(String),
 }
 
@@ -55,6 +57,8 @@ impl TypeCheckError {
             TypeCheckKind::BreakOutsideLoop => "TYP010",
             TypeCheckKind::UndeterminedReturn => "TYP011",
             TypeCheckKind::MissingReturnValue => "TYP012",
+            TypeCheckKind::UndeterminedParamType => "TYP013",
+            TypeCheckKind::UndeterminedFieldType => "TYP014",
             TypeCheckKind::Legacy(_) => "TYP999",
         }
     }
@@ -108,6 +112,12 @@ impl std::fmt::Display for TypeCheckError {
             TypeCheckKind::MissingReturnValue => {
                 write!(f, "missing return value for declared return type")
             }
+            TypeCheckKind::UndeterminedParamType => {
+                write!(f, "function parameter has undetermined type")
+            }
+            TypeCheckKind::UndeterminedFieldType => {
+                write!(f, "struct field has undetermined type")
+            }
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
     }
@@ -117,7 +127,7 @@ impl std::error::Error for TypeCheckError {}
 
 pub fn type_check(program: &mut HirProgram) -> Result<(), TypeCheckError> {
     let mut checker = Checker::new(program);
-    checker.collect_signatures();
+    checker.collect_signatures()?;
     checker.check_functions()
 }
 
@@ -138,19 +148,28 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn collect_signatures(&mut self) {
+    fn collect_signatures(&mut self) -> Result<(), TypeCheckError> {
         for s in &self.program.items.structs {
             let mut fields = HashMap::new();
             for f in &s.fields {
+                if matches!(f.ty, Type::Undetermined) {
+                    return Err(self.error(f.span, TypeCheckKind::UndeterminedFieldType));
+                }
                 fields.insert(f.name, f.ty.clone());
             }
             self.struct_fields.insert(s.id, fields);
         }
 
         for f in &self.program.items.functions {
+            for param in &f.params {
+                if matches!(param.ty, Type::Undetermined) {
+                    return Err(self.error(param.span, TypeCheckKind::UndeterminedParamType));
+                }
+            }
             let params = f.params.iter().map(|p| p.ty.clone()).collect();
             self.func_sigs.insert(f.id, (params, f.ret.clone()));
         }
+        Ok(())
     }
 
     fn check_functions(&mut self) -> Result<(), TypeCheckError> {
