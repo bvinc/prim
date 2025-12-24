@@ -536,6 +536,71 @@ fn test_exponent_float_tokens() {
 }
 
 #[test]
+fn test_all_float_literal_formats() {
+    let literals = [
+        ".5",
+        "0.5",
+        "5.",
+        "123.0f64",
+        "0.1f64",
+        "0.1f32",
+        "12E+99_f64",
+        "6e10",
+        "6E-10",
+        "6.0e10",
+        "6.0E-10",
+        "1_000.25",
+        "1_000.25_f32",
+    ];
+    let src = literals.join(" ");
+    let mut tokenizer = Tokenizer::new(&src);
+    let tokens = tokenizer.tokenize().unwrap();
+
+    assert_eq!(tokens.len(), literals.len());
+    for (token, literal) in tokens.iter().zip(literals.iter()) {
+        assert_eq!(token.kind, TokenKind::FloatLiteral);
+        assert_eq!(token.span.text(&src), *literal);
+    }
+}
+
+#[test]
+fn test_all_integer_literal_formats() {
+    let literals = [
+        "0",
+        "42",
+        "1_000_000",
+        "0b1010",
+        "0b1010_0110",
+        "0o755",
+        "0o7_55",
+        "0xdeadbeef",
+        "0xdead_beef",
+        "5i32",
+        "10i64",
+        "255u8",
+        "1usize",
+        "1isize",
+        "1u8",
+        "1i8",
+        "1u16",
+        "1i16",
+        "1u32",
+        "1i32",
+        "1u64",
+        "1i64",
+    ];
+    let src = literals.join(" ");
+    let mut tokenizer = Tokenizer::new(&src);
+    let tokens = tokenizer.tokenize().unwrap();
+
+    assert_eq!(tokens.len(), literals.len());
+    for (token, literal) in tokens.iter().zip(literals.iter()) {
+        assert_eq!(token.kind, TokenKind::IntLiteral);
+        assert_eq!(token.span.text(&src), *literal);
+    }
+}
+
+#[test]
 fn test_struct_tokens() {
     let src = "struct Point { x: i32, y: i32 }";
     let mut tokenizer = Tokenizer::new(src);

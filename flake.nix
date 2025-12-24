@@ -17,6 +17,7 @@
         build_deps = with pkgsFor.${system}; [
           clang
           llvmPackages.bintools
+          grcov
           rustup
 
           pre-commit
