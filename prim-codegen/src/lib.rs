@@ -12,8 +12,6 @@ pub use error::CodegenError;
 
 pub struct CraneliftCodeGenerator {
     module: ObjectModule,
-    ctx: codegen::Context,
-    builder_context: FunctionBuilderContext,
     pointer_type: cranelift::prelude::Type,
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
     func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
@@ -133,13 +131,10 @@ impl CraneliftCodeGenerator {
             cranelift_module::default_libcall_names(),
         )?;
         let module = ObjectModule::new(builder);
-        let ctx = module.make_context();
         let pointer_type = module.isa().pointer_type();
 
         Ok(Self {
             module,
-            ctx,
-            builder_context: FunctionBuilderContext::new(),
             pointer_type,
             struct_layouts: HashMap::new(),
             func_ids: HashMap::new(),
@@ -180,11 +175,13 @@ impl CraneliftCodeGenerator {
             self.func_param_types.insert(func.id, param_types);
         }
 
+        let mut ctx = self.module.make_context();
+        let mut builder_context = FunctionBuilderContext::new();
         for func in &program.items.functions {
             if func.runtime_binding.is_some() {
                 continue;
             }
-            self.generate_function(func, program)?;
+            self.generate_function(func, program, &mut ctx, &mut builder_context)?;
         }
         let product = self.module.finish();
         Ok(product.emit()?)
@@ -219,6 +216,8 @@ impl CraneliftCodeGenerator {
         &mut self,
         func: &prim_hir::HirFunction,
         program: &HirProgram,
+        ctx: &mut codegen::Context,
+        builder_context: &mut FunctionBuilderContext,
     ) -> Result<(), CodegenError> {
         let mut sig = self.module.make_signature();
         for param in &func.params {
@@ -231,9 +230,9 @@ impl CraneliftCodeGenerator {
         }
 
         let func_id = *self.func_ids.get(&func.id).expect("missing function id");
-        self.ctx.func.signature = sig.clone();
+        ctx.func.signature = sig.clone();
 
-        let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
+        let mut builder = FunctionBuilder::new(&mut ctx.func, builder_context);
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
@@ -246,17 +245,12 @@ impl CraneliftCodeGenerator {
         let mut last_val: Option<Vec<Value>> = None;
         let mut loop_exits: Vec<Block> = Vec::new();
         for stmt in &func.body.stmts {
-            let flow = lower_stmt_static(
+            let flow = self.lower_stmt_static(
                 stmt,
                 program,
                 func.module,
                 &mut builder,
                 &mut locals,
-                &self.struct_layouts,
-                &self.func_ids,
-                &self.func_param_counts,
-                &self.func_param_types,
-                &mut self.module,
                 &mut loop_exits,
             )?;
             match flow {
@@ -280,9 +274,266 @@ impl CraneliftCodeGenerator {
         builder.ins().return_(&rets);
         builder.finalize();
 
-        self.module.define_function(func_id, &mut self.ctx)?;
-        self.module.clear_context(&mut self.ctx);
+        self.module.define_function(func_id, ctx)?;
+        self.module.clear_context(ctx);
         Ok(())
+    }
+
+    fn lower_stmt_static(
+        &mut self,
+        stmt: &prim_hir::HirStmt,
+        program: &HirProgram,
+        module_id: prim_hir::ModuleId,
+        builder: &mut FunctionBuilder,
+        locals: &mut VarEnv,
+        loop_exits: &mut Vec<Block>,
+    ) -> Result<StmtFlow, CodegenError> {
+        match stmt {
+            prim_hir::HirStmt::Let { name, value, .. } => {
+                let vals = self.lower_expr_static(value, program, module_id, builder, locals)?;
+                locals.bind_local(*name, vals.clone());
+                Ok(StmtFlow::Continue)
+            }
+            prim_hir::HirStmt::Expr(expr) => {
+                let vals = self.lower_expr_static(expr, program, module_id, builder, locals)?;
+                Ok(StmtFlow::Value(vals))
+            }
+            prim_hir::HirStmt::Loop { body, .. } => {
+                let header = builder.create_block();
+                let body_block = builder.create_block();
+                let exit = builder.create_block();
+                builder.ins().jump(header, &[]);
+                builder.switch_to_block(header);
+                builder.ins().jump(body_block, &[]);
+                builder.seal_block(header);
+
+                builder.switch_to_block(body_block);
+                loop_exits.push(exit);
+                let mut terminated = false;
+                for s in &body.stmts {
+                    let flow =
+                        self.lower_stmt_static(s, program, module_id, builder, locals, loop_exits)?;
+                    match flow {
+                        StmtFlow::Terminated => {
+                            terminated = true;
+                            break;
+                        }
+                        StmtFlow::Continue | StmtFlow::Value(_) => {}
+                    }
+                }
+                loop_exits.pop();
+                if !terminated {
+                    builder.ins().jump(header, &[]);
+                }
+                builder.seal_block(body_block);
+
+                builder.switch_to_block(exit);
+                builder.seal_block(exit);
+                Ok(StmtFlow::Continue)
+            }
+            prim_hir::HirStmt::Break { .. } => {
+                let exit = loop_exits
+                    .last()
+                    .copied()
+                    .ok_or(CodegenError::InvalidBreak)?;
+                builder.ins().jump(exit, &[]);
+                Ok(StmtFlow::Terminated)
+            }
+        }
+    }
+
+    fn lower_expr_static(
+        &mut self,
+        expr: &prim_hir::HirExpr,
+        program: &HirProgram,
+        module_id: prim_hir::ModuleId,
+        builder: &mut FunctionBuilder,
+        locals: &mut VarEnv,
+    ) -> Result<Vec<Value>, CodegenError> {
+        Ok(match expr {
+            prim_hir::HirExpr::Int { value, ty, .. } => {
+                let (lane, _) = scalar_lane(ty)?;
+                vec![builder.ins().iconst(lane, *value)]
+            }
+            prim_hir::HirExpr::Float { value, ty, .. } => {
+                let v = if matches!(ty, prim_hir::Type::F32) {
+                    builder.ins().f32const(Ieee32::with_float(*value as f32))
+                } else {
+                    builder.ins().f64const(Ieee64::with_float(*value))
+                };
+                vec![v]
+            }
+            prim_hir::HirExpr::Bool { value, .. } => {
+                let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
+                vec![v]
+            }
+            prim_hir::HirExpr::Str { value, ty, span } => {
+                let (ptr, len) = make_string_data_static(
+                    builder,
+                    &mut self.module,
+                    program,
+                    module_id,
+                    *span,
+                    value.as_bytes(),
+                )?;
+                let _ = ty;
+                vec![ptr, len]
+            }
+            prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(*symbol)?,
+            prim_hir::HirExpr::Binary {
+                op, left, right, ..
+            } => {
+                let l = self.lower_expr_static(left, program, module_id, builder, locals)?;
+                let r = self.lower_expr_static(right, program, module_id, builder, locals)?;
+                let (l, r) = (l[0], r[0]);
+                let res = match op {
+                    prim_hir::BinaryOp::Add => builder.ins().iadd(l, r),
+                    prim_hir::BinaryOp::Subtract => builder.ins().isub(l, r),
+                    prim_hir::BinaryOp::Multiply => builder.ins().imul(l, r),
+                    prim_hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
+                    prim_hir::BinaryOp::Equals => {
+                        let cmp = builder.ins().icmp(IntCC::Equal, l, r);
+                        let one = builder.ins().iconst(types::I8, 1);
+                        let zero = builder.ins().iconst(types::I8, 0);
+                        builder.ins().select(cmp, one, zero)
+                    }
+                };
+                vec![res]
+            }
+            prim_hir::HirExpr::Call { func, args, .. } => {
+                let target = *self
+                    .func_ids
+                    .get(func)
+                    .ok_or(CodegenError::MissingFunction(*func))?;
+                let callee = self.module.declare_func_in_func(target, builder.func);
+                let mut lowered_args = Vec::new();
+                for a in args {
+                    lowered_args
+                        .extend(self.lower_expr_static(a, program, module_id, builder, locals)?);
+                }
+                if let Some(expected) = self.func_param_counts.get(func) {
+                    if lowered_args.len() != *expected {
+                        return Err(CodegenError::ArityMismatch {
+                            expected: *expected,
+                            found: lowered_args.len(),
+                        });
+                    }
+                }
+                if let Some(param_types) = self.func_param_types.get(func) {
+                    for (arg, expected_ty) in lowered_args
+                        .iter()
+                        .copied()
+                        .zip(param_types.iter().copied())
+                    {
+                        let got = builder.func.dfg.value_type(arg);
+                        if got != expected_ty {
+                            return Err(CodegenError::ArgTypeMismatch {
+                                expected: expected_ty,
+                                found: got,
+                            });
+                        }
+                    }
+                }
+                let call = builder.ins().call(callee, &lowered_args);
+                builder.inst_results(call).to_vec()
+            }
+            prim_hir::HirExpr::StructLit {
+                struct_id, fields, ..
+            } => {
+                let layout = self
+                    .struct_layouts
+                    .get(struct_id)
+                    .cloned()
+                    .ok_or(CodegenError::MissingStructLayout(*struct_id))?;
+                let mut provided: HashMap<prim_hir::SymbolId, Value> = HashMap::new();
+                for (field_sym, expr) in fields {
+                    let vals = self.lower_expr_static(expr, program, module_id, builder, locals)?;
+                    let v = *vals.first().ok_or(CodegenError::MissingStructValue {
+                        struct_id: *struct_id,
+                        field: *field_sym,
+                    })?;
+                    if !layout.fields.contains_key(field_sym) {
+                        return Err(CodegenError::MissingStructField {
+                            struct_id: *struct_id,
+                            field: *field_sym,
+                        });
+                    }
+                    provided.insert(*field_sym, v);
+                }
+                let mut values = Vec::with_capacity(layout.order.len());
+                for field_sym in &layout.order {
+                    let v = provided.get(field_sym).copied().ok_or(
+                        CodegenError::MissingStructValue {
+                            struct_id: *struct_id,
+                            field: *field_sym,
+                        },
+                    )?;
+                    let target_ty = layout
+                        .fields
+                        .get(field_sym)
+                        .map(|f| f.ty)
+                        .unwrap_or(builder.func.dfg.value_type(v));
+                    let got = builder.func.dfg.value_type(v);
+                    if got != target_ty {
+                        return Err(CodegenError::FieldTypeMismatch {
+                            expected: target_ty,
+                            found: got,
+                        });
+                    }
+                    values.push(v);
+                }
+                values
+            }
+            prim_hir::HirExpr::Field { base, field, .. } => {
+                let base_vals =
+                    self.lower_expr_static(base, program, module_id, builder, locals)?;
+                let struct_id = expr_type(base)
+                    .as_struct()
+                    .ok_or(CodegenError::InvalidFieldAccess)?;
+                let layout = self
+                    .struct_layouts
+                    .get(&struct_id)
+                    .ok_or(CodegenError::MissingStructLayout(struct_id))?;
+                let pos = layout.order.iter().position(|s| s == field).ok_or(
+                    CodegenError::MissingStructField {
+                        struct_id,
+                        field: *field,
+                    },
+                )?;
+                let val = base_vals
+                    .get(pos)
+                    .copied()
+                    .ok_or(CodegenError::MissingStructValue {
+                        struct_id,
+                        field: *field,
+                    })?;
+                vec![val]
+            }
+            prim_hir::HirExpr::Deref { base, .. } => {
+                let ptr = self.lower_expr_static(base, program, module_id, builder, locals)?[0];
+                let pointee = match base.ty() {
+                    prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
+                    _ => return Err(CodegenError::InvalidDereference),
+                };
+                let lane = match pointee {
+                    prim_hir::Type::Pointer { .. } => self.module.isa().pointer_type(),
+                    _ => {
+                        let (scalar, _) = scalar_lane(pointee)?;
+                        scalar
+                    }
+                };
+                let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
+                vec![loaded]
+            }
+            prim_hir::HirExpr::ArrayLit { elements, .. } => {
+                if elements.is_empty() {
+                    vec![builder.ins().iconst(types::I64, 0)]
+                } else {
+                    // For now, return the first element value as a stand-in.
+                    self.lower_expr_static(&elements[0], program, module_id, builder, locals)?
+                }
+            }
+        })
     }
 }
 
@@ -420,378 +671,6 @@ enum StmtFlow {
     Continue,
     Value(Vec<Value>),
     Terminated,
-}
-
-fn lower_stmt_static(
-    stmt: &prim_hir::HirStmt,
-    program: &HirProgram,
-    module_id: prim_hir::ModuleId,
-    builder: &mut FunctionBuilder,
-    locals: &mut VarEnv,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
-    func_ids: &HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
-    func_param_counts: &HashMap<prim_hir::FuncId, usize>,
-    func_param_types: &HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
-    module: &mut ObjectModule,
-    loop_exits: &mut Vec<Block>,
-) -> Result<StmtFlow, CodegenError> {
-    match stmt {
-        prim_hir::HirStmt::Let { name, value, .. } => {
-            let vals = lower_expr_static(
-                value,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?;
-            locals.bind_local(*name, vals.clone());
-            Ok(StmtFlow::Continue)
-        }
-        prim_hir::HirStmt::Expr(expr) => {
-            let vals = lower_expr_static(
-                expr,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?;
-            Ok(StmtFlow::Value(vals))
-        }
-        prim_hir::HirStmt::Loop { body, .. } => {
-            let header = builder.create_block();
-            let body_block = builder.create_block();
-            let exit = builder.create_block();
-            builder.ins().jump(header, &[]);
-            builder.switch_to_block(header);
-            builder.ins().jump(body_block, &[]);
-            builder.seal_block(header);
-
-            builder.switch_to_block(body_block);
-            loop_exits.push(exit);
-            let mut terminated = false;
-            for s in &body.stmts {
-                let flow = lower_stmt_static(
-                    s,
-                    program,
-                    module_id,
-                    builder,
-                    locals,
-                    layouts,
-                    func_ids,
-                    func_param_counts,
-                    func_param_types,
-                    module,
-                    loop_exits,
-                )?;
-                match flow {
-                    StmtFlow::Terminated => {
-                        terminated = true;
-                        break;
-                    }
-                    StmtFlow::Continue | StmtFlow::Value(_) => {}
-                }
-            }
-            loop_exits.pop();
-            if !terminated {
-                builder.ins().jump(header, &[]);
-            }
-            builder.seal_block(body_block);
-
-            builder.switch_to_block(exit);
-            builder.seal_block(exit);
-            Ok(StmtFlow::Continue)
-        }
-        prim_hir::HirStmt::Break { .. } => {
-            let exit = loop_exits
-                .last()
-                .copied()
-                .ok_or(CodegenError::InvalidBreak)?;
-            builder.ins().jump(exit, &[]);
-            Ok(StmtFlow::Terminated)
-        }
-    }
-}
-
-fn lower_expr_static(
-    expr: &prim_hir::HirExpr,
-    program: &HirProgram,
-    module_id: prim_hir::ModuleId,
-    builder: &mut FunctionBuilder,
-    locals: &mut VarEnv,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
-    func_ids: &HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
-    func_param_counts: &HashMap<prim_hir::FuncId, usize>,
-    func_param_types: &HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
-    module: &mut ObjectModule,
-) -> Result<Vec<Value>, CodegenError> {
-    Ok(match expr {
-        prim_hir::HirExpr::Int { value, ty, .. } => {
-            let (lane, _) = scalar_lane(ty)?;
-            vec![builder.ins().iconst(lane, *value)]
-        }
-        prim_hir::HirExpr::Float { value, ty, .. } => {
-            let v = if matches!(ty, prim_hir::Type::F32) {
-                builder.ins().f32const(Ieee32::with_float(*value as f32))
-            } else {
-                builder.ins().f64const(Ieee64::with_float(*value))
-            };
-            vec![v]
-        }
-        prim_hir::HirExpr::Bool { value, .. } => {
-            let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
-            vec![v]
-        }
-        prim_hir::HirExpr::Str { value, ty, span } => {
-            let (ptr, len) = make_string_data_static(
-                builder,
-                module,
-                program,
-                module_id,
-                *span,
-                value.as_bytes(),
-            )?;
-            let _ = ty;
-            vec![ptr, len]
-        }
-        prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(*symbol)?,
-        prim_hir::HirExpr::Binary {
-            op, left, right, ..
-        } => {
-            let l = lower_expr_static(
-                left,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?;
-            let r = lower_expr_static(
-                right,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?;
-            let (l, r) = (l[0], r[0]);
-            let res = match op {
-                prim_hir::BinaryOp::Add => builder.ins().iadd(l, r),
-                prim_hir::BinaryOp::Subtract => builder.ins().isub(l, r),
-                prim_hir::BinaryOp::Multiply => builder.ins().imul(l, r),
-                prim_hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
-                prim_hir::BinaryOp::Equals => {
-                    let cmp = builder.ins().icmp(IntCC::Equal, l, r);
-                    let one = builder.ins().iconst(types::I8, 1);
-                    let zero = builder.ins().iconst(types::I8, 0);
-                    builder.ins().select(cmp, one, zero)
-                }
-            };
-            vec![res]
-        }
-        prim_hir::HirExpr::Call { func, args, .. } => {
-            let target = *func_ids
-                .get(func)
-                .ok_or(CodegenError::MissingFunction(*func))?;
-            let callee = module.declare_func_in_func(target, builder.func);
-            let mut lowered_args = Vec::new();
-            for a in args {
-                lowered_args.extend(lower_expr_static(
-                    a,
-                    program,
-                    module_id,
-                    builder,
-                    locals,
-                    layouts,
-                    func_ids,
-                    func_param_counts,
-                    func_param_types,
-                    module,
-                )?);
-            }
-            if let Some(expected) = func_param_counts.get(func) {
-                if lowered_args.len() != *expected {
-                    return Err(CodegenError::ArityMismatch {
-                        expected: *expected,
-                        found: lowered_args.len(),
-                    });
-                }
-            }
-            if let Some(param_types) = func_param_types.get(func) {
-                for (arg, expected_ty) in lowered_args
-                    .iter()
-                    .copied()
-                    .zip(param_types.iter().copied())
-                {
-                    let got = builder.func.dfg.value_type(arg);
-                    if got != expected_ty {
-                        return Err(CodegenError::ArgTypeMismatch {
-                            expected: expected_ty,
-                            found: got,
-                        });
-                    }
-                }
-            }
-            let call = builder.ins().call(callee, &lowered_args);
-            builder.inst_results(call).to_vec()
-        }
-        prim_hir::HirExpr::StructLit {
-            struct_id, fields, ..
-        } => {
-            let layout = layouts
-                .get(struct_id)
-                .cloned()
-                .ok_or(CodegenError::MissingStructLayout(*struct_id))?;
-            let mut provided: HashMap<prim_hir::SymbolId, Value> = HashMap::new();
-            for (field_sym, expr) in fields {
-                let vals = lower_expr_static(
-                    expr,
-                    program,
-                    module_id,
-                    builder,
-                    locals,
-                    layouts,
-                    func_ids,
-                    func_param_counts,
-                    func_param_types,
-                    module,
-                )?;
-                let v = *vals.first().ok_or(CodegenError::MissingStructValue {
-                    struct_id: *struct_id,
-                    field: *field_sym,
-                })?;
-                if !layout.fields.contains_key(field_sym) {
-                    return Err(CodegenError::MissingStructField {
-                        struct_id: *struct_id,
-                        field: *field_sym,
-                    });
-                }
-                provided.insert(*field_sym, v);
-            }
-            let mut values = Vec::with_capacity(layout.order.len());
-            for field_sym in &layout.order {
-                let v =
-                    provided
-                        .get(field_sym)
-                        .copied()
-                        .ok_or(CodegenError::MissingStructValue {
-                            struct_id: *struct_id,
-                            field: *field_sym,
-                        })?;
-                let target_ty = layout
-                    .fields
-                    .get(field_sym)
-                    .map(|f| f.ty)
-                    .unwrap_or(builder.func.dfg.value_type(v));
-                let got = builder.func.dfg.value_type(v);
-                if got != target_ty {
-                    return Err(CodegenError::FieldTypeMismatch {
-                        expected: target_ty,
-                        found: got,
-                    });
-                }
-                values.push(v);
-            }
-            values
-        }
-        prim_hir::HirExpr::Field { base, field, .. } => {
-            let base_vals = lower_expr_static(
-                base,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?;
-            let struct_id = expr_type(base)
-                .as_struct()
-                .ok_or(CodegenError::InvalidFieldAccess)?;
-            let layout = layouts
-                .get(&struct_id)
-                .ok_or(CodegenError::MissingStructLayout(struct_id))?;
-            let pos = layout.order.iter().position(|s| s == field).ok_or(
-                CodegenError::MissingStructField {
-                    struct_id,
-                    field: *field,
-                },
-            )?;
-            let val = base_vals
-                .get(pos)
-                .copied()
-                .ok_or(CodegenError::MissingStructValue {
-                    struct_id,
-                    field: *field,
-                })?;
-            vec![val]
-        }
-        prim_hir::HirExpr::Deref { base, .. } => {
-            let ptr = lower_expr_static(
-                base,
-                program,
-                module_id,
-                builder,
-                locals,
-                layouts,
-                func_ids,
-                func_param_counts,
-                func_param_types,
-                module,
-            )?[0];
-            let pointee = match base.ty() {
-                prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
-                _ => return Err(CodegenError::InvalidDereference),
-            };
-            let lane = match pointee {
-                prim_hir::Type::Pointer { .. } => module.isa().pointer_type(),
-                _ => {
-                    let (scalar, _) = scalar_lane(pointee)?;
-                    scalar
-                }
-            };
-            let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
-            vec![loaded]
-        }
-        prim_hir::HirExpr::ArrayLit { elements, .. } => {
-            if elements.is_empty() {
-                vec![builder.ins().iconst(types::I64, 0)]
-            } else {
-                // For now, return the first element value as a stand-in.
-                lower_expr_static(
-                    &elements[0],
-                    program,
-                    module_id,
-                    builder,
-                    locals,
-                    layouts,
-                    func_ids,
-                    func_param_counts,
-                    func_param_types,
-                    module,
-                )?
-            }
-        }
-    })
 }
 
 fn make_string_data_static(
