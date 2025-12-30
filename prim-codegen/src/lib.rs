@@ -118,13 +118,13 @@ struct FieldLayout {
 
 impl CraneliftCodeGenerator {
     pub fn new() -> Result<Self, CodegenError> {
-        let mut flag_builder = settings::builder();
-        flag_builder.set("use_colocated_libcalls", "false")?;
-        flag_builder.set("is_pic", "false")?;
         let isa_builder =
             cranelift_native::builder().map_err(|msg| CodegenError::UnsupportedTarget {
                 message: msg.to_string(),
             })?;
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false")?;
+        flag_builder.set("is_pic", "false")?;
         let isa = isa_builder.finish(settings::Flags::new(flag_builder))?;
 
         let builder = ObjectBuilder::new(
