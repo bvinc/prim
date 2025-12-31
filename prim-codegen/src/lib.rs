@@ -74,19 +74,6 @@ fn validate_return_values(
     Ok(vals)
 }
 
-trait StructTypeExt {
-    fn as_struct(&self) -> Option<prim_hir::StructId>;
-}
-
-impl StructTypeExt for prim_hir::Type {
-    fn as_struct(&self) -> Option<prim_hir::StructId> {
-        match self {
-            prim_hir::Type::Struct(id) => Some(*id),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct StructLayout {
     fields: HashMap<prim_hir::SymbolId, FieldLayout>,

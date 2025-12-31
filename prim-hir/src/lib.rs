@@ -306,6 +306,15 @@ pub enum Type {
     Undetermined,
 }
 
+impl Type {
+    pub fn as_struct(&self) -> Option<StructId> {
+        match self {
+            Type::Struct(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
