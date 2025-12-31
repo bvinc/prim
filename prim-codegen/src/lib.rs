@@ -74,22 +74,6 @@ fn validate_return_values(
     Ok(vals)
 }
 
-fn expr_type(expr: &prim_hir::HirExpr) -> &prim_hir::Type {
-    match expr {
-        prim_hir::HirExpr::Int { ty, .. }
-        | prim_hir::HirExpr::Float { ty, .. }
-        | prim_hir::HirExpr::Bool { ty, .. }
-        | prim_hir::HirExpr::Str { ty, .. }
-        | prim_hir::HirExpr::Ident { ty, .. }
-        | prim_hir::HirExpr::Binary { ty, .. }
-        | prim_hir::HirExpr::Call { ty, .. }
-        | prim_hir::HirExpr::StructLit { ty, .. }
-        | prim_hir::HirExpr::Field { ty, .. }
-        | prim_hir::HirExpr::Deref { ty, .. }
-        | prim_hir::HirExpr::ArrayLit { ty, .. } => ty,
-    }
-}
-
 trait StructTypeExt {
     fn as_struct(&self) -> Option<prim_hir::StructId>;
 }
@@ -487,7 +471,8 @@ impl CraneliftCodeGenerator {
             prim_hir::HirExpr::Field { base, field, .. } => {
                 let base_vals =
                     self.lower_expr_static(base, program, module_id, builder, locals)?;
-                let struct_id = expr_type(base)
+                let struct_id = base
+                    .ty()
                     .as_struct()
                     .ok_or(CodegenError::InvalidFieldAccess)?;
                 let layout = self
