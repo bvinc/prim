@@ -89,11 +89,10 @@ fn test_line_comment_at_end_with_newline() {
     assert_eq!(tokens[3].kind, TokenKind::IntLiteral);
     assert_eq!(tokens[4].kind, TokenKind::Comment);
     assert_eq!(tokens[4].span.text(src), "// comment");
-    assert_eq!(tokens[5].kind, TokenKind::Newline);
-    assert_eq!(tokens[6].kind, TokenKind::Let);
-    assert_eq!(tokens[7].kind, TokenKind::Identifier);
-    assert_eq!(tokens[8].kind, TokenKind::Equals);
-    assert_eq!(tokens[9].kind, TokenKind::IntLiteral);
+    assert_eq!(tokens[5].kind, TokenKind::Let);
+    assert_eq!(tokens[6].kind, TokenKind::Identifier);
+    assert_eq!(tokens[7].kind, TokenKind::Equals);
+    assert_eq!(tokens[8].kind, TokenKind::IntLiteral);
 }
 
 #[test]

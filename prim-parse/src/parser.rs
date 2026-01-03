@@ -60,7 +60,7 @@ impl<'a> Parser<'a> {
         let mut impls = Vec::new();
         let mut imports: Vec<ImportDecl> = Vec::new();
 
-        // Skip leading newlines
+        // Skip leading whitespace (no-op)
         self.skip_newlines();
 
         // Optional module header: mod <identifier>
@@ -69,8 +69,7 @@ impl<'a> Parser<'a> {
             let name_token =
                 self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
             self.module_name = Some(name_token.span);
-            // terminate with newline/semicolon or end of block
-            let _ = self.consume_statement_terminator();
+            self.consume_optional_semicolon();
             self.skip_newlines();
         }
 
@@ -142,7 +141,7 @@ impl<'a> Parser<'a> {
                 selector,
                 trailing_symbol,
             });
-            let _ = self.consume_statement_terminator();
+            self.consume_optional_semicolon();
             self.skip_newlines();
         }
 
@@ -394,7 +393,7 @@ impl<'a> Parser<'a> {
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
-                found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                found: self.peek_kind().unwrap(),
                 position: self.position(),
             }),
             None => Err(ParseError::UnexpectedEof),
@@ -430,7 +429,7 @@ impl<'a> Parser<'a> {
                     } else {
                         return Err(ParseError::UnexpectedToken {
                             expected: "module name before '.'".to_string(),
-                            found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                            found: self.peek_kind().unwrap(),
                             position: self.position(),
                         });
                     }
@@ -438,7 +437,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     return Err(ParseError::UnexpectedToken {
                         expected: "function name".to_string(),
-                        found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                        found: self.peek_kind().unwrap(),
                         position: self.position(),
                     });
                 }
@@ -933,7 +932,7 @@ impl<'a> Parser<'a> {
                     Some(_) => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
-                            found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                            found: self.peek_kind().unwrap(),
                             position: self.position(),
                         });
                     }
@@ -948,7 +947,7 @@ impl<'a> Parser<'a> {
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
-                found: self.peek_kind().unwrap_or(TokenKind::Newline),
+                found: self.peek_kind().unwrap(),
                 position: self.position(),
             }),
         }
@@ -957,7 +956,7 @@ impl<'a> Parser<'a> {
     fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut statements = Vec::new();
 
-        // Skip leading newlines
+        // Skip leading whitespace (no-op)
         self.skip_newlines();
 
         while let Some(kind) = self.peek_kind() {
@@ -966,10 +965,9 @@ impl<'a> Parser<'a> {
             }
             statements.push(self.parse_statement()?);
 
-            // After each statement, require a terminator or end of block
-            self.consume_statement_terminator()?;
+            self.consume_optional_semicolon();
 
-            // Skip any additional newlines
+            // Skip any additional whitespace (no-op)
             self.skip_newlines();
         }
 
@@ -1116,34 +1114,13 @@ impl<'a> Parser<'a> {
         span.text(self.source)
     }
 
-    /// Skip newline tokens (used when newlines are not significant)
-    fn skip_newlines(&mut self) {
-        while matches!(self.peek_kind(), Some(TokenKind::Newline)) {
-            self.advance();
-        }
-    }
+    /// Newlines are treated as whitespace; this is a no-op.
+    fn skip_newlines(&mut self) {}
 
-    /// Consume a statement terminator (semicolon, newline, or end of block)
-    fn consume_statement_terminator(&mut self) -> Result<(), ParseError> {
-        match self.peek_kind() {
-            Some(TokenKind::Semicolon) => {
-                self.advance();
-                Ok(())
-            }
-            Some(TokenKind::Newline) => {
-                self.advance();
-                Ok(())
-            }
-            Some(TokenKind::RightBrace) => {
-                // End of block terminates statement
-                Ok(())
-            }
-            None => Ok(()),
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "';', newline, or '}' after statement".to_string(),
-                found: self.peek_kind().unwrap_or(TokenKind::Newline),
-                position: self.position(),
-            }),
+    /// Consume an optional semicolon between statements.
+    fn consume_optional_semicolon(&mut self) {
+        if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+            self.advance();
         }
     }
 }

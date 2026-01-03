@@ -22,8 +22,7 @@ This directory contains the official test programs for the Prim language, along 
 
 ### Statement Termination
 - `semicolon_termination.prim` - Multiple statements with semicolons
-- `newline_termination.prim` - Multiple statements with newlines
-- `invalid_no_terminator.prim` - Should fail: statements without terminators
+- `invalid_no_terminator.prim` - Multiple statements without semicolons
 
 ### Functions
 - `function_with_params.prim` - User-defined function with parameters and return type

@@ -69,10 +69,8 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - **Built-ins**: `println` (special function)
 
 ### Whitespace and Comments
-- Whitespace (spaces, tabs) is ignored except for token separation
-- Newlines are significant as statement terminators
+- Whitespace (spaces, tabs, newlines) is ignored except for token separation
 - **Line comments**: `// comment text` - from `//` to end of line
-- **Block comments**: `/* comment text */` - can span multiple lines
 - Comments are completely ignored by the parser
 
 ### String and Character Literals
@@ -122,15 +120,16 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 
 ### Statement Termination
 Statements can be terminated by:
-- Semicolon `;` (explicit termination)
-- Newline (implicit termination)
+- Semicolon `;` (optional, explicit termination)
 - Closing brace `}` (end of block)
+
+When no semicolon is present, the parser treats the current statement as complete as soon as the next token cannot continue it, then starts a new statement.
 
 Examples:
 ```prim
 fn main() {
-    let x = 1;    // semicolon termination
-    let y = 2     // newline termination (newline follows)
+    let x = 1
+    let y = 2
     println(x + y)  // brace termination
 }
 ```

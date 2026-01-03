@@ -72,7 +72,6 @@ pub enum TokenKind {
 
     // Special
     Comment,
-    Newline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,8 +108,11 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Option<Token>, TokenError> {
-        // Skip whitespace (but not newlines - they're significant)
-        while self.current_char().is_some_and(|c| c == ' ' || c == '\t') {
+        // Skip whitespace
+        while self
+            .current_char()
+            .is_some_and(|c| c == ' ' || c == '\t' || c == '\n' || c == '\r')
+        {
             self.advance();
         }
 
@@ -118,7 +120,6 @@ impl<'a> Tokenizer<'a> {
 
         match self.current_char() {
             None => Ok(None),
-            Some('\n') | Some('\r') => self.emit_simple(TokenKind::Newline, start_pos),
             Some('+') => self.emit_simple(TokenKind::Plus, start_pos),
             Some('-') => {
                 self.advance();
