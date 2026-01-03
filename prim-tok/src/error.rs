@@ -2,7 +2,6 @@
 pub enum TokenError {
     UnexpectedCharacter { ch: char, position: usize },
     UnterminatedString { position: usize },
-    UnterminatedComment { position: usize },
     InvalidNumber { text: String, position: usize },
 }
 
@@ -14,9 +13,6 @@ impl std::fmt::Display for TokenError {
             }
             TokenError::UnterminatedString { position } => {
                 write!(f, "Unterminated string literal at position {}", position)
-            }
-            TokenError::UnterminatedComment { position } => {
-                write!(f, "Unterminated block comment at position {}", position)
             }
             TokenError::InvalidNumber { text, position } => {
                 write!(f, "Invalid number '{}' at position {}", text, position)
@@ -33,7 +29,6 @@ impl TokenError {
         match self {
             TokenError::UnexpectedCharacter { .. } => "TOK001",
             TokenError::UnterminatedString { .. } => "TOK002",
-            TokenError::UnterminatedComment { .. } => "TOK003",
             TokenError::InvalidNumber { .. } => "TOK004",
         }
     }
@@ -46,7 +41,6 @@ impl TokenError {
         match self {
             TokenError::UnexpectedCharacter { position, .. } => Some(*position),
             TokenError::UnterminatedString { position } => Some(*position),
-            TokenError::UnterminatedComment { position } => Some(*position),
             TokenError::InvalidNumber { position, .. } => Some(*position),
         }
     }
@@ -55,7 +49,6 @@ impl TokenError {
         match self {
             TokenError::UnexpectedCharacter { .. } => Some("character scanning"),
             TokenError::UnterminatedString { .. } => Some("string literal"),
-            TokenError::UnterminatedComment { .. } => Some("block comment"),
             TokenError::InvalidNumber { .. } => Some("number literal"),
         }
     }

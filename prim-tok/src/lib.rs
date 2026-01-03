@@ -140,7 +140,6 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
                 match self.current_char() {
                     Some('/') => self.read_line_comment(start_pos).map(Some),
-                    Some('*') => self.read_block_comment(start_pos).map(Some),
                     _ => Ok(Some(Token {
                         kind: TokenKind::Slash,
                         span: Span::new(start_pos, self.position),
@@ -384,37 +383,6 @@ impl<'a> Tokenizer<'a> {
         // Read until newline or end of input
         while self.current.is_some() && !matches!(self.current_char(), Some('\n') | Some('\r')) {
             self.advance();
-        }
-
-        Ok(Token {
-            kind: TokenKind::Comment,
-            span: Span::new(start_pos, self.position),
-        })
-    }
-
-    fn read_block_comment(&mut self, start_pos: usize) -> Result<Token, TokenError> {
-        // We've already consumed the '/', now consume the '*'
-        self.advance();
-
-        // Read until we find '*/' or end of input
-        while self.current.is_some() {
-            if self.current_char() == Some('*') {
-                self.advance();
-                if self.current_char() == Some('/') {
-                    self.advance();
-                    break;
-                }
-            } else {
-                self.advance();
-            }
-        }
-
-        // Check if we reached end of input without closing the comment
-        let text = &self.input[start_pos..self.position];
-        if !text.ends_with("*/") {
-            return Err(TokenError::UnterminatedComment {
-                position: start_pos,
-            });
         }
 
         Ok(Token {

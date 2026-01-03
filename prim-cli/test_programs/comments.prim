@@ -3,8 +3,6 @@ import std.io.println_i64
 
 fn main() {
     let x = 42i64 // inline comment
-    /* This is a block comment
-       that spans multiple lines */
-    let y = /* inline block */ 10i64
+    let y = 10i64
     println_i64(x + y) // prints 52
 }

@@ -97,62 +97,6 @@ fn test_line_comment_at_end_with_newline() {
 }
 
 #[test]
-fn test_block_comments() {
-    let src = "let x = /* block comment */ 42";
-    let mut tokenizer = Tokenizer::new(src);
-    let tokens = tokenizer.tokenize().unwrap();
-
-    assert_eq!(tokens[0].kind, TokenKind::Let);
-    assert_eq!(tokens[1].kind, TokenKind::Identifier);
-    assert_eq!(tokens[2].kind, TokenKind::Equals);
-    assert_eq!(tokens[3].kind, TokenKind::Comment);
-    assert_eq!(tokens[3].span.text(src), "/* block comment */");
-    assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
-    assert_eq!(tokens[4].span.text(src), "42");
-}
-
-#[test]
-fn test_multiline_block_comment() {
-    let src = "let x = /* multi\nline\ncomment */ 42";
-    let mut tokenizer = Tokenizer::new(src);
-    let tokens = tokenizer.tokenize().unwrap();
-
-    assert_eq!(tokens[0].kind, TokenKind::Let);
-    assert_eq!(tokens[1].kind, TokenKind::Identifier);
-    assert_eq!(tokens[2].kind, TokenKind::Equals);
-    assert_eq!(tokens[3].kind, TokenKind::Comment);
-    assert_eq!(tokens[3].span.text(src), "/* multi\nline\ncomment */");
-    assert_eq!(tokens[4].kind, TokenKind::IntLiteral);
-    assert_eq!(tokens[4].span.text(src), "42");
-}
-
-#[test]
-fn test_block_comment_with_slash_star_inside() {
-    // Block comments end at the first */ - no nesting support
-    let src = "/* outer /* inner */ remaining";
-    let mut tokenizer = Tokenizer::new(src);
-    let tokens = tokenizer.tokenize().unwrap();
-
-    assert_eq!(tokens[0].kind, TokenKind::Comment);
-    assert_eq!(tokens[0].span.text(src), "/* outer /* inner */");
-    assert_eq!(tokens[1].kind, TokenKind::Identifier);
-    assert_eq!(tokens[1].span.text(src), "remaining");
-}
-
-#[test]
-fn test_unterminated_block_comment() {
-    let mut tokenizer = Tokenizer::new("let x = /* unterminated comment");
-    let result = tokenizer.tokenize();
-
-    match result {
-        Err(TokenError::UnterminatedComment { position }) => {
-            assert_eq!(position, 8); // Position of /*
-        }
-        _ => panic!("Expected UnterminatedComment error, got {:?}", result),
-    }
-}
-
-#[test]
 fn test_division_vs_comments() {
     let mut tokenizer = Tokenizer::new("let x = a / b");
     let tokens = tokenizer.tokenize().unwrap();
