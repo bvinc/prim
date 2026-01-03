@@ -8,3 +8,4 @@ workspace = true
 
 [dependencies]
 prim-tok = { path = "../prim-tok" }
+string-interner = "0.19"

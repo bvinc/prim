@@ -32,6 +32,7 @@ pub struct HirProgram {
     pub modules: Vec<Module>,
     pub items: Items,
     pub symbols: SymbolTable,
+    pub main: Option<SymbolId>,
     pub files: Vec<FileInfo>,
     pub spans: Vec<Span>,
     pub span_files: Vec<FileId>,

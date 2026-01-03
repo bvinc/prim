@@ -150,7 +150,7 @@ impl<'a> NameResolver<'a> {
         }
 
         for func in &file.ast.functions {
-            let name = func.name.text(source).to_string();
+            let name = file.ast.resolve(func.name).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,

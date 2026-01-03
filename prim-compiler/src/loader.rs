@@ -556,7 +556,8 @@ fn collect_exports(files: &[ModuleFile]) -> ExportTable {
             exports.structs.push(s.name.text(source).to_string());
         }
         for f in &file.ast.functions {
-            exports.functions.push(f.name.text(source).to_string());
+            let name = file.ast.resolve(f.name);
+            exports.functions.push(name.to_string());
         }
         for t in &file.ast.traits {
             exports.traits.push(t.name.text(source).to_string());

@@ -125,14 +125,14 @@ impl CraneliftCodeGenerator {
             let param_count = sig.params.len();
             let param_types: Vec<cranelift::prelude::Type> =
                 sig.params.iter().map(|p| p.value_type).collect();
-            if main_symbol(program) == Some(func.name) {
+            if program.main == Some(func.name) {
                 sig.returns.push(AbiParam::new(types::I32));
             } else if let Some(ret) = &func.ret {
                 append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
             }
 
             let sym = export_symbol(func, program)?;
-            let linkage = if main_symbol(program) == Some(func.name) {
+            let linkage = if program.main == Some(func.name) {
                 Linkage::Export
             } else if func.runtime_binding.is_some() {
                 Linkage::Import
@@ -194,7 +194,7 @@ impl CraneliftCodeGenerator {
         for param in &func.params {
             append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
         }
-        if main_symbol(program) == Some(func.name) {
+        if program.main == Some(func.name) {
             sig.returns.push(AbiParam::new(types::I32));
         } else if let Some(ret) = &func.ret {
             append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
@@ -231,7 +231,7 @@ impl CraneliftCodeGenerator {
             }
         }
 
-        let rets = if main_symbol(program) == Some(func.name) {
+        let rets = if program.main == Some(func.name) {
             vec![builder.ins().iconst(types::I32, 0)]
         } else if let Some(ret_ty) = &func.ret {
             let out = match last_val {
@@ -581,23 +581,6 @@ fn append_return(
     Ok(())
 }
 
-fn main_symbol(program: &HirProgram) -> Option<prim_hir::SymbolId> {
-    program
-        .items
-        .functions
-        .iter()
-        .find(|f| {
-            program
-                .symbols
-                .entries
-                .iter()
-                .find(|e| e.id == f.name)
-                .map(|e| e.name.as_str() == "main")
-                .unwrap_or(false)
-        })
-        .map(|f| f.name)
-}
-
 fn export_symbol(
     func: &prim_hir::HirFunction,
     program: &HirProgram,
@@ -605,7 +588,7 @@ fn export_symbol(
     if let Some(binding) = &func.runtime_binding {
         return Ok(binding.clone());
     }
-    if main_symbol(program) == Some(func.name) {
+    if program.main == Some(func.name) {
         return Ok("prim_main".to_string());
     }
     Ok(symbol_name(func.name, program))

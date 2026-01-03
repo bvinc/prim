@@ -103,6 +103,7 @@ mod tests {
                 entries: vec![symbol],
                 by_name: HashMap::new(),
             },
+            main: None,
             files: vec![FileInfo {
                 id: FileId(0),
                 path: PathBuf::from("dummy.prim"),

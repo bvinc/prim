@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Expr, Function, ImportDecl, ImportSelector, NamePath, Parameter, ParseError,
-    PointerMutability, Program, Span, Stmt, StructDefinition, StructField, StructFieldDefinition,
-    Type,
+    BinaryOp, Expr, Function, ImportDecl, ImportSelector, Interner, NamePath, Parameter,
+    ParseError, PointerMutability, Program, Span, Stmt, StructDefinition, StructField,
+    StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -25,6 +25,7 @@ pub struct Parser<'a> {
     current: usize,
     source: &'a str,
     module_name: Option<Span>,
+    interner: Interner,
 }
 
 impl<'a> Parser<'a> {
@@ -40,6 +41,7 @@ impl<'a> Parser<'a> {
             current: 0,
             source,
             module_name: None,
+            interner: Interner::new(),
         }
     }
 
@@ -193,7 +195,14 @@ impl<'a> Parser<'a> {
         }
 
         // Validate that a main function exists
-        if require_main && !functions.iter().any(|f| self.span_text(&f.name) == "main") {
+        if require_main
+            && !functions.iter().any(|f| {
+                self.interner
+                    .resolve(f.name)
+                    .expect("missing interned function name")
+                    == "main"
+            })
+        {
             return Err(ParseError::MissingMainFunction);
         }
 
@@ -204,6 +213,7 @@ impl<'a> Parser<'a> {
             functions,
             traits,
             impls,
+            interner: std::mem::replace(&mut self.interner, Interner::new()),
         })
     }
 
@@ -490,8 +500,12 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         // Parse function name
-        let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
-        let name = name_token.span;
+        let name_span = {
+            let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
+            name_token.span
+        };
+        let name_text = name_span.text(self.source);
+        let name = self.interner.get_or_intern(name_text);
         self.skip_newlines();
 
         // Parse parameter list
@@ -514,7 +528,7 @@ impl<'a> Parser<'a> {
         if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
                 message: "@repr is only valid on structs".to_string(),
-                position: name.start(),
+                position: name_span.start(),
             });
         }
 
@@ -525,7 +539,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "function declarations without body require @runtime attribute"
                         .to_string(),
-                    position: name.start(),
+                    position: name_span.start(),
                 });
             }
             (Vec::new(), semicolon.span.end())
@@ -533,7 +547,7 @@ impl<'a> Parser<'a> {
             if runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "@runtime functions must not have a body".to_string(),
-                    position: name.start(),
+                    position: name_span.start(),
                 });
             }
             self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
@@ -602,8 +616,12 @@ impl<'a> Parser<'a> {
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
             self.skip_newlines();
-            let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname = name_tok.span;
+            let name_span = {
+                let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
+                name_tok.span
+            };
+            let name_text = name_span.text(self.source);
+            let mname = self.interner.get_or_intern(name_text);
             self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
@@ -657,8 +675,12 @@ impl<'a> Parser<'a> {
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
             self.skip_newlines();
-            let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname = name_tok.span;
+            let name_span = {
+                let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
+                name_tok.span
+            };
+            let name_text = name_span.text(self.source);
+            let mname = self.interner.get_or_intern(name_text);
             self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;

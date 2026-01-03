@@ -21,6 +21,8 @@ struct LoweringContext<'a> {
     symbols: SymbolTable,
     items: Items,
     modules: Vec<Module>,
+    root_module: ModuleId,
+    main: Option<SymbolId>,
     struct_ids: HashMap<ResSymbolId, StructId>,
     func_ids: HashMap<ResSymbolId, FuncId>,
     symbol_map: HashMap<ResSymbolId, SymbolId>,
@@ -72,6 +74,8 @@ impl<'a> LoweringContext<'a> {
             },
             items: Items::default(),
             modules: Vec::new(),
+            root_module: ModuleId(program.root.0),
+            main: None,
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
             symbol_map: HashMap::new(),
@@ -133,6 +137,12 @@ impl<'a> LoweringContext<'a> {
                         .copied()
                         .expect("missing function symbol");
                     let sym_id = self.ensure_symbol(res_id, Some(module_id));
+                    if self.main.is_none()
+                        && module_id == self.root_module
+                        && file.ast.resolve(f.name) == "main"
+                    {
+                        self.main = Some(sym_id);
+                    }
                     let fid = *self
                         .func_ids
                         .entry(res_id)
@@ -246,6 +256,7 @@ impl<'a> LoweringContext<'a> {
             modules: self.modules,
             items: self.items,
             symbols: self.symbols,
+            main: self.main,
             files: self.files,
             spans: self.spans,
             span_files: self.span_files,

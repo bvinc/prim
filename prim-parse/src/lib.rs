@@ -1,4 +1,7 @@
 use prim_tok::Tokenizer;
+use string_interner::StringInterner;
+use string_interner::backend::BufferBackend;
+use string_interner::symbol::SymbolU32;
 
 mod error;
 pub use error::ParseError;
@@ -11,6 +14,9 @@ pub mod parser;
 
 // Re-export parser for easy access
 pub use parser::Parser;
+
+pub type InternSymbol = SymbolU32;
+pub type Interner = StringInterner<BufferBackend<InternSymbol>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerMutability {
@@ -202,7 +208,7 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
-    pub name: Span,
+    pub name: InternSymbol,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
@@ -216,7 +222,7 @@ pub struct Parameter {
     pub type_annotation: Type,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub module_name: Option<Span>,
     pub imports: Vec<ImportDecl>,
@@ -224,6 +230,15 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub traits: Vec<TraitDefinition>,
     pub impls: Vec<ImplDefinition>,
+    pub interner: Interner,
+}
+
+impl Program {
+    pub fn resolve(&self, symbol: InternSymbol) -> &str {
+        self.interner
+            .resolve(symbol)
+            .expect("missing interned symbol")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,14 +309,14 @@ pub struct ImplDefinition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethod {
-    pub name: Span,
+    pub name: InternSymbol,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplMethod {
-    pub name: Span,
+    pub name: InternSymbol,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
@@ -319,7 +334,7 @@ mod tests {
 
         assert_eq!(program.functions.len(), 1);
         let main_func = &program.functions[0];
-        assert_eq!(main_func.name.text(source), "main");
+        assert_eq!(program.resolve(main_func.name), "main");
         assert_eq!(main_func.body.len(), 1);
         match &main_func.body[0] {
             Stmt::Let {
@@ -679,7 +694,7 @@ mod tests {
             .find(|t| t.name.text(source).trim() == "Greeter")
             .expect("trait Greeter present");
         assert_eq!(tr.methods.len(), 1);
-        assert_eq!(tr.methods[0].name.text(source), "hello");
+        assert_eq!(program.resolve(tr.methods[0].name), "hello");
         assert!(
             program
                 .impls
@@ -1330,7 +1345,7 @@ fn main() {
         let function_names: Vec<&str> = program
             .functions
             .iter()
-            .map(|f| f.name.text(source))
+            .map(|f| program.resolve(f.name))
             .collect();
         assert!(function_names.contains(&"level4"));
         assert!(function_names.contains(&"level3"));
@@ -1342,7 +1357,7 @@ fn main() {
         let main_func = program
             .functions
             .iter()
-            .find(|f| f.name.text(source) == "main")
+            .find(|f| program.resolve(f.name) == "main")
             .expect("main function should exist");
 
         // Verify main has statements
@@ -1356,7 +1371,7 @@ fn main() {
         let level1_func = program
             .functions
             .iter()
-            .find(|f| f.name.text(source) == "level1")
+            .find(|f| program.resolve(f.name) == "level1")
             .expect("level1 function should exist");
 
         // Find the function call to level2 in level1
@@ -1379,7 +1394,7 @@ fn main() {
 
         // Basic structure check
         assert_eq!(program.functions.len(), 1);
-        assert_eq!(program.functions[0].name.text(source), "main");
+        assert_eq!(program.resolve(program.functions[0].name), "main");
     }
 
     #[test]
@@ -1394,8 +1409,14 @@ fn main() {
         // Both should produce structurally identical ASTs (spans will differ due to whitespace)
         assert_eq!(messy_program.functions.len(), clean_program.functions.len());
         assert_eq!(messy_program.functions.len(), 1);
-        assert_eq!(messy_program.functions[0].name.text(messy_input), "main");
-        assert_eq!(clean_program.functions[0].name.text(clean_input), "main");
+        assert_eq!(
+            messy_program.resolve(messy_program.functions[0].name),
+            "main"
+        );
+        assert_eq!(
+            clean_program.resolve(clean_program.functions[0].name),
+            "main"
+        );
 
         // Test that the arithmetic expression is parsed correctly in both cases
         if let Some(Stmt::Let { value, .. }) = messy_program.functions[0].body.first() {
