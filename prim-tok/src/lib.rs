@@ -171,13 +171,7 @@ impl<'a> Tokenizer<'a> {
             Some(',') => self.emit_simple(TokenKind::Comma, start_pos),
             Some(':') => self.emit_simple(TokenKind::Colon, start_pos),
             Some(';') => self.emit_simple(TokenKind::Semicolon, start_pos),
-            Some('&') => {
-                self.advance();
-                Ok(Some(Token {
-                    kind: TokenKind::Ampersand,
-                    span: Span::new(start_pos, self.position),
-                }))
-            }
+            Some('&') => self.emit_simple(TokenKind::Ampersand, start_pos),
             Some('@') => self.emit_simple(TokenKind::At, start_pos),
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
