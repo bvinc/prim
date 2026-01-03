@@ -179,44 +179,7 @@ impl<'a> Tokenizer<'a> {
                     span: Span::new(start_pos, self.position),
                 }))
             }
-            Some('@') => {
-                // Allow '@' only for top-level attributes like @runtime(...) or @repr(...)
-                // Heuristics: must appear at start of input or right after a newline, ignoring spaces/tabs,
-                // and must be followed by an identifier starting with a letter (e.g., runtime, repr).
-                let mut is_line_start = true;
-                for c in self.input[..start_pos].chars().rev() {
-                    if c == ' ' || c == '\t' {
-                        continue;
-                    }
-                    if c == '\n' || c == '\r' {
-                        break;
-                    }
-                    is_line_start = false;
-                    break;
-                }
-                // Peek identifier name after '@'
-                let mut ahead = self.chars.clone();
-                // current is '@'; skip it
-                ahead.next();
-                let mut ident = String::new();
-                loop {
-                    match ahead.clone().next() {
-                        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
-                            ident.push(ch);
-                            ahead.next();
-                        }
-                        _ => break,
-                    }
-                }
-                if is_line_start {
-                    self.emit_simple(TokenKind::At, start_pos)
-                } else {
-                    Err(TokenError::UnexpectedCharacter {
-                        ch: '@',
-                        position: start_pos,
-                    })
-                }
-            }
+            Some('@') => self.emit_simple(TokenKind::At, start_pos),
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
                 if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {

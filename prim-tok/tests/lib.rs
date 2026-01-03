@@ -470,20 +470,6 @@ fn test_boolean_as_part_of_identifier() {
 }
 
 #[test]
-fn test_error_unexpected_character() {
-    let mut tokenizer = Tokenizer::new("let x = @");
-    let result = tokenizer.tokenize();
-
-    match result {
-        Err(TokenError::UnexpectedCharacter { ch, position }) => {
-            assert_eq!(ch, '@');
-            assert_eq!(position, 8);
-        }
-        _ => panic!("Expected UnexpectedCharacter error, got {:?}", result),
-    }
-}
-
-#[test]
 fn test_dot_token() {
     let src = "point.x";
     let mut tokenizer = Tokenizer::new(src);
