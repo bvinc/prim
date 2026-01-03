@@ -11,7 +11,6 @@ pub enum TokenKind {
     FloatLiteral,
     StringLiteral,
     CharLiteral,
-    BoolLiteral,
 
     // Keywords
     Let,
