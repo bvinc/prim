@@ -289,18 +289,11 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle type suffixes (e.g., 42u32, 3.14f64, 1e3_f64)
-        if self.current.is_some()
-            && self
-                .current_char()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        while self
+            .current_char()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
         {
-            while self.current.is_some()
-                && self
-                    .current_char()
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                self.advance();
-            }
+            self.advance();
         }
 
         let text = &self.input[start_pos..self.position];
