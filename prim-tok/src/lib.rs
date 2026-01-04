@@ -212,8 +212,11 @@ impl<'a> Tokenizer<'a> {
         kind: TokenKind,
         start_pos: usize,
     ) -> Result<Option<Token>, TokenError> {
-        let t = self.make_simple_token(kind, start_pos)?;
-        Ok(Some(t))
+        self.advance();
+        Ok(Some(Token {
+            kind,
+            span: Span::new(start_pos, self.position),
+        }))
     }
 
     fn read_plus_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
@@ -313,9 +316,9 @@ impl<'a> Tokenizer<'a> {
         if self.current_char() == Some('0') {
             if let Some(next) = self.peek_ahead(1) {
                 radix = match next {
-                    'b' | 'B' => Some(2),
-                    'o' | 'O' => Some(8),
-                    'x' | 'X' => Some(16),
+                    'b' => Some(2),
+                    'o' => Some(8),
+                    'x' => Some(16),
                     _ => None,
                 };
             }
@@ -551,18 +554,6 @@ impl<'a> Tokenizer<'a> {
         self.advance(); // consume closing quote
         Ok(Token {
             kind: TokenKind::CharLiteral,
-            span: Span::new(start_pos, self.position),
-        })
-    }
-
-    fn make_simple_token(
-        &mut self,
-        kind: TokenKind,
-        start_pos: usize,
-    ) -> Result<Token, TokenError> {
-        self.advance();
-        Ok(Token {
-            kind,
             span: Span::new(start_pos, self.position),
         })
     }
