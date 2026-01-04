@@ -487,15 +487,34 @@ impl<'a> Tokenizer<'a> {
         // We've already consumed the first '/', now consume the second '/'
         self.advance();
 
-        // Read until newline or end of input
+        let end_pos = self.read_to_line_end();
+
+        Ok(Token {
+            kind: TokenKind::Comment,
+            span: Span::new(start_pos, end_pos),
+        })
+    }
+
+    fn read_to_line_end(&mut self) -> usize {
         while self.current.is_some() && !matches!(self.current_char(), Some('\n') | Some('\r')) {
             self.advance();
         }
 
-        Ok(Token {
-            kind: TokenKind::Comment,
-            span: Span::new(start_pos, self.position),
-        })
+        let end_pos = self.position;
+
+        // Consume newline sequence so state resets at the next line.
+        match self.current_char() {
+            Some('\r') => {
+                self.advance();
+                if self.current_char() == Some('\n') {
+                    self.advance();
+                }
+            }
+            Some('\n') => self.advance(),
+            _ => {}
+        }
+
+        end_pos
     }
 
     fn read_string_literal(&mut self, start_pos: usize) -> Result<Token, TokenError> {
