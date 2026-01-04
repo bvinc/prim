@@ -70,6 +70,10 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 
 ### Whitespace and Comments
 - Whitespace (spaces, tabs, newlines) is ignored except for token separation
+- Operator spacing:
+  - Binary infix operators must have whitespace on both sides or on neither side.
+  - Prefix unary operators (`+`, `-`, `*`) require whitespace on the left and no whitespace on the right.
+  - Postfix unary operators require no whitespace on the left and whitespace on the right (none defined yet).
 - **Line comments**: `// comment text` - from `//` to end of line
 - Comments are completely ignored by the parser
 

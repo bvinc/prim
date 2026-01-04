@@ -55,6 +55,12 @@ pub enum TokenKind {
     Equals,       // =
     DoubleEquals, // ==
     Arrow,        // ->
+    UnaryPlus,    // +
+    UnaryMinus,   // -
+    UnaryStar,    // *
+    PostfixPlus,  // +
+    PostfixMinus, // -
+    PostfixStar,  // *
 
     // Punctuation
     LeftParen,    // (
@@ -78,6 +84,17 @@ pub enum TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+}
+
+fn is_whitespace_char(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorSpacing {
+    Prefix,
+    Postfix,
+    Infix,
 }
 
 pub struct Tokenizer<'a> {
@@ -109,10 +126,7 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Option<Token>, TokenError> {
         // Skip whitespace
-        while self
-            .current_char()
-            .is_some_and(|c| c == ' ' || c == '\t' || c == '\n' || c == '\r')
-        {
+        while self.current_char().is_some_and(is_whitespace_char) {
             self.advance();
         }
 
@@ -120,29 +134,26 @@ impl<'a> Tokenizer<'a> {
 
         match self.current_char() {
             None => Ok(None),
-            Some('+') => self.emit_simple(TokenKind::Plus, start_pos),
+            Some('+') => self.read_plus_operator(start_pos),
             Some('-') => {
-                self.advance();
-                if self.current_char() == Some('>') {
+                if self.peek_ahead(1) == Some('>') {
+                    self.advance();
                     self.advance();
                     Ok(Some(Token {
                         kind: TokenKind::Arrow,
                         span: Span::new(start_pos, self.position),
                     }))
                 } else {
-                    Ok(Some(Token {
-                        kind: TokenKind::Minus,
-                        span: Span::new(start_pos, self.position),
-                    }))
+                    self.read_minus_operator(start_pos)
                 }
             }
-            Some('*') => self.emit_simple(TokenKind::Star, start_pos),
+            Some('*') => self.read_star_operator(start_pos),
             Some('/') => {
                 self.advance();
                 match self.current_char() {
                     Some('/') => self.read_line_comment(start_pos).map(Some),
                     _ => Ok(Some(Token {
-                        kind: TokenKind::Slash,
+                        kind: self.read_binary_operator_kind("/", start_pos)?,
                         span: Span::new(start_pos, self.position),
                     })),
                 }
@@ -152,12 +163,12 @@ impl<'a> Tokenizer<'a> {
                 if self.current_char() == Some('=') {
                     self.advance();
                     Ok(Some(Token {
-                        kind: TokenKind::DoubleEquals,
+                        kind: self.read_binary_operator_kind("==", start_pos)?,
                         span: Span::new(start_pos, self.position),
                     }))
                 } else {
                     Ok(Some(Token {
-                        kind: TokenKind::Equals,
+                        kind: self.read_binary_operator_kind("=", start_pos)?,
                         span: Span::new(start_pos, self.position),
                     }))
                 }
@@ -203,6 +214,93 @@ impl<'a> Tokenizer<'a> {
     ) -> Result<Option<Token>, TokenError> {
         let t = self.make_simple_token(kind, start_pos)?;
         Ok(Some(t))
+    }
+
+    fn read_plus_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
+        self.advance();
+        let kind = match self.operator_spacing(start_pos, self.position) {
+            OperatorSpacing::Prefix => TokenKind::UnaryPlus,
+            OperatorSpacing::Postfix => TokenKind::PostfixPlus,
+            OperatorSpacing::Infix => TokenKind::Plus,
+        };
+        Ok(Some(Token {
+            kind,
+            span: Span::new(start_pos, self.position),
+        }))
+    }
+
+    fn read_minus_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
+        self.advance();
+        let kind = match self.operator_spacing(start_pos, self.position) {
+            OperatorSpacing::Prefix => TokenKind::UnaryMinus,
+            OperatorSpacing::Postfix => TokenKind::PostfixMinus,
+            OperatorSpacing::Infix => TokenKind::Minus,
+        };
+        Ok(Some(Token {
+            kind,
+            span: Span::new(start_pos, self.position),
+        }))
+    }
+
+    fn read_star_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
+        self.advance();
+        let kind = match self.operator_spacing(start_pos, self.position) {
+            OperatorSpacing::Prefix => TokenKind::UnaryStar,
+            OperatorSpacing::Postfix => TokenKind::PostfixStar,
+            OperatorSpacing::Infix => TokenKind::Star,
+        };
+        Ok(Some(Token {
+            kind,
+            span: Span::new(start_pos, self.position),
+        }))
+    }
+
+    fn read_binary_operator_kind(
+        &self,
+        op: &'static str,
+        start_pos: usize,
+    ) -> Result<TokenKind, TokenError> {
+        if self.operator_spacing(start_pos, self.position) != OperatorSpacing::Infix {
+            return Err(TokenError::InvalidOperatorSpacing {
+                op,
+                position: start_pos,
+            });
+        }
+        match op {
+            "/" => Ok(TokenKind::Slash),
+            "=" => Ok(TokenKind::Equals),
+            "==" => Ok(TokenKind::DoubleEquals),
+            _ => unreachable!("unsupported binary operator {}", op),
+        }
+    }
+
+    fn operator_spacing(&self, start_pos: usize, end_pos: usize) -> OperatorSpacing {
+        let left_space = self.left_is_space(start_pos);
+        let right_space = self.right_is_space(end_pos);
+        if left_space && !right_space {
+            OperatorSpacing::Prefix
+        } else if !left_space && right_space {
+            OperatorSpacing::Postfix
+        } else {
+            OperatorSpacing::Infix
+        }
+    }
+
+    fn left_is_space(&self, pos: usize) -> bool {
+        if pos == 0 {
+            return true;
+        }
+        self.input[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(is_whitespace_char)
+    }
+
+    fn right_is_space(&self, pos: usize) -> bool {
+        self.input[pos..]
+            .chars()
+            .next()
+            .is_some_and(is_whitespace_char)
     }
 
     fn read_number(&mut self, start_pos: usize) -> Result<Token, TokenError> {

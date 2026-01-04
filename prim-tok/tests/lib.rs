@@ -114,13 +114,13 @@ fn test_pointer_keywords() {
     let mut tokenizer = Tokenizer::new(src);
     let tokens = tokenizer.tokenize().unwrap();
 
-    assert_eq!(tokens[0].kind, TokenKind::Star);
+    assert_eq!(tokens[0].kind, TokenKind::UnaryStar);
     assert_eq!(tokens[0].span.text(src), "*");
     assert_eq!(tokens[1].kind, TokenKind::Const);
     assert_eq!(tokens[1].span.text(src), "const");
     assert_eq!(tokens[2].kind, TokenKind::U8);
     assert_eq!(tokens[2].span.text(src), "u8");
-    assert_eq!(tokens[3].kind, TokenKind::Star);
+    assert_eq!(tokens[3].kind, TokenKind::UnaryStar);
     assert_eq!(tokens[3].span.text(src), "*");
     assert_eq!(tokens[4].kind, TokenKind::Mut);
     assert_eq!(tokens[4].span.text(src), "mut");

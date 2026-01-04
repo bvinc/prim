@@ -355,7 +355,7 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
-            Some(TokenKind::Minus) => {
+            Some(TokenKind::UnaryMinus) => {
                 let minus_span = self.advance().span; // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = minus_span.cover(operand.span());
@@ -372,7 +372,24 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
-            Some(TokenKind::Star) => {
+            Some(TokenKind::UnaryPlus) => {
+                let plus_span = self.advance().span; // consume '+'
+                let operand = self.parse_expression(Precedence::UNARY)?;
+                let span = plus_span.cover(operand.span());
+                // Represent unary plus as 0 + operand
+                Ok(Expr::Binary {
+                    left: Box::new(Expr::IntLiteral {
+                        span: plus_span,
+                        value: 0,
+                        ty: Type::Undetermined,
+                    }), // placeholder "0"
+                    op: BinaryOp::Add,
+                    right: Box::new(operand),
+                    span,
+                    ty: Type::Undetermined,
+                })
+            }
+            Some(TokenKind::UnaryStar) => {
                 let star_span = self.advance().span; // consume '*'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = star_span.cover(operand.span());
@@ -916,7 +933,7 @@ impl<'a> Parser<'a> {
                 let token = self.advance();
                 Ok(Type::Struct(token.span))
             }
-            Some(TokenKind::Star) => {
+            Some(TokenKind::UnaryStar) => {
                 // Parse pointer type: *const T or *mut T
                 self.advance(); // consume '*'
 

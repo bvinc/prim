@@ -3,6 +3,7 @@ pub enum TokenError {
     UnexpectedCharacter { ch: char, position: usize },
     UnterminatedString { position: usize },
     InvalidNumber { text: String, position: usize },
+    InvalidOperatorSpacing { op: &'static str, position: usize },
 }
 
 impl std::fmt::Display for TokenError {
@@ -17,6 +18,13 @@ impl std::fmt::Display for TokenError {
             TokenError::InvalidNumber { text, position } => {
                 write!(f, "Invalid number '{}' at position {}", text, position)
             }
+            TokenError::InvalidOperatorSpacing { op, position } => {
+                write!(
+                    f,
+                    "Invalid spacing around operator '{}' at position {}",
+                    op, position
+                )
+            }
         }
     }
 }
@@ -30,6 +38,7 @@ impl TokenError {
             TokenError::UnexpectedCharacter { .. } => "TOK001",
             TokenError::UnterminatedString { .. } => "TOK002",
             TokenError::InvalidNumber { .. } => "TOK004",
+            TokenError::InvalidOperatorSpacing { .. } => "TOK005",
         }
     }
 
@@ -42,6 +51,7 @@ impl TokenError {
             TokenError::UnexpectedCharacter { position, .. } => Some(*position),
             TokenError::UnterminatedString { position } => Some(*position),
             TokenError::InvalidNumber { position, .. } => Some(*position),
+            TokenError::InvalidOperatorSpacing { position, .. } => Some(*position),
         }
     }
 
@@ -50,6 +60,7 @@ impl TokenError {
             TokenError::UnexpectedCharacter { .. } => Some("character scanning"),
             TokenError::UnterminatedString { .. } => Some("string literal"),
             TokenError::InvalidNumber { .. } => Some("number literal"),
+            TokenError::InvalidOperatorSpacing { .. } => Some("operator spacing"),
         }
     }
 }
