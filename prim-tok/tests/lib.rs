@@ -109,6 +109,50 @@ fn test_division_vs_comments() {
 }
 
 #[test]
+fn test_invalid_postfix_plus_spacing() {
+    let mut tokenizer = Tokenizer::new("1+ 2");
+    let result = tokenizer.tokenize();
+
+    match result {
+        Err(TokenError::InvalidOperatorSpacing { op, position }) => {
+            assert_eq!(op, "+");
+            assert_eq!(position, 1);
+        }
+        _ => panic!(
+            "Expected InvalidOperatorSpacing error for '+', got {:?}",
+            result
+        ),
+    }
+}
+
+#[test]
+fn test_invalid_postfix_minus_spacing() {
+    let mut tokenizer = Tokenizer::new("2- 1");
+    let result = tokenizer.tokenize();
+
+    match result {
+        Err(TokenError::InvalidOperatorSpacing { op, position }) => {
+            assert_eq!(op, "-");
+            assert_eq!(position, 1);
+        }
+        _ => panic!(
+            "Expected InvalidOperatorSpacing error for '-', got {:?}",
+            result
+        ),
+    }
+}
+
+#[test]
+fn test_prefix_minus_spacing() {
+    let mut tokenizer = Tokenizer::new("1 -2");
+    let tokens = tokenizer.tokenize().unwrap();
+
+    assert_eq!(tokens[0].kind, TokenKind::IntLiteral);
+    assert_eq!(tokens[1].kind, TokenKind::UnaryMinus);
+    assert_eq!(tokens[2].kind, TokenKind::IntLiteral);
+}
+
+#[test]
 fn test_pointer_keywords() {
     let src = "*const u8 *mut i32";
     let mut tokenizer = Tokenizer::new(src);
