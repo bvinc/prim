@@ -17,16 +17,6 @@ impl Span {
         Self::new(pos, pos)
     }
 
-    /// Construct from a range.
-    pub fn from_range(range: Range<usize>) -> Self {
-        Self::new(range.start, range.end)
-    }
-
-    /// Convert back into a range.
-    pub fn to_range(self) -> Range<usize> {
-        self.start..self.end
-    }
-
     /// Start byte offset.
     pub fn start(self) -> usize {
         self.start
@@ -64,31 +54,25 @@ impl Span {
 
     /// Extend the end of this span.
     pub fn extend_to(&mut self, end: usize) {
-        if cfg!(debug_assertions) {
-            assert!(
-                end >= self.start,
-                "Span::extend_to expects end >= start (start: {}, end: {})",
-                self.start,
-                end
-            );
-            self.end = end;
-        } else if end >= self.start {
-            self.end = end;
-        } else {
-            self.end = self.start;
-        }
+        debug_assert!(
+            end >= self.start,
+            "Span::extend_to expects end >= start (start: {}, end: {})",
+            self.start,
+            end
+        );
+        self.end = end;
     }
 }
 
 impl From<Range<usize>> for Span {
     fn from(range: Range<usize>) -> Self {
-        Span::from_range(range)
+        Span::new(range.start, range.end)
     }
 }
 
 impl From<Span> for Range<usize> {
     fn from(span: Span) -> Self {
-        span.to_range()
+        span.start..span.end
     }
 }
 
