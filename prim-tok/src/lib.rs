@@ -126,13 +126,13 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Option<Token>, TokenError> {
         // Skip whitespace
-        while self.current_char().is_some_and(is_whitespace_char) {
+        while self.current.is_some_and(is_whitespace_char) {
             self.advance();
         }
 
         let start_pos = self.position;
 
-        match self.current_char() {
+        match self.current {
             None => Ok(None),
             Some('+') => self.read_plus_operator(start_pos),
             Some('-') => {
@@ -151,7 +151,7 @@ impl<'a> Tokenizer<'a> {
             Some('/') => {
                 let left_space = self.prev_is_space;
                 self.advance();
-                match self.current_char() {
+                match self.current {
                     Some('/') => self.read_line_comment(start_pos).map(Some),
                     _ => {
                         let right_space = self.current.is_some_and(is_whitespace_char);
@@ -172,7 +172,7 @@ impl<'a> Tokenizer<'a> {
             Some('=') => {
                 let left_space = self.prev_is_space;
                 self.advance();
-                if self.current_char() == Some('=') {
+                if self.current == Some('=') {
                     self.advance();
                     let right_space = self.current.is_some_and(is_whitespace_char);
                     if self.operator_spacing(left_space, right_space) != OperatorSpacing::Infix {
@@ -317,7 +317,7 @@ impl<'a> Tokenizer<'a> {
         let mut seen_exp = false;
 
         let mut radix: Option<u32> = None;
-        if self.current_char() == Some('0') {
+        if self.current == Some('0') {
             if let Some(next) = self.peek_ahead(1) {
                 radix = match next {
                     'b' => Some(2),
@@ -354,7 +354,7 @@ impl<'a> Tokenizer<'a> {
             }
         } else {
             while self.current.is_some() {
-                let ch = self.current_char().unwrap_or('_');
+                let ch = self.current.unwrap_or('_');
                 if ch.is_ascii_digit() {
                     seen_digit = true;
                     self.advance();
@@ -377,7 +377,7 @@ impl<'a> Tokenizer<'a> {
                     seen_exp = true;
                     is_float = true;
                     self.advance();
-                    if self.current_char().is_some_and(|c| c == '+' || c == '-') {
+                    if self.current.is_some_and(|c| c == '+' || c == '-') {
                         self.advance();
                     }
                     continue;
@@ -388,7 +388,7 @@ impl<'a> Tokenizer<'a> {
 
         // Handle type suffixes (e.g., 42u32, 3.14f64, 1e3_f64)
         while self
-            .current_char()
+            .current
             .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             self.advance();
@@ -415,10 +415,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn read_identifier(&mut self, start_pos: usize) -> Result<Token, TokenError> {
-        while self.current.is_some()
-            && self
-                .current_char()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        while self
+            .current
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             self.advance();
         }
@@ -462,10 +461,6 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
-    fn current_char(&self) -> Option<char> {
-        self.current
-    }
-
     fn advance(&mut self) {
         if let Some(ch) = self.current {
             self.position += ch.len_utf8();
@@ -495,17 +490,17 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn read_to_line_end(&mut self) -> usize {
-        while self.current.is_some() && !matches!(self.current_char(), Some('\n') | Some('\r')) {
+        while self.current.is_some() && !matches!(self.current, Some('\n') | Some('\r')) {
             self.advance();
         }
 
         let end_pos = self.position;
 
         // Consume newline sequence so state resets at the next line.
-        match self.current_char() {
+        match self.current {
             Some('\r') => {
                 self.advance();
-                if self.current_char() == Some('\n') {
+                if self.current == Some('\n') {
                     self.advance();
                 }
             }
@@ -520,7 +515,7 @@ impl<'a> Tokenizer<'a> {
         self.advance(); // consume opening quote
 
         while self.current.is_some() {
-            match self.current_char() {
+            match self.current {
                 Some('"') => {
                     self.advance(); // consume closing quote
                     return Ok(Token {
@@ -560,7 +555,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Handle escaped characters
-        if self.current_char() == Some('\\') {
+        if self.current == Some('\\') {
             self.advance(); // consume backslash
             if self.current.is_none() {
                 return Err(TokenError::UnterminatedString {
@@ -573,7 +568,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Expect closing quote
-        if self.current_char() != Some('\'') {
+        if self.current != Some('\'') {
             return Err(TokenError::UnterminatedString {
                 position: start_pos,
             });
