@@ -134,7 +134,7 @@ impl<'a> Tokenizer<'a> {
 
         match self.current {
             None => Ok(None),
-            Some('+') => self.read_plus_operator(start_pos),
+            Some('+') => self.read_operator("+", start_pos),
             Some('-') => {
                 if self.peek_ahead(1) == Some('>') {
                     self.advance();
@@ -144,59 +144,23 @@ impl<'a> Tokenizer<'a> {
                         span: Span::new(start_pos, self.position),
                     }))
                 } else {
-                    self.read_minus_operator(start_pos)
+                    self.read_operator("-", start_pos)
                 }
             }
-            Some('*') => self.read_star_operator(start_pos),
+            Some('*') => self.read_operator("*", start_pos),
             Some('/') => {
-                let left_space = self.prev_is_space;
-                self.advance();
-                match self.current {
-                    Some('/') => self.read_line_comment(start_pos).map(Some),
-                    _ => {
-                        let right_space = self.current.is_some_and(is_whitespace_char);
-                        if self.operator_spacing(left_space, right_space) != OperatorSpacing::Infix
-                        {
-                            return Err(TokenError::InvalidOperatorSpacing {
-                                op: "/",
-                                position: start_pos,
-                            });
-                        }
-                        Ok(Some(Token {
-                            kind: TokenKind::Slash,
-                            span: Span::new(start_pos, self.position),
-                        }))
-                    }
+                if self.peek_ahead(1) == Some('/') {
+                    self.advance();
+                    self.read_line_comment(start_pos).map(Some)
+                } else {
+                    self.read_operator("/", start_pos)
                 }
             }
             Some('=') => {
-                let left_space = self.prev_is_space;
-                self.advance();
-                if self.current == Some('=') {
-                    self.advance();
-                    let right_space = self.current.is_some_and(is_whitespace_char);
-                    if self.operator_spacing(left_space, right_space) != OperatorSpacing::Infix {
-                        return Err(TokenError::InvalidOperatorSpacing {
-                            op: "==",
-                            position: start_pos,
-                        });
-                    }
-                    Ok(Some(Token {
-                        kind: TokenKind::DoubleEquals,
-                        span: Span::new(start_pos, self.position),
-                    }))
+                if self.peek_ahead(1) == Some('=') {
+                    self.read_operator("==", start_pos)
                 } else {
-                    let right_space = self.current.is_some_and(is_whitespace_char);
-                    if self.operator_spacing(left_space, right_space) != OperatorSpacing::Infix {
-                        return Err(TokenError::InvalidOperatorSpacing {
-                            op: "=",
-                            position: start_pos,
-                        });
-                    }
-                    Ok(Some(Token {
-                        kind: TokenKind::Equals,
-                        span: Span::new(start_pos, self.position),
-                    }))
+                    self.read_operator("=", start_pos)
                 }
             }
             Some('(') => self.emit_simple(TokenKind::LeftParen, start_pos),
@@ -245,55 +209,35 @@ impl<'a> Tokenizer<'a> {
         }))
     }
 
-    fn read_plus_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
+    fn read_operator(
+        &mut self,
+        op: &'static str,
+        start_pos: usize,
+    ) -> Result<Option<Token>, TokenError> {
         let left_space = self.prev_is_space;
-        self.advance();
-        let kind =
-            match self.operator_spacing(left_space, self.current.is_some_and(is_whitespace_char)) {
-                OperatorSpacing::Prefix => TokenKind::UnaryPlus,
-                OperatorSpacing::Postfix => {
-                    return Err(TokenError::InvalidOperatorSpacing {
-                        op: "+",
-                        position: start_pos,
-                    });
-                }
-                OperatorSpacing::Infix => TokenKind::Plus,
-            };
-        Ok(Some(Token {
-            kind,
-            span: Span::new(start_pos, self.position),
-        }))
-    }
-
-    fn read_minus_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
-        let left_space = self.prev_is_space;
-        self.advance();
-        let kind =
-            match self.operator_spacing(left_space, self.current.is_some_and(is_whitespace_char)) {
-                OperatorSpacing::Prefix => TokenKind::UnaryMinus,
-                OperatorSpacing::Postfix => {
-                    return Err(TokenError::InvalidOperatorSpacing {
-                        op: "-",
-                        position: start_pos,
-                    });
-                }
-                OperatorSpacing::Infix => TokenKind::Minus,
-            };
-        Ok(Some(Token {
-            kind,
-            span: Span::new(start_pos, self.position),
-        }))
-    }
-
-    fn read_star_operator(&mut self, start_pos: usize) -> Result<Option<Token>, TokenError> {
-        let left_space = self.prev_is_space;
-        self.advance();
-        let kind =
-            match self.operator_spacing(left_space, self.current.is_some_and(is_whitespace_char)) {
-                OperatorSpacing::Prefix => TokenKind::UnaryStar,
-                OperatorSpacing::Postfix => TokenKind::PostfixStar,
-                OperatorSpacing::Infix => TokenKind::Star,
-            };
+        for _ in 0..op.len() {
+            self.advance();
+        }
+        let spacing =
+            self.operator_spacing(left_space, self.current.is_some_and(is_whitespace_char));
+        let kind = match (op, spacing) {
+            ("+", OperatorSpacing::Prefix) => TokenKind::UnaryPlus,
+            ("+", OperatorSpacing::Infix) => TokenKind::Plus,
+            ("-", OperatorSpacing::Prefix) => TokenKind::UnaryMinus,
+            ("-", OperatorSpacing::Infix) => TokenKind::Minus,
+            ("*", OperatorSpacing::Prefix) => TokenKind::UnaryStar,
+            ("*", OperatorSpacing::Postfix) => TokenKind::PostfixStar,
+            ("*", OperatorSpacing::Infix) => TokenKind::Star,
+            ("/", OperatorSpacing::Infix) => TokenKind::Slash,
+            ("=", OperatorSpacing::Infix) => TokenKind::Equals,
+            ("==", OperatorSpacing::Infix) => TokenKind::DoubleEquals,
+            _ => {
+                return Err(TokenError::InvalidOperatorSpacing {
+                    op,
+                    position: start_pos,
+                });
+            }
+        };
         Ok(Some(Token {
             kind,
             span: Span::new(start_pos, self.position),
