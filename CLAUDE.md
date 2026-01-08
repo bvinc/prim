@@ -1,174 +1,106 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the Prim programming language compiler.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-**Prim** is a programming language compiler implemented in Rust with a complete toolchain that compiles Prim source code to native x86-64 executables. The compiler uses the Cranelift code generation backend for professional-quality optimized machine code output.
+**Prim** is a programming language compiler implemented in Rust that compiles Prim source code to native x86-64 executables using the Cranelift code generation backend.
 
 ### Language Features
-- **Primitive types**: Integers (u8, u16, u32, u64, i8, i16, i32, i64), floats, booleans
+- **Primitive types**: Integers (u8-u64, i8-i64, usize, isize), floats (f32, f64), booleans
 - **Variables**: `let` bindings with optional type annotations
 - **Expressions**: Arithmetic operations (+, -, *, ==), literals, variables, field access
-- **Structs**: User-defined types with named fields and struct literals
-- **Functions**: `println()` function for output
+- **Structs**: User-defined types with named fields
+- **Functions**: User-defined functions with parameters and return types
+- **Methods**: `impl` blocks with `&self` methods
+- **Control flow**: `if` expressions, `loop` with `break`
 - **Type inference**: Basic type inference for unspecified types
-
-### Example Prim Program
-```prim
-struct Point {
-    x: i32,
-    y: i32
-}
-
-fn main() {
-    let p = Point { x = 10, y = 20 }
-    println(p.x)  // outputs: 10
-    println(p.y)  // outputs: 20
-}
-```
 
 ## Architecture
 
-The compiler is structured as a Rust workspace with four main components:
-
 ```
-prim/                    # Workspace root
-├── prim-cli/           # Main compiler binary crate
-├── prim-tok/           # Tokenizer/lexer crate
-├── prim-parse/         # Parser crate
-├── prim-codegen/       # Cranelift code generation crate
-└── prim-cli/test_programs/  # Test Prim programs
+prim/
+├── prim-cli/           # CLI binary (build/run commands)
+├── prim-tok/           # Tokenizer/lexer (source → tokens)
+├── prim-parse/         # Parser (tokens → AST)
+├── prim-compiler/      # Name resolution, type checking, AST → HIR lowering
+├── prim-hir/           # High-level IR definitions and type checker
+├── prim-codegen/       # Cranelift code generation (HIR → object code)
+├── prim-rt/            # Runtime library (static lib linked into executables)
+├── prim-std/           # Standard library (Prim source files)
+└── prim-cli/test_programs/  # Test .prim programs with .expected output files
 ```
 
 ### Compilation Pipeline
 1. **Tokenization** (`prim-tok`): Source code → tokens using zero-copy string slices
-2. **Parsing** (`prim-parse`): Tokens → Abstract Syntax Tree (AST) via recursive descent
-3. **Code Generation** (`prim-codegen`): AST → native object code via Cranelift IR
-4. **Linking**: Object code → executable via GCC (links with C runtime for printf)
-
-### Technical Details
-- **Backend**: Cranelift compiler infrastructure for professional code generation
-- **Target**: Linux x86-64 native executables
-- **Output**: Direct object code generation (no intermediate assembly)
-- **Runtime**: Links with C standard library for I/O operations
-
-## Development Environment
-
-This project uses Nix flakes for reproducible development environments:
-
-- **Setup**: Run `nix develop` or use direnv with `.envrc`
-- **Rust version**: 1.88+ (configured in flake.nix)
-- **Tools**: rustc, cargo, clippy, rustfmt, gdb, gcc (for linking)
+2. **Parsing** (`prim-parse`): Tokens → AST via recursive descent
+3. **Lowering** (`prim-compiler`): AST → HIR with name resolution and type checking
+4. **Code Generation** (`prim-codegen`): HIR → native object code via Cranelift IR
+5. **Linking**: Object code + runtime library → executable via system linker
 
 ## Development Commands
 
-### Building and Testing
 ```bash
-# Build the entire workspace
+# Build everything
 cargo build --workspace
-
-# Run clippy (no warnings allowed)
-cargo clippy --all-targets --all-features
 
 # Run tests
 cargo test --workspace
 
-# Format code
+# Run a single crate's tests
+cargo test -p prim-parse
+
+# Clippy (must pass with zero warnings)
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Format
 cargo fmt --all
 ```
 
 ### Using the Compiler
+
 ```bash
-# Build a Prim program to executable
+# Build and stage distribution (sets up PRIM_ROOT structure)
+./build.sh              # debug build
+./build.sh --release    # release build
+
+# Run from staged distribution
+export PRIM_ROOT=target/debug/dist
+target/debug/dist/bin/prim run path/to/file.prim
+
+# Or run directly during development
 cargo run -p prim -- build prim-cli/test_programs/basic_hello.prim
-# Creates executable: prim-cli/test_programs/basic_hello
-
-# Compile and run a Prim program
 cargo run -p prim -- run prim-cli/test_programs/basic_hello.prim
-# Compiles and immediately runs the program
-
-# Show help
-cargo run -p prim -- help
 ```
 
-### Test Programs
-All example Prim programs are in `prim-cli/test_programs/`:
-- `basic_hello.prim` - Simple println with literal (outputs 42)
-- `arithmetic.prim` - Arithmetic with precedence (outputs 20)
-- `precedence.prim` - Operator precedence test (outputs 14)
-- `semicolon_termination.prim` - Multiple statements with semicolons
-- `struct_basic.prim` - Struct definition and field access (outputs 10, 20)
-- `struct_access.prim` - Simple struct instantiation and field access
-- And several others for various language features
+The `PRIM_ROOT` environment variable tells the CLI where to find the standard library and runtime.
 
-## Code Quality
+## Git Hooks
 
-The project maintains high code quality standards:
+Enable the pre-commit hook to enforce formatting, clippy, and tests:
 
-- **Zero compiler warnings** (enforced - code must never have warnings)
-- **Zero clippy warnings** (enforced - code must never have clippy warnings)
-- **Consistent formatting** via rustfmt (code must always be formatted with `cargo fmt` before committing)
-- **Comprehensive error handling** throughout the pipeline
+```bash
+git config core.hooksPath .githooks
+```
 
-### Pre-commit Requirements
+The hook runs: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`.
 
-Before committing any code changes, you MUST:
+## Pre-commit Requirements
 
-1. **Format the code**: Run `cargo fmt --all` to ensure consistent formatting
-2. **Check for warnings**: Run `cargo build` and ensure zero compiler warnings
-3. **Check clippy**: Run `cargo clippy --all-targets --all-features` and ensure zero clippy warnings
-4. **Run tests**: Run `cargo test` and ensure all tests pass
-
-Any commit that introduces warnings or clippy warnings will be rejected.
-
-## Troubleshooting
-
-### Common Issues
-- **"undefined reference to printf"**: Ensure GCC is available for linking
-- **Segmentation fault**: Usually indicates missing C runtime setup (should not happen with current implementation)
-- **Parse errors**: Check Prim syntax matches supported language features
-
-### Dependencies
-The compiler requires:
-- **Rust 1.88+** with Cargo
-- **GCC** for linking with C runtime
-- **Cranelift 0.112** crates for code generation
+Before committing:
+1. `cargo fmt --all`
+2. `cargo clippy --workspace --all-targets --all-features -- -D warnings` (zero warnings)
+3. `cargo test --workspace`
 
 ## Git Commit Guidelines
 
-When making commits to this project, follow these conventions:
-
-### Commit Format
 - **No type prefixes** (no "feat:", "fix:", etc.)
-- **Imperative mood**: "add feature" not "added feature"  
-- **First line under 50 characters** when possible
-- **Never include Claude signatures** or AI attributions
-- **Descriptive body** for complex changes (wrap at 72 chars)
+- **Imperative mood**: "add feature" not "added feature"
+- **First line under 50 characters**
+- **No AI attributions or signatures**
 
-### Examples
+Examples:
 ```
-Good:
 add support for floating point literals
-refactor error handling to use custom types
 fix segfault in printf integration
-
-Bad:
-feat: add support for floating point literals  
-Added support for floating point literals
-🤖 Generated with Claude Code
 ```
-
-### Multi-line Format
-```
-add comprehensive error handling system
-
-- Replace all panic!() calls with Result returns
-- Add dedicated error.rs files for each compiler crate  
-- Implement Display trait for user-friendly messages
-- Add test coverage for error conditions
-```
-
-## Implementation Notes
-
-The current implementation provides a solid foundation for expanding the Prim language with additional features, better error messages, and potentially new target platforms.

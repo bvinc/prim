@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Expr, Function, ImportDecl, ImportSelector, Interner, NamePath, Parameter,
-    ParseError, PointerMutability, Program, Span, Stmt, StructDefinition, StructField,
-    StructFieldDefinition, Type,
+    BinaryOp, DiagnosticKind, DiagnosticSeverity, Diagnostics, Expr, Function, ImportDecl,
+    ImportSelector, Interner, NamePath, Parameter, ParseError, PointerMutability, Program, Span,
+    Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -26,10 +26,16 @@ pub struct Parser<'a> {
     source: &'a str,
     module_name: Option<Span>,
     interner: Interner,
+    diagnostics: Option<&'a mut Diagnostics>,
+    has_error_diagnostics: bool,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token>, source: &'a str) -> Self {
+    pub fn new(
+        tokens: Vec<Token>,
+        source: &'a str,
+        diagnostics: Option<&'a mut Diagnostics>,
+    ) -> Self {
         // Filter out comment tokens so the parser never sees them
         let tokens = tokens
             .into_iter()
@@ -42,15 +48,25 @@ impl<'a> Parser<'a> {
             source,
             module_name: None,
             interner: Interner::new(),
+            diagnostics,
+            has_error_diagnostics: false,
         }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
-        self.parse_internal(true)
+        let program = self.parse_internal(true)?;
+        if self.has_error_diagnostics {
+            return Err(ParseError::UnexpectedEof); // Generic error for now
+        }
+        Ok(program)
     }
 
-    pub fn parse_without_main(&mut self) -> Result<Program, ParseError> {
-        self.parse_internal(false)
+    pub fn parse_unit(&mut self) -> Result<Program, ParseError> {
+        let program = self.parse_internal(false)?;
+        if self.has_error_diagnostics {
+            return Err(ParseError::UnexpectedEof); // Generic error for now
+        }
+        Ok(program)
     }
 
     fn parse_internal(&mut self, require_main: bool) -> Result<Program, ParseError> {
@@ -980,12 +996,32 @@ impl<'a> Parser<'a> {
             if kind == TokenKind::RightBrace {
                 break;
             }
-            statements.push(self.parse_statement()?);
+            let statement = self.parse_statement()?;
+            let statement_end = self.previous().span.end();
+            let has_semicolon = matches!(self.peek_kind(), Some(TokenKind::Semicolon));
 
-            self.consume_optional_semicolon();
+            if has_semicolon {
+                self.advance();
+            } else if let Some(next) = self.peek() {
+                let next_start = next.span.start();
+                let is_right_brace = next.kind == TokenKind::RightBrace;
+                if !is_right_brace && self.is_same_line(statement_end, next_start) {
+                    if let Some(ref mut diagnostics) = self.diagnostics {
+                        diagnostics.add(
+                            DiagnosticKind::StatementsSameLine,
+                            next_start,
+                            DiagnosticSeverity::Error,
+                        );
+                    }
+                    self.has_error_diagnostics = true;
+                    // Continue parsing to collect more errors
+                }
+            }
 
             // Skip any additional whitespace (no-op)
             self.skip_newlines();
+
+            statements.push(statement);
         }
 
         Ok(statements)
@@ -1125,6 +1161,12 @@ impl<'a> Parser<'a> {
         self.peek()
             .map(|t| t.span.start())
             .unwrap_or_else(|| self.source.len())
+    }
+
+    fn is_same_line(&self, left_end: usize, right_start: usize) -> bool {
+        let start = left_end.min(self.source.len());
+        let end = right_start.min(self.source.len());
+        !self.source.as_bytes()[start..end].contains(&b'\n')
     }
 
     fn span_text(&self, span: &Span) -> &str {
@@ -1313,7 +1355,7 @@ mod tests {
 
             let mut tokenizer = Tokenizer::new(input);
             let tokens = tokenizer.tokenize().expect("Failed to tokenize");
-            let mut parser = Parser::new(tokens, input);
+            let mut parser = Parser::new(tokens, input, None);
 
             match parser.parse_expression(Precedence::NONE) {
                 Ok(expr) => {

@@ -120,3 +120,82 @@ impl ParseError {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiagnosticKind {
+    StatementsSameLine,
+}
+
+impl DiagnosticKind {
+    pub fn message(&self) -> &'static str {
+        match self {
+            DiagnosticKind::StatementsSameLine => {
+                "statements on the same line should be separated by a semicolon"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diagnostic {
+    pub kind: DiagnosticKind,
+    pub position: usize,
+    pub severity: DiagnosticSeverity,
+}
+
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let level = match self.severity {
+            DiagnosticSeverity::Error => "error",
+            DiagnosticSeverity::Warning => "warning",
+        };
+        write!(
+            f,
+            "{} at position {}: {}",
+            level,
+            self.position,
+            self.kind.message()
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Diagnostics {
+    messages: Vec<Diagnostic>,
+}
+
+impl Diagnostics {
+    pub fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, kind: DiagnosticKind, position: usize, severity: DiagnosticSeverity) {
+        self.messages.push(Diagnostic {
+            kind,
+            position,
+            severity,
+        });
+    }
+
+    pub fn messages(&self) -> &[Diagnostic] {
+        &self.messages
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|d| d.severity == DiagnosticSeverity::Error)
+    }
+}

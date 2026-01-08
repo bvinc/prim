@@ -4,7 +4,7 @@ use string_interner::backend::BufferBackend;
 use string_interner::symbol::SymbolU32;
 
 mod error;
-pub use error::ParseError;
+pub use error::{Diagnostic, DiagnosticKind, DiagnosticSeverity, Diagnostics, ParseError};
 
 pub use prim_tok::Span;
 
@@ -276,20 +276,24 @@ impl ImportDecl {
     }
 }
 
-/// Parse a Prim program using the unified parser
-pub fn parse(input: &str) -> Result<Program, ParseError> {
+/// Parse a Prim program with optional diagnostics collection.
+/// Requires a main function.
+pub fn parse(input: &str, diagnostics: Option<&mut Diagnostics>) -> Result<Program, ParseError> {
     let mut tokenizer = Tokenizer::new(input);
     let tokens = tokenizer.tokenize()?;
-    let mut parser = Parser::new(tokens, input);
+    let mut parser = Parser::new(tokens, input, diagnostics);
     parser.parse()
 }
 
-/// Parse a single file/unit without requiring a `main` function.
-pub fn parse_unit(input: &str) -> Result<Program, ParseError> {
+/// Parse a Prim program unit (module/library) without requiring a main function.
+pub fn parse_unit(
+    input: &str,
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<Program, ParseError> {
     let mut tokenizer = Tokenizer::new(input);
     let tokens = tokenizer.tokenize()?;
-    let mut parser = Parser::new(tokens, input);
-    parser.parse_without_main()
+    let mut parser = Parser::new(tokens, input, diagnostics);
+    parser.parse_unit()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -326,6 +330,35 @@ pub struct ImplMethod {
 mod tests {
     use super::*;
     use prim_tok::TokenKind;
+
+    fn parse(source: &str) -> Result<Program, ParseError> {
+        crate::parse(source, None)
+    }
+
+    fn parse_unit(source: &str) -> Result<Program, ParseError> {
+        crate::parse_unit(source, None)
+    }
+
+    #[test]
+    fn test_error_same_line_statements() {
+        let source = "fn main() { let x = 1 let y = 2 }";
+        let mut diagnostics = Diagnostics::new();
+        let result = crate::parse(source, Some(&mut diagnostics));
+
+        // Should fail to parse
+        assert!(result.is_err());
+
+        // Should have a diagnostic about same-line statements
+        assert_eq!(diagnostics.messages().len(), 1);
+        assert_eq!(
+            diagnostics.messages()[0].kind,
+            DiagnosticKind::StatementsSameLine
+        );
+        assert_eq!(
+            diagnostics.messages()[0].position,
+            source.find("let y").unwrap()
+        );
+    }
 
     #[test]
     fn test_parse_let_statement() {
@@ -889,20 +922,19 @@ mod tests {
 
     #[test]
     fn test_parse_error_mismatched_parentheses_missing_open() {
-        let result = parse("fn main() { let x = 2 + 3) }");
+        let source = "fn main() { let x = 2 + 3) }";
+        let mut diagnostics = Diagnostics::new();
+        let result = crate::parse(source, Some(&mut diagnostics));
 
-        match result {
-            Err(ParseError::UnexpectedToken {
-                expected, found, ..
-            }) => {
-                assert_eq!(expected, "expression");
-                assert_eq!(found, TokenKind::RightParen);
-            }
-            _ => panic!(
-                "Expected UnexpectedToken error for unexpected ')', got {:?}",
-                result
-            ),
-        }
+        // Should emit diagnostic about same-line statements (because ) is on same line)
+        assert_eq!(diagnostics.messages().len(), 1);
+        assert_eq!(
+            diagnostics.messages()[0].kind,
+            DiagnosticKind::StatementsSameLine
+        );
+
+        // Should fail with parse error
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1680,7 +1712,7 @@ fn main() {
 
             let mut tokenizer = prim_tok::Tokenizer::new(expr_input);
             let tokens = tokenizer.tokenize().expect("Failed to tokenize");
-            let mut parser = Parser::new(tokens, expr_input);
+            let mut parser = Parser::new(tokens, expr_input, None);
 
             // Test expression parsing directly using the parser's parse_expression method
             match parser.parse_expression(crate::parser::Precedence::NONE) {

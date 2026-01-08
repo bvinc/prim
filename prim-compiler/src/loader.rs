@@ -2,7 +2,7 @@ use crate::program::{
     ExportTable, FileId, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
     ModuleOrigin, NameResolution, Program,
 };
-use prim_parse::{self, ImportDecl, ImportSelector, ParseError};
+use prim_parse::{self, ImportDecl, ImportSelector};
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
@@ -22,7 +22,7 @@ pub fn prim_root() -> Result<PathBuf, LoadError> {
 #[derive(Debug)]
 pub enum LoadError {
     Io(std::io::Error),
-    Parse(ParseError),
+    Parse(prim_parse::ParseError),
     InvalidModule(String),
 }
 
@@ -44,8 +44,8 @@ impl From<std::io::Error> for LoadError {
     }
 }
 
-impl From<ParseError> for LoadError {
-    fn from(err: ParseError) -> Self {
+impl From<prim_parse::ParseError> for LoadError {
+    fn from(err: prim_parse::ParseError) -> Self {
         LoadError::Parse(err)
     }
 }
@@ -180,7 +180,7 @@ impl Loader {
 
     fn load_single_file(&mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
         let source = std::fs::read_to_string(path)?;
-        let ast = prim_parse::parse_unit(&source)?;
+        let ast = prim_parse::parse_unit(&source, None)?;
 
         let module_name = ast
             .module_name
@@ -266,7 +266,7 @@ impl Loader {
 
         for file in &files {
             let source = std::fs::read_to_string(file)?;
-            let ast = prim_parse::parse_unit(&source)
+            let ast = prim_parse::parse_unit(&source, None)
                 .map_err(|err| LoadError::InvalidModule(format!("{}: {}", file.display(), err)))?;
 
             let this_name = ast
@@ -444,7 +444,7 @@ impl Loader {
 
             for file in &files {
                 let source = std::fs::read_to_string(file)?;
-                let program = prim_parse::parse_unit(&source).map_err(|err| {
+                let program = prim_parse::parse_unit(&source, None).map_err(|err| {
                     LoadError::InvalidModule(format!("{}: {}", file.display(), err))
                 })?;
 
