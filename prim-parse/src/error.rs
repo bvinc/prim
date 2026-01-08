@@ -23,6 +23,8 @@ pub enum ParseError {
         literal: String,
         position: usize,
     },
+    /// Parsing completed but error-level diagnostics were emitted
+    HasErrors,
 }
 
 impl From<TokenError> for ParseError {
@@ -66,6 +68,9 @@ impl std::fmt::Display for ParseError {
             ParseError::InvalidFloatLiteral { literal, .. } => {
                 write!(f, "Invalid float literal: {}", literal)
             }
+            ParseError::HasErrors => {
+                write!(f, "Parse error: compilation failed due to previous errors")
+            }
         }
     }
 }
@@ -84,6 +89,7 @@ impl ParseError {
             ParseError::InvalidAttributeUsage { .. } => "PAR005",
             ParseError::InvalidIntegerLiteral { .. } => "PAR006",
             ParseError::InvalidFloatLiteral { .. } => "PAR007",
+            ParseError::HasErrors => "PAR008",
         }
     }
 
@@ -104,6 +110,7 @@ impl ParseError {
             ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
             ParseError::InvalidIntegerLiteral { position, .. } => Some(*position),
             ParseError::InvalidFloatLiteral { position, .. } => Some(*position),
+            ParseError::HasErrors => None,
         }
     }
 
@@ -117,85 +124,34 @@ impl ParseError {
             ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
             ParseError::InvalidIntegerLiteral { .. } => Some("literal parsing"),
             ParseError::InvalidFloatLiteral { .. } => Some("literal parsing"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DiagnosticKind {
-    StatementsSameLine,
-}
-
-impl DiagnosticKind {
-    pub fn message(&self) -> &'static str {
-        match self {
-            DiagnosticKind::StatementsSameLine => {
-                "statements on the same line should be separated by a semicolon"
-            }
+            ParseError::HasErrors => None,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticSeverity {
-    Error,
+pub enum Severity {
     Warning,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
-    pub kind: DiagnosticKind,
+    pub message: String,
     pub position: usize,
-    pub severity: DiagnosticSeverity,
+    pub severity: Severity,
 }
 
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let level = match self.severity {
-            DiagnosticSeverity::Error => "error",
-            DiagnosticSeverity::Warning => "warning",
+            Severity::Error => "error",
+            Severity::Warning => "warning",
         };
         write!(
             f,
             "{} at position {}: {}",
-            level,
-            self.position,
-            self.kind.message()
+            level, self.position, self.message
         )
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Diagnostics {
-    messages: Vec<Diagnostic>,
-}
-
-impl Diagnostics {
-    pub fn new() -> Self {
-        Self {
-            messages: Vec::new(),
-        }
-    }
-
-    pub fn add(&mut self, kind: DiagnosticKind, position: usize, severity: DiagnosticSeverity) {
-        self.messages.push(Diagnostic {
-            kind,
-            position,
-            severity,
-        });
-    }
-
-    pub fn messages(&self) -> &[Diagnostic] {
-        &self.messages
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
-    }
-
-    pub fn has_errors(&self) -> bool {
-        self.messages
-            .iter()
-            .any(|d| d.severity == DiagnosticSeverity::Error)
     }
 }
