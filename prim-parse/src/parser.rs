@@ -86,9 +86,6 @@ impl<'a> Parser<'a> {
         let mut impls = Vec::new();
         let mut imports: Vec<ImportDecl> = Vec::new();
 
-        // Skip leading whitespace (no-op)
-        self.skip_newlines();
-
         // Optional module header: mod <identifier>
         if matches!(self.peek_kind(), Some(TokenKind::Mod)) {
             self.advance(); // consume 'mod'
@@ -96,13 +93,11 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
             self.module_name = Some(name_token.span);
             self.consume_optional_semicolon();
-            self.skip_newlines();
         }
 
         // Optional imports with optional selectors
         while matches!(self.peek_kind(), Some(TokenKind::Import)) {
             self.advance(); // consume 'import'
-            self.skip_newlines();
             let head =
                 self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
             let mut segments = vec![head.span];
@@ -110,16 +105,13 @@ impl<'a> Parser<'a> {
             let mut trailing_symbol: Option<Span> = None;
 
             loop {
-                self.skip_newlines();
                 if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
                     break;
                 }
                 self.advance(); // consume '.'
-                self.skip_newlines();
                 match self.peek_kind() {
                     Some(TokenKind::LeftBrace) => {
                         self.advance(); // consume '{'
-                        self.skip_newlines();
                         let mut names = Vec::new();
                         loop {
                             let name_tok = self.consume(
@@ -128,10 +120,8 @@ impl<'a> Parser<'a> {
                             )?;
                             let name_span = name_tok.span;
                             names.push(name_span);
-                            self.skip_newlines();
                             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                                 self.advance();
-                                self.skip_newlines();
                                 continue;
                             }
                             break;
@@ -168,7 +158,6 @@ impl<'a> Parser<'a> {
                 trailing_symbol,
             });
             self.consume_optional_semicolon();
-            self.skip_newlines();
         }
 
         while !self.is_at_end() {
@@ -180,24 +169,18 @@ impl<'a> Parser<'a> {
                 Some(TokenKind::Struct) => {
                     let struct_def = self.parse_struct_with_attrs(attrs)?;
                     structs.push(struct_def);
-                    // Skip newlines between definitions
-                    self.skip_newlines();
                 }
                 Some(TokenKind::Fn) => {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
-                    // Skip newlines between functions
-                    self.skip_newlines();
                 }
                 Some(TokenKind::Trait) => {
                     let tr = self.parse_trait_definition()?;
                     traits.push(tr);
-                    self.skip_newlines();
                 }
                 Some(TokenKind::Impl) => {
                     let im = self.parse_impl_definition()?;
                     impls.push(im);
-                    self.skip_newlines();
                 }
                 _ => {
                     // If there is a stray '@' anywhere, surface it as a tokenizer error for compatibility
@@ -539,7 +522,6 @@ impl<'a> Parser<'a> {
         // Consume 'fn' keyword
         let fn_token = self.consume(TokenKind::Fn, "Expected 'fn'")?;
         let fn_start = fn_token.span.start();
-        self.skip_newlines();
 
         // Parse function name
         let name_span = {
@@ -548,23 +530,19 @@ impl<'a> Parser<'a> {
         };
         let name_text = name_span.text(self.source);
         let name = self.interner.get_or_intern(name_text);
-        self.skip_newlines();
 
         // Parse parameter list
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
         let parameters = self.parse_parameter_list()?;
         self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
-        self.skip_newlines();
 
         // Parse optional return type
         let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
             self.advance(); // consume '->'
-            self.skip_newlines();
             Some(self.parse_type()?)
         } else {
             None
         };
-        self.skip_newlines();
 
         // Validate attributes on function
         if repr_c {
@@ -620,12 +598,10 @@ impl<'a> Parser<'a> {
         // Consume 'struct' keyword
         let struct_token = self.consume(TokenKind::Struct, "Expected 'struct'")?;
         let struct_start = struct_token.span.start();
-        self.skip_newlines();
 
         // Parse struct name
         let name_token = self.consume(TokenKind::Identifier, "Expected struct name")?;
         let name = name_token.span;
-        self.skip_newlines();
 
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
@@ -646,37 +622,29 @@ impl<'a> Parser<'a> {
     fn parse_trait_definition(&mut self) -> Result<crate::TraitDefinition, ParseError> {
         let trait_token = self.consume(TokenKind::Trait, "Expected 'trait'")?;
         let span_start = trait_token.span.start();
-        self.skip_newlines();
         let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
         let name = name_token.span;
-        self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
-        self.skip_newlines();
 
         // Parse zero or more method signatures: fn name(params) [-> type] ;
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            self.skip_newlines();
             let name_span = {
                 let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
                 name_tok.span
             };
             let name_text = name_span.text(self.source);
             let mname = self.interner.get_or_intern(name_text);
-            self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
-            self.skip_newlines();
             let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
-                self.skip_newlines();
                 Some(self.parse_type()?)
             } else {
                 None
             };
-            self.skip_newlines();
             self.consume(
                 TokenKind::Semicolon,
                 "Expected ';' after trait method signature",
@@ -686,7 +654,6 @@ impl<'a> Parser<'a> {
                 parameters,
                 return_type,
             });
-            self.skip_newlines();
         }
 
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
@@ -700,42 +667,32 @@ impl<'a> Parser<'a> {
     fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
         let impl_token = self.consume(TokenKind::Impl, "Expected 'impl'")?;
         let span_start = impl_token.span.start();
-        self.skip_newlines();
         let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
         let trait_name = trait_tok.span;
-        self.skip_newlines();
         self.consume(TokenKind::For, "Expected 'for' in impl")?;
-        self.skip_newlines();
         let type_tok = self.consume(TokenKind::Identifier, "Expected type name after 'for'")?;
         let struct_name = type_tok.span;
-        self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
-        self.skip_newlines();
 
         // Parse zero or more method bodies: fn name(params) [-> type] { statements }
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            self.skip_newlines();
             let name_span = {
                 let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
                 name_tok.span
             };
             let name_text = name_span.text(self.source);
             let mname = self.interner.get_or_intern(name_text);
-            self.skip_newlines();
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
-            self.skip_newlines();
             let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
-                self.skip_newlines();
                 Some(self.parse_type()?)
             } else {
                 None
             };
-            self.skip_newlines();
             self.consume(TokenKind::LeftBrace, "Expected '{' to start method body")?;
             let body = self.parse_statement_list()?;
             self.consume(TokenKind::RightBrace, "Expected '}' to end method body")?;
@@ -745,7 +702,6 @@ impl<'a> Parser<'a> {
                 return_type,
                 body,
             });
-            self.skip_newlines();
         }
 
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
@@ -760,8 +716,6 @@ impl<'a> Parser<'a> {
     fn parse_struct_field_list(&mut self) -> Result<Vec<StructFieldDefinition>, ParseError> {
         let mut fields = Vec::new();
 
-        self.skip_newlines();
-
         // Handle empty field list
         if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
             return Ok(fields);
@@ -771,12 +725,8 @@ impl<'a> Parser<'a> {
         fields.push(self.parse_struct_field_definition()?);
 
         // Parse remaining fields
-        while {
-            self.skip_newlines();
-            matches!(self.peek_kind(), Some(TokenKind::Comma))
-        } {
+        while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
-            self.skip_newlines();
 
             // Allow trailing comma
             if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
@@ -786,17 +736,14 @@ impl<'a> Parser<'a> {
             fields.push(self.parse_struct_field_definition()?);
         }
 
-        self.skip_newlines();
         Ok(fields)
     }
 
     fn parse_struct_field_definition(&mut self) -> Result<StructFieldDefinition, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
         let name = name_token.span;
-        self.skip_newlines();
 
         self.consume(TokenKind::Colon, "Expected ':' after field name")?;
-        self.skip_newlines();
         let field_type = self.parse_type()?;
 
         Ok(StructFieldDefinition { name, field_type })
@@ -804,8 +751,6 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_literal_fields(&mut self) -> Result<Vec<StructField>, ParseError> {
         let mut fields = Vec::new();
-
-        self.skip_newlines();
 
         // Handle empty field list
         if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
@@ -816,12 +761,8 @@ impl<'a> Parser<'a> {
         fields.push(self.parse_struct_literal_field()?);
 
         // Parse remaining fields
-        while {
-            self.skip_newlines();
-            matches!(self.peek_kind(), Some(TokenKind::Comma))
-        } {
+        while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
-            self.skip_newlines();
 
             // Allow trailing comma
             if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
@@ -831,17 +772,14 @@ impl<'a> Parser<'a> {
             fields.push(self.parse_struct_literal_field()?);
         }
 
-        self.skip_newlines();
         Ok(fields)
     }
 
     fn parse_struct_literal_field(&mut self) -> Result<StructField, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
         let name = name_token.span;
-        self.skip_newlines();
 
         self.consume(TokenKind::Equals, "Expected '=' after field name")?;
-        self.skip_newlines();
         let value = self.parse_expression(Precedence::NONE)?;
 
         Ok(StructField { name, value })
@@ -849,8 +787,6 @@ impl<'a> Parser<'a> {
 
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
-
-        self.skip_newlines();
 
         // Handle empty parameter list
         if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
@@ -861,26 +797,19 @@ impl<'a> Parser<'a> {
         parameters.push(self.parse_parameter()?);
 
         // Parse remaining parameters
-        while {
-            self.skip_newlines();
-            matches!(self.peek_kind(), Some(TokenKind::Comma))
-        } {
+        while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
-            self.skip_newlines();
             parameters.push(self.parse_parameter()?);
         }
 
-        self.skip_newlines();
         Ok(parameters)
     }
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected parameter name")?;
         let name = name_token.span;
-        self.skip_newlines();
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
-        self.skip_newlines();
         let type_annotation = self.parse_type()?;
 
         Ok(Parameter {
@@ -999,9 +928,6 @@ impl<'a> Parser<'a> {
     fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut statements = Vec::new();
 
-        // Skip leading whitespace (no-op)
-        self.skip_newlines();
-
         while let Some(kind) = self.peek_kind() {
             if kind == TokenKind::RightBrace {
                 break;
@@ -1024,9 +950,6 @@ impl<'a> Parser<'a> {
                     // Continue parsing to collect more errors
                 }
             }
-
-            // Skip any additional whitespace (no-op)
-            self.skip_newlines();
 
             statements.push(statement);
         }
@@ -1078,24 +1001,19 @@ impl<'a> Parser<'a> {
 
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
         self.consume(TokenKind::Let, "Expected 'let'")?;
-        self.skip_newlines();
 
         let name_token = self.consume(TokenKind::Identifier, "identifier")?;
         let name = name_token.span;
-        self.skip_newlines();
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance(); // consume ':'
-            self.skip_newlines();
             Some(self.parse_type()?)
         } else {
             None
         };
-        self.skip_newlines();
 
         self.consume(TokenKind::Equals, "Expected '=' in let statement")?;
-        self.skip_newlines();
         let value = self.parse_expression(Precedence::NONE)?;
         // Terminator will be handled by parse_statement_list
 
@@ -1111,7 +1029,6 @@ impl<'a> Parser<'a> {
             let token = self.consume(TokenKind::Loop, "Expected 'loop'")?;
             token.span.start()
         };
-        self.skip_newlines();
         self.consume(TokenKind::LeftBrace, "Expected '{' after 'loop'")?;
         let body = self.parse_statement_list()?;
         let end = self.consume(TokenKind::RightBrace, "Expected '}' to end loop body")?;
@@ -1175,13 +1092,6 @@ impl<'a> Parser<'a> {
         let end = right_start.min(self.source.len());
         !self.source.as_bytes()[start..end].contains(&b'\n')
     }
-
-    fn span_text(&self, span: &Span) -> &str {
-        span.text(self.source)
-    }
-
-    /// Newlines are treated as whitespace; this is a no-op.
-    fn skip_newlines(&mut self) {}
 
     /// Consume an optional semicolon between statements.
     fn consume_optional_semicolon(&mut self) {
@@ -1250,7 +1160,6 @@ impl<'a> Parser<'a> {
     fn parse_attributes(&mut self) -> Result<PendingAttrs, ParseError> {
         let mut attrs = PendingAttrs::default();
         loop {
-            self.skip_newlines();
             if !matches!(self.peek_kind(), Some(TokenKind::At)) {
                 break;
             }
@@ -1260,7 +1169,7 @@ impl<'a> Parser<'a> {
             // Attribute name
             let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
             let name_span = name_tok.span;
-            let name = self.span_text(&name_span).to_string();
+            let name = name_span.text(self.source).to_string();
             attrs.include_span(name_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
             match name.as_str() {
@@ -1311,7 +1220,6 @@ impl<'a> Parser<'a> {
             }
             let end_pos = self.previous().span.end();
             attrs.record_end(end_pos);
-            self.skip_newlines();
         }
         Ok(attrs)
     }
