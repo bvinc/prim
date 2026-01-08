@@ -331,8 +331,7 @@ impl<'a> Tokenizer<'a> {
         if let Some(radix) = radix {
             self.advance(); // '0'
             self.advance(); // prefix
-            while self.current.is_some() {
-                let ch = self.current_char().unwrap_or('_');
+            while let Some(ch) = self.current {
                 let is_digit = match radix {
                     2 => ch == '0' || ch == '1',
                     8 => ch.is_ascii_digit() && ch < '8',
@@ -534,6 +533,11 @@ impl<'a> Tokenizer<'a> {
                     if self.current.is_some() {
                         self.advance(); // consume escaped character
                     }
+                }
+                Some('\n') | Some('\r') => {
+                    return Err(TokenError::UnterminatedString {
+                        position: start_pos,
+                    });
                 }
                 Some(_) => self.advance(),
                 None => break,

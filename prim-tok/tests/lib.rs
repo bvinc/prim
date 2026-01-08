@@ -242,6 +242,19 @@ fn test_unterminated_string() {
 }
 
 #[test]
+fn test_newline_in_string() {
+    let mut tokenizer = Tokenizer::new("let s = \"hello\nworld\"");
+    let result = tokenizer.tokenize();
+
+    match result {
+        Err(TokenError::UnterminatedString { position }) => {
+            assert_eq!(position, 8); // Position of opening quote
+        }
+        _ => panic!("Expected UnterminatedString error, got {:?}", result),
+    }
+}
+
+#[test]
 fn test_char_literals() {
     let src = "let c = 'a'";
     let mut tokenizer = Tokenizer::new(src);
