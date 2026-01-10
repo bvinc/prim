@@ -8,11 +8,9 @@ pub use error::{Diagnostic, ParseError, Severity};
 
 pub use prim_tok::Span;
 
-// Parser implementation
 mod number;
 pub mod parser;
 
-// Re-export parser for easy access
 pub use parser::Parser;
 
 pub type InternSymbol = SymbolU32;

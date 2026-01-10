@@ -229,7 +229,7 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    /// Parse a prefix expression - much simpler direct approach
+    /// Parse a prefix expression (literals, identifiers, unary operators, grouping)
     fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.is_at_end() {
             return Err(ParseError::UnexpectedEof);
@@ -404,69 +404,71 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an infix expression - much simpler direct approach
+    /// Parse an infix expression (binary operators, function calls, field access)
     fn parse_infix(&mut self, left: Expr) -> Result<Expr, ParseError> {
-        if let Some(kind) = self.peek_kind() {
-            if let Some(binary_op) = token_to_binary_op(kind) {
-                let precedence = get_precedence_for_token(kind);
-                self.advance(); // consume operator
-                let right = self.parse_expression(precedence)?;
-                let left_span = left.span();
-                let right_span = right.span();
+        let Some(kind) = self.peek_kind() else {
+            return Ok(left);
+        };
 
-                return Ok(Expr::Binary {
-                    left: Box::new(left),
-                    op: binary_op,
-                    right: Box::new(right),
-                    span: left_span.cover(right_span),
-                    ty: Type::Undetermined,
-                });
-            }
+        // Binary operators
+        if let Some(binary_op) = token_to_binary_op(kind) {
+            let precedence = get_precedence_for_token(kind);
+            self.advance();
+            let right = self.parse_expression(precedence)?;
+            let span = left.span().cover(right.span());
+            return Ok(Expr::Binary {
+                left: Box::new(left),
+                op: binary_op,
+                right: Box::new(right),
+                span,
+                ty: Type::Undetermined,
+            });
         }
-        if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
-            // Function call: identifier(args) or qualified: module.ident(args)
-            let path: Vec<Span> = match left {
-                Expr::Identifier { span: name, .. } => vec![name],
-                Expr::FieldAccess { object, field, .. } => {
-                    if let Expr::Identifier { span: module, .. } = *object {
-                        vec![module, field]
-                    } else {
+
+        match kind {
+            TokenKind::LeftParen => {
+                // Function call: identifier(args) or qualified: module.ident(args)
+                let path = match left {
+                    Expr::Identifier { span: name, .. } => vec![name],
+                    Expr::FieldAccess { object, field, .. } => {
+                        if let Expr::Identifier { span: module, .. } = *object {
+                            vec![module, field]
+                        } else {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "module name before '.'".to_string(),
+                                found: kind,
+                                position: self.position(),
+                            });
+                        }
+                    }
+                    _ => {
                         return Err(ParseError::UnexpectedToken {
-                            expected: "module name before '.'".to_string(),
-                            found: self.peek_kind().unwrap(),
+                            expected: "function name".to_string(),
+                            found: kind,
                             position: self.position(),
                         });
                     }
-                }
-                _ => {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "function name".to_string(),
-                        found: self.peek_kind().unwrap(),
-                        position: self.position(),
-                    });
-                }
-            };
-            self.advance(); // consume '('
-            let args = self.parse_argument_list()?;
-            self.consume(TokenKind::RightParen, "Expected ')'")?;
-            Ok(Expr::FunctionCall {
-                path: crate::NamePath { segments: path },
-                args,
-                ty: Type::Undetermined,
-            })
-        } else if matches!(self.peek_kind(), Some(TokenKind::Dot)) {
-            // Field access: expr.field
-            self.advance(); // consume '.'
-            let field_token =
-                self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
-            let field = field_token.span;
-            Ok(Expr::FieldAccess {
-                object: Box::new(left),
-                field,
-                ty: Type::Undetermined,
-            })
-        } else {
-            Ok(left) // No infix operator, return left as-is
+                };
+                self.advance();
+                let args = self.parse_argument_list()?;
+                self.consume(TokenKind::RightParen, "Expected ')'")?;
+                Ok(Expr::FunctionCall {
+                    path: crate::NamePath { segments: path },
+                    args,
+                    ty: Type::Undetermined,
+                })
+            }
+            TokenKind::Dot => {
+                self.advance();
+                let field_token =
+                    self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
+                Ok(Expr::FieldAccess {
+                    object: Box::new(left),
+                    field: field_token.span,
+                    ty: Type::Undetermined,
+                })
+            }
+            _ => Ok(left),
         }
     }
 
@@ -797,62 +799,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        match self.peek_kind() {
-            None => Err(ParseError::UnexpectedEof),
-            Some(TokenKind::U8) => {
-                self.advance();
-                Ok(Type::U8)
-            }
-            Some(TokenKind::I8) => {
-                self.advance();
-                Ok(Type::I8)
-            }
-            Some(TokenKind::U16) => {
-                self.advance();
-                Ok(Type::U16)
-            }
-            Some(TokenKind::I16) => {
-                self.advance();
-                Ok(Type::I16)
-            }
-            Some(TokenKind::U32) => {
-                self.advance();
-                Ok(Type::U32)
-            }
-            Some(TokenKind::I32) => {
-                self.advance();
-                Ok(Type::I32)
-            }
-            Some(TokenKind::U64) => {
-                self.advance();
-                Ok(Type::U64)
-            }
-            Some(TokenKind::I64) => {
-                self.advance();
-                Ok(Type::I64)
-            }
-            Some(TokenKind::Usize) => {
-                self.advance();
-                Ok(Type::Usize)
-            }
-            Some(TokenKind::Isize) => {
-                self.advance();
-                Ok(Type::Isize)
-            }
-            Some(TokenKind::F32) => {
-                self.advance();
-                Ok(Type::F32)
-            }
-            Some(TokenKind::F64) => {
-                self.advance();
-                Ok(Type::F64)
-            }
-            Some(TokenKind::Bool) => {
-                self.advance();
-                Ok(Type::Bool)
-            }
-            Some(TokenKind::LeftBracket) => {
-                // Dynamic array type: [T]
+        let kind = self.peek_kind().ok_or(ParseError::UnexpectedEof)?;
+
+        // Handle primitive types with a simple lookup
+        if let Some(ty) = token_to_primitive_type(kind) {
+            self.advance();
+            return Ok(ty);
+        }
+
+        match kind {
+            TokenKind::LeftBracket => {
                 self.advance(); // consume '['
                 let elem_ty = self.parse_type()?;
                 self.consume(
@@ -861,22 +817,19 @@ impl<'a> Parser<'a> {
                 )?;
                 Ok(Type::Array(Box::new(elem_ty)))
             }
-            Some(TokenKind::Identifier) => {
-                // This could be a struct type reference
+            TokenKind::Identifier => {
                 let token = self.advance();
                 Ok(Type::Struct(token.span))
             }
-            Some(TokenKind::UnaryStar) => {
-                // Parse pointer type: *const T or *mut T
+            TokenKind::UnaryStar => {
                 self.advance(); // consume '*'
-
                 let mutability = match self.peek_kind() {
                     Some(TokenKind::Const) => {
-                        self.advance(); // consume 'const'
+                        self.advance();
                         PointerMutability::Const
                     }
                     Some(TokenKind::Mut) => {
-                        self.advance(); // consume 'mut'
+                        self.advance();
                         PointerMutability::Mutable
                     }
                     Some(_) => {
@@ -888,16 +841,15 @@ impl<'a> Parser<'a> {
                     }
                     None => return Err(ParseError::UnexpectedEof),
                 };
-
                 let pointee = Box::new(self.parse_type()?);
                 Ok(Type::Pointer {
                     mutability,
                     pointee,
                 })
             }
-            Some(_) => Err(ParseError::UnexpectedToken {
+            _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
-                found: self.peek_kind().unwrap(),
+                found: kind,
                 position: self.position(),
             }),
         }
@@ -1086,48 +1038,20 @@ struct PendingAttrs {
 }
 
 impl PendingAttrs {
-    fn record_start(&mut self, pos: usize) {
-        match self.span_start {
-            Some(current) if pos < current => self.span_start = Some(pos),
-            None => self.span_start = Some(pos),
-            _ => {}
-        }
-
-        if let Some(current_end) = self.span_end {
-            if pos > current_end {
-                self.span_end = Some(pos);
-            }
-        }
-    }
-
-    fn record_end(&mut self, pos: usize) {
-        match self.span_end {
-            Some(current) if pos > current => self.span_end = Some(pos),
-            None => self.span_end = Some(pos),
-            _ => {}
-        }
-
-        if let Some(current_start) = self.span_start {
-            if pos < current_start {
-                self.span_start = Some(pos);
-            }
-        }
+    fn extend_span(&mut self, start: usize, end: usize) {
+        self.span_start = Some(self.span_start.map_or(start, |s| s.min(start)));
+        self.span_end = Some(self.span_end.map_or(end, |e| e.max(end)));
     }
 
     fn include_span(&mut self, span: Span) {
-        self.record_start(span.start());
-        self.record_end(span.end());
+        self.extend_span(span.start(), span.end());
     }
 
     fn finalize_span(&self, fallback_start: usize, fallback_end: usize) -> Span {
         let start = self
             .span_start
-            .map(|value| value.min(fallback_start))
-            .unwrap_or(fallback_start);
-        let end = self
-            .span_end
-            .map(|value| value.max(fallback_end))
-            .unwrap_or(fallback_end);
+            .map_or(fallback_start, |s| s.min(fallback_start));
+        let end = self.span_end.map_or(fallback_end, |e| e.max(fallback_end));
         Span::new(start, end)
     }
 }
@@ -1140,8 +1064,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let at_token = self.advance(); // consume '@'
-            attrs.record_start(at_token.span.start());
-            attrs.record_end(at_token.span.end());
+            attrs.include_span(at_token.span);
             // Attribute name
             let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
             let name_span = name_tok.span;
@@ -1194,8 +1117,7 @@ impl<'a> Parser<'a> {
                     });
                 }
             }
-            let end_pos = self.previous().span.end();
-            attrs.record_end(end_pos);
+            attrs.include_span(self.previous().span);
         }
         Ok(attrs)
     }
@@ -1209,6 +1131,26 @@ fn token_to_binary_op(token_kind: TokenKind) -> Option<BinaryOp> {
         TokenKind::Star => Some(BinaryOp::Multiply),
         TokenKind::Slash => Some(BinaryOp::Divide),
         TokenKind::DoubleEquals => Some(BinaryOp::Equals),
+        _ => None,
+    }
+}
+
+/// Convert a token to a primitive type, or None if it's not a primitive type keyword
+fn token_to_primitive_type(token_kind: TokenKind) -> Option<Type> {
+    match token_kind {
+        TokenKind::U8 => Some(Type::U8),
+        TokenKind::I8 => Some(Type::I8),
+        TokenKind::U16 => Some(Type::U16),
+        TokenKind::I16 => Some(Type::I16),
+        TokenKind::U32 => Some(Type::U32),
+        TokenKind::I32 => Some(Type::I32),
+        TokenKind::U64 => Some(Type::U64),
+        TokenKind::I64 => Some(Type::I64),
+        TokenKind::Usize => Some(Type::Usize),
+        TokenKind::Isize => Some(Type::Isize),
+        TokenKind::F32 => Some(Type::F32),
+        TokenKind::F64 => Some(Type::F64),
+        TokenKind::Bool => Some(Type::Bool),
         _ => None,
     }
 }
