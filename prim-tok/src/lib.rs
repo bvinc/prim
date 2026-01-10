@@ -11,6 +11,7 @@ pub enum TokenKind {
     FloatLiteral,
     StringLiteral,
     CharLiteral,
+    MultilineStringSegment,
 
     // Keywords
     Let,
@@ -186,6 +187,22 @@ impl<'a> Tokenizer<'a> {
                 } else {
                     // This is likely the start of a floating point number like .5
                     self.read_number(start_pos).map(Some)
+                }
+            }
+            Some('\\') => {
+                if self.peek() == Some('\\') {
+                    self.advance(); // first '\'
+                    self.advance(); // second '\'
+                    let end_pos = self.read_to_line_end();
+                    Ok(Some(Token {
+                        kind: TokenKind::MultilineStringSegment,
+                        span: Span::new(start_pos, end_pos),
+                    }))
+                } else {
+                    Err(TokenError::UnexpectedCharacter {
+                        ch: '\\',
+                        span: Span::new(start_pos, start_pos + 1),
+                    })
                 }
             }
             Some('"') => self.read_string_literal(start_pos).map(Some),

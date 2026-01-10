@@ -647,3 +647,34 @@ fn test_struct_literal_tokens() {
     assert_eq!(tokens[8].span.text(src), "20");
     assert_eq!(tokens[9].kind, TokenKind::RightBrace);
 }
+
+#[test]
+fn test_multiline_string_segments() {
+    let src = r#"let s =
+    \\hello world
+    \\second line"#;
+    let mut tokenizer = Tokenizer::new(src);
+    let tokens = tokenizer.tokenize().unwrap();
+
+    assert_eq!(tokens[0].kind, TokenKind::Let);
+    assert_eq!(tokens[1].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].kind, TokenKind::Equals);
+    assert_eq!(tokens[3].kind, TokenKind::MultilineStringSegment);
+    assert_eq!(tokens[3].span.text(src), r#"\\hello world"#);
+    assert_eq!(tokens[4].kind, TokenKind::MultilineStringSegment);
+    assert_eq!(tokens[4].span.text(src), r#"\\second line"#);
+}
+
+#[test]
+fn test_multiline_string_single_backslash_error() {
+    let mut tokenizer = Tokenizer::new(r#"\ foo"#);
+    let result = tokenizer.tokenize();
+
+    match result {
+        Err(TokenError::UnexpectedCharacter { ch, span }) => {
+            assert_eq!(ch, '\\');
+            assert_eq!(span, Span::new(0, 1));
+        }
+        _ => panic!("Expected UnexpectedCharacter error, got {:?}", result),
+    }
+}
