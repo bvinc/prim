@@ -1,0 +1,11 @@
+// Test basic while loop
+import std.io.println_i32
+
+fn main() {
+    let i = 0
+    while i < 5 {
+        println_i32(i)
+        i = i + 1
+    }
+    println_i32(99)
+}

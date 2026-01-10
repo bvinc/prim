@@ -332,6 +332,50 @@ impl CraneliftCodeGenerator {
                 builder.seal_block(exit);
                 Ok(StmtFlow::Continue)
             }
+            prim_hir::HirStmt::While {
+                condition, body, ..
+            } => {
+                let header_block = builder.create_block();
+                let body_block = builder.create_block();
+                let exit = builder.create_block();
+
+                // Jump to header to evaluate condition
+                builder.ins().jump(header_block, &[]);
+
+                // Header block: evaluate condition and branch
+                builder.switch_to_block(header_block);
+                let cond = self.lower_expr(condition, program, module_id, builder, locals)?[0];
+                builder.ins().brif(cond, body_block, &[], exit, &[]);
+
+                // Body block: execute body statements
+                builder.switch_to_block(body_block);
+                loop_exits.push(exit);
+                let mut terminated = false;
+                for s in &body.stmts {
+                    let flow =
+                        self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
+                    match flow {
+                        StmtFlow::Terminated => {
+                            terminated = true;
+                            break;
+                        }
+                        StmtFlow::Continue | StmtFlow::Value(_) => {}
+                    }
+                }
+                loop_exits.pop();
+                if !terminated {
+                    // Jump back to header to check condition again
+                    builder.ins().jump(header_block, &[]);
+                }
+
+                // Seal blocks after all predecessors are known
+                builder.seal_block(header_block);
+                builder.seal_block(body_block);
+
+                builder.switch_to_block(exit);
+                builder.seal_block(exit);
+                Ok(StmtFlow::Continue)
+            }
             prim_hir::HirStmt::Break { .. } => {
                 let exit = loop_exits
                     .last()

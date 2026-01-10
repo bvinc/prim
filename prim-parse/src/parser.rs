@@ -885,6 +885,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Let) => self.parse_let_statement(),
             Some(TokenKind::If) => self.parse_if_statement(),
             Some(TokenKind::Loop) => self.parse_loop_statement(),
+            Some(TokenKind::While) => self.parse_while_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
             Some(TokenKind::Identifier) => {
                 // Check if this is an assignment (identifier followed by '=')
@@ -979,6 +980,23 @@ impl<'a> Parser<'a> {
         Ok(Stmt::Loop {
             body,
             span: Span::new(loop_start, end.span.end()),
+        })
+    }
+
+    fn parse_while_statement(&mut self) -> Result<Stmt, ParseError> {
+        let while_start = {
+            let token = self.consume(TokenKind::While, "Expected 'while'")?;
+            token.span.start()
+        };
+        let condition = self.parse_expression(Precedence::NONE)?;
+        self.consume(TokenKind::LeftBrace, "Expected '{' after while condition")?;
+        let body = self.parse_statement_list()?;
+        let end = self.consume(TokenKind::RightBrace, "Expected '}' to end while body")?;
+
+        Ok(Stmt::While {
+            condition,
+            body,
+            span: Span::new(while_start, end.span.end()),
         })
     }
 

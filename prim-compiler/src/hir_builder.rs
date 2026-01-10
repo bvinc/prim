@@ -337,6 +337,20 @@ impl<'a> LoweringContext<'a> {
                 },
                 span: self.span_id(*span, FileId(file_id.0)),
             },
+            Stmt::While {
+                condition,
+                body,
+                span,
+            } => HirStmt::While {
+                condition: self.lower_expr(condition, module, file_id),
+                body: HirBlock {
+                    stmts: body
+                        .iter()
+                        .map(|s| self.lower_stmt(s, module, file_id))
+                        .collect(),
+                },
+                span: self.span_id(*span, FileId(file_id.0)),
+            },
             Stmt::Break { span } => HirStmt::Break {
                 span: self.span_id(*span, FileId(file_id.0)),
             },

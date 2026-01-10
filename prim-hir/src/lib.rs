@@ -136,6 +136,11 @@ pub enum HirStmt {
         body: HirBlock,
         span: SpanId,
     },
+    While {
+        condition: HirExpr,
+        body: HirBlock,
+        span: SpanId,
+    },
     Break {
         span: SpanId,
     },

@@ -428,6 +428,14 @@ impl<'a> NameResolver<'a> {
                     self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
                 }
             }
+            Stmt::While {
+                condition, body, ..
+            } => {
+                self.resolve_expr(condition, file_id, source, module_scope, local_scope);
+                for stmt in body {
+                    self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
+                }
+            }
             Stmt::Break { .. } => {}
         }
     }

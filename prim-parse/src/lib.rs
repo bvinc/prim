@@ -204,6 +204,11 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+        span: Span,
+    },
     Break {
         span: Span,
     },

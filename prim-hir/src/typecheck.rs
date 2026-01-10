@@ -306,6 +306,28 @@ impl<'a> Checker<'a> {
                 self.loop_depth -= 1;
                 Ok(())
             }
+            HirStmt::While {
+                condition,
+                body,
+                span,
+            } => {
+                let cond_ty = self.check_expr(condition, locals)?;
+                if !matches!(cond_ty, Type::Bool) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: Type::Bool,
+                            found: cond_ty,
+                        },
+                    ));
+                }
+                self.loop_depth += 1;
+                for stmt in &mut body.stmts {
+                    self.check_stmt(stmt, locals)?;
+                }
+                self.loop_depth -= 1;
+                Ok(())
+            }
             HirStmt::Break { span } => {
                 if self.loop_depth == 0 {
                     Err(self.error(*span, TypeCheckKind::BreakOutsideLoop))
@@ -705,6 +727,12 @@ impl<'a> Checker<'a> {
                 }
             }
             HirStmt::Loop { body, .. } => {
+                self.finalize_block(body);
+            }
+            HirStmt::While {
+                condition, body, ..
+            } => {
+                self.finalize_expr(condition);
                 self.finalize_block(body);
             }
             HirStmt::Break { .. } => {}
