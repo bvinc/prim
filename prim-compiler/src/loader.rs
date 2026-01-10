@@ -142,7 +142,6 @@ impl Loader {
                 modules: Vec::new(),
                 root: ModuleId(0),
                 module_index: HashMap::new(),
-                file_index: HashMap::new(),
                 name_resolution: NameResolution::default(),
             },
             module_cache: HashMap::new(),
@@ -158,7 +157,6 @@ impl Loader {
     ) -> ModuleFile {
         let file_id = FileId(self.next_file_id);
         self.next_file_id += 1;
-        self.program.file_index.insert(path.clone(), file_id);
         ModuleFile {
             file_id,
             path,

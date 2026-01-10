@@ -27,7 +27,6 @@ pub(crate) struct Program {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
-    pub file_index: HashMap<PathBuf, FileId>,
     pub name_resolution: NameResolution,
 }
 
