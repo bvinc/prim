@@ -150,8 +150,13 @@ impl<'a> Tokenizer<'a> {
             Some('*') => self.read_operator("*", start_pos),
             Some('/') => {
                 if self.peek() == Some('/') {
-                    self.advance();
-                    self.read_line_comment(start_pos).map(Some)
+                    self.advance(); // first '/'
+                    self.advance(); // second '/'
+                    let end_pos = self.read_to_line_end();
+                    Ok(Some(Token {
+                        kind: TokenKind::Comment,
+                        span: Span::new(start_pos, end_pos),
+                    }))
                 } else {
                     self.read_operator("/", start_pos)
                 }
@@ -335,12 +340,9 @@ impl<'a> Tokenizer<'a> {
             self.advance();
         }
 
-        let text = &self.input[start_pos..self.position];
-
-        // Basic validation - ensure we have at least one digit anywhere in the token
         if !seen_digit {
             return Err(TokenError::InvalidNumber {
-                text: text.to_string(),
+                text: self.input[start_pos..self.position].to_string(),
                 position: start_pos,
             });
         }
@@ -414,65 +416,40 @@ impl<'a> Tokenizer<'a> {
         self.chars.clone().next()
     }
 
-    fn read_line_comment(&mut self, start_pos: usize) -> Result<Token, TokenError> {
-        // We've already consumed the first '/', now consume the second '/'
-        self.advance();
-
-        let end_pos = self.read_to_line_end();
-
-        Ok(Token {
-            kind: TokenKind::Comment,
-            span: Span::new(start_pos, end_pos),
-        })
-    }
-
     fn read_to_line_end(&mut self) -> usize {
-        while self.current.is_some() && !matches!(self.current, Some('\n') | Some('\r')) {
+        while self.current.is_some_and(|c| c != '\n' && c != '\r') {
             self.advance();
         }
-
-        let end_pos = self.position;
-
-        // Consume newline sequence so state resets at the next line.
-        if self.current == Some('\r') {
-            self.advance();
-        }
-        if self.current == Some('\n') {
-            self.advance();
-        }
-
-        end_pos
+        self.position
     }
 
     fn read_string_literal(&mut self, start_pos: usize) -> Result<Token, TokenError> {
         self.advance(); // consume opening quote
 
-        while self.current.is_some() {
-            match self.current {
-                Some('"') => {
+        while let Some(ch) = self.current {
+            match ch {
+                '"' => {
                     self.advance(); // consume closing quote
                     return Ok(Token {
                         kind: TokenKind::StringLiteral,
                         span: Span::new(start_pos, self.position),
                     });
                 }
-                Some('\\') => {
+                '\\' => {
                     self.advance(); // consume backslash
                     if self.current.is_some() {
                         self.advance(); // consume escaped character
                     }
                 }
-                Some('\n') | Some('\r') => {
+                '\n' | '\r' => {
                     return Err(TokenError::UnterminatedString {
                         position: start_pos,
                     });
                 }
-                Some(_) => self.advance(),
-                None => break,
+                _ => self.advance(),
             }
         }
 
-        // Reached end of input without closing quote
         Err(TokenError::UnterminatedString {
             position: start_pos,
         })
