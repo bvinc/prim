@@ -73,6 +73,33 @@ fn validate_return_values(
     Ok(())
 }
 
+// TODO: Structs are currently represented as multiple register values (one per field).
+// This works for small structs with scalar fields but won't scale for:
+// - Large structs (too many registers)
+// - Nested structs (would need recursive flattening)
+// - Taking address of struct/field (&mystruct.field)
+//
+// Future approach: use stack allocations with sret convention for large structs.
+//
+// Parameters (large struct):
+//   Caller: allocate stack slot, copy struct, pass pointer
+//   Callee: receive pointer, load fields as needed
+//
+// Returns (sret convention):
+//   Caller: allocate stack slot, pass hidden "sret" pointer as first arg
+//   Callee: write return value to sret pointer, return void
+//
+// Cranelift example:
+//   let slot = builder.create_sized_stack_slot(StackSlotData::new(
+//       StackSlotKind::ExplicitSlot, struct_size));
+//   let sret_ptr = builder.ins().stack_addr(pointer_type, slot, 0);
+//   let call = builder.ins().call(callee, &[sret_ptr, ...args...]);
+//   let field0 = builder.ins().load(types::I32, MemFlags::new(), sret_ptr, 0);
+//
+// Changes needed:
+// - StructLayout: add byte offsets, alignment, total size
+// - Struct params/returns: use pointer + sret convention for large structs
+// - Field access: load from ptr + offset instead of indexing Vec<Value>
 #[derive(Clone, Debug)]
 struct StructLayout {
     fields: HashMap<prim_hir::SymbolId, FieldLayout>,
