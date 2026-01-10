@@ -37,10 +37,12 @@ fn test_parse_let_statement() {
     match &main_func.body[0] {
         Stmt::Let {
             name,
+            mutable,
             type_annotation,
             value,
         } => {
             assert_eq!(name.text(source), "x");
+            assert!(!mutable);
             assert_eq!(type_annotation, &Some(Type::U32));
             match value {
                 Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
@@ -96,10 +98,12 @@ fn test_parse_let_without_type() {
     match &main_func.body[0] {
         Stmt::Let {
             name,
+            mutable,
             type_annotation,
             value,
         } => {
             assert_eq!(name.text(source), "x");
+            assert!(!mutable);
             assert_eq!(type_annotation, &None);
             match value {
                 Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
@@ -1406,4 +1410,51 @@ fn test_trait_and_impl_spans() {
         impl_def.span.text(source),
         "impl Greeter for Person {\n    fn greet(person: Person) {}\n}"
     );
+}
+
+#[test]
+fn test_parse_let_mut() {
+    let source = "fn main() { let mut x: i32 = 42 }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    assert_eq!(main_func.body.len(), 1);
+    match &main_func.body[0] {
+        Stmt::Let {
+            name,
+            mutable,
+            type_annotation,
+            value,
+        } => {
+            assert_eq!(name.text(source), "x");
+            assert!(*mutable);
+            assert_eq!(type_annotation, &Some(Type::I32));
+            match value {
+                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
+                _ => panic!("Expected IntLiteral, got {:?}", value),
+            }
+        }
+        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+    }
+}
+
+#[test]
+fn test_parse_let_mut_without_type() {
+    let source = "fn main() { let mut counter = 0 }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    match &main_func.body[0] {
+        Stmt::Let {
+            name,
+            mutable,
+            type_annotation,
+            ..
+        } => {
+            assert_eq!(name.text(source), "counter");
+            assert!(*mutable);
+            assert_eq!(type_annotation, &None);
+        }
+        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+    }
 }

@@ -208,6 +208,7 @@ impl<'a> Checker<'a> {
                 ty,
                 value,
                 span,
+                ..
             } => {
                 // If we have an expected type, propagate it to the value
                 if !matches!(ty, Type::Undetermined) {

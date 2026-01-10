@@ -1,0 +1,8 @@
+// Test that assigning to immutable variable is an error
+import std.io.println_i32
+
+fn main() {
+    let x = 5
+    x = 6
+    println_i32(x)
+}

@@ -12,6 +12,11 @@ pub enum ResolveError {
         file: FileId,
         span: Span,
     },
+    AssignToImmutable {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
     UnknownSymbol {
         name: String,
         file: FileId,
@@ -43,6 +48,7 @@ impl ResolveError {
     pub fn span(&self) -> Span {
         match self {
             ResolveError::DuplicateSymbol { span, .. }
+            | ResolveError::AssignToImmutable { span, .. }
             | ResolveError::UnknownSymbol { span, .. }
             | ResolveError::UnknownFunction { span, .. }
             | ResolveError::UnknownStruct { span, .. }
@@ -58,6 +64,9 @@ impl std::fmt::Display for ResolveError {
             ResolveError::DuplicateSymbol { name, .. } => {
                 write!(f, "Duplicate symbol '{}'", name)
             }
+            ResolveError::AssignToImmutable { name, .. } => {
+                write!(f, "Cannot assign to immutable variable '{}'", name)
+            }
             ResolveError::UnknownSymbol { name, .. } => write!(f, "Unknown symbol '{}'", name),
             ResolveError::UnknownFunction { name, .. } => write!(f, "Unknown function '{}'", name),
             ResolveError::UnknownStruct { name, .. } => write!(f, "Unknown struct '{}'", name),
@@ -68,6 +77,12 @@ impl std::fmt::Display for ResolveError {
 }
 
 impl std::error::Error for ResolveError {}
+
+#[derive(Clone, Copy)]
+struct LocalBinding {
+    symbol: SymbolId,
+    mutable: bool,
+}
 
 pub fn resolve_names(program: &mut Program) -> Result<(), Vec<ResolveError>> {
     let mut resolver = NameResolver::new(program);
@@ -247,7 +262,7 @@ impl<'a> NameResolver<'a> {
                 .cloned()
                 .unwrap_or_default();
             for file in &module.files {
-                let mut local_scope = HashMap::new();
+                let mut local_scope: HashMap<String, LocalBinding> = HashMap::new();
                 let effective_scope = self.scope_with_imports(&module_scope, &module.imports);
                 self.resolve_file_uses(file, &effective_scope, &mut local_scope);
             }
@@ -298,17 +313,23 @@ impl<'a> NameResolver<'a> {
         &mut self,
         file: &ModuleFile,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, SymbolId>,
+        local_scope: &mut HashMap<String, LocalBinding>,
     ) {
         let source = &file.source;
 
         for func in &file.ast.functions {
             local_scope.clear();
             for param in &func.parameters {
-                if let Some(sym) =
+                if let Some(symbol) =
                     self.find_symbol_at_span(file.file_id, param.name, SymbolKind::Param)
                 {
-                    local_scope.insert(param.name.text(source).to_string(), sym);
+                    local_scope.insert(
+                        param.name.text(source).to_string(),
+                        LocalBinding {
+                            symbol,
+                            mutable: false,
+                        },
+                    );
                 }
                 self.resolve_type_use(&param.type_annotation, file.file_id, source, module_scope);
             }
@@ -361,11 +382,12 @@ impl<'a> NameResolver<'a> {
         file_id: FileId,
         source: &str,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, SymbolId>,
+        local_scope: &mut HashMap<String, LocalBinding>,
     ) {
         match stmt {
             Stmt::Let {
                 name,
+                mutable,
                 type_annotation,
                 value,
             } => {
@@ -375,7 +397,7 @@ impl<'a> NameResolver<'a> {
                 self.resolve_expr(value, file_id, source, module_scope, local_scope);
                 // Always create a fresh symbol for each `let` binding (locals are scope-based,
                 // not file-based; reusing by name breaks `def_lookup` and shadowing).
-                let sym = self.insert_symbol(SymbolInfo {
+                let symbol = self.insert_symbol(SymbolInfo {
                     id: SymbolId(0),
                     name: name.text(source).to_string(),
                     kind: SymbolKind::Local,
@@ -383,19 +405,35 @@ impl<'a> NameResolver<'a> {
                     file: file_id,
                     span: *name,
                 });
-                local_scope.insert(name.text(source).to_string(), sym);
+                local_scope.insert(
+                    name.text(source).to_string(),
+                    LocalBinding {
+                        symbol,
+                        mutable: *mutable,
+                    },
+                );
             }
             Stmt::Assign { target, value } => {
                 self.resolve_expr(value, file_id, source, module_scope, local_scope);
                 // Look up the target in local scope - it must already be defined
                 let name = target.text(source);
-                if let Some(&sym) = local_scope.get(name) {
+                if let Some(binding) = local_scope.get(name) {
+                    if !binding.mutable {
+                        self.errors.push(ResolveError::AssignToImmutable {
+                            name: name.to_string(),
+                            file: file_id,
+                            span: *target,
+                        });
+                    }
                     // Record the use of the target symbol
                     let key = NameRef {
                         file: file_id,
                         span: *target,
                     };
-                    self.program.name_resolution.uses.insert(key, sym);
+                    self.program
+                        .name_resolution
+                        .uses
+                        .insert(key, binding.symbol);
                 } else {
                     self.errors.push(ResolveError::UnknownSymbol {
                         name: name.to_string(),
@@ -446,14 +484,14 @@ impl<'a> NameResolver<'a> {
         file_id: FileId,
         source: &str,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, SymbolId>,
+        local_scope: &mut HashMap<String, LocalBinding>,
     ) {
         match expr {
             Expr::Identifier { span, .. } => {
                 let name = span.text(source);
                 if let Some(sym) = local_scope
                     .get(name)
-                    .copied()
+                    .map(|b| b.symbol)
                     .or_else(|| module_scope.get(name).copied())
                 {
                     let key = NameRef {
@@ -475,7 +513,7 @@ impl<'a> NameResolver<'a> {
                     let sym = if path.segments.len() == 1 {
                         local_scope
                             .get(&name)
-                            .copied()
+                            .map(|b| b.symbol)
                             .or_else(|| module_scope.get(&name).copied())
                     } else {
                         let module_name: Vec<String> = path

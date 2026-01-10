@@ -283,6 +283,7 @@ impl<'a> LoweringContext<'a> {
         match stmt {
             Stmt::Let {
                 name,
+                mutable,
                 type_annotation,
                 value,
             } => HirStmt::Let {
@@ -294,6 +295,7 @@ impl<'a> LoweringContext<'a> {
                         .expect("missing local symbol");
                     self.ensure_symbol(res_id, Some(module))
                 },
+                mutable: *mutable,
                 ty: self.lower_type(
                     type_annotation.as_ref().unwrap_or(&Type::Undetermined),
                     file_id,

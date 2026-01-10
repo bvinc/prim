@@ -946,6 +946,11 @@ impl<'a> Parser<'a> {
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
         self.consume(TokenKind::Let, "Expected 'let'")?;
 
+        let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+        if mutable {
+            self.advance();
+        }
+
         let name_token = self.consume(TokenKind::Identifier, "identifier")?;
         let name = name_token.span;
 
@@ -963,6 +968,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::Let {
             name,
+            mutable,
             type_annotation,
             value,
         })

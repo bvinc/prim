@@ -116,6 +116,7 @@ pub struct HirBlock {
 pub enum HirStmt {
     Let {
         name: SymbolId,
+        mutable: bool,
         ty: Type,
         value: HirExpr,
         span: SpanId,

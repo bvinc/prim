@@ -1,0 +1,8 @@
+// Test let mut allows reassignment
+import std.io.println_i32
+
+fn main() {
+    let mut x = 5
+    x = 10
+    println_i32(x)
+}

@@ -186,6 +186,7 @@ pub struct StructFieldDefinition {
 pub enum Stmt {
     Let {
         name: Span,
+        mutable: bool,
         type_annotation: Option<Type>,
         value: Expr,
     },

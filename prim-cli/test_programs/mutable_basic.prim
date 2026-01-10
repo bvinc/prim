@@ -2,7 +2,7 @@
 import std.io.println_i32
 
 fn main() {
-    let x = 10
+    let mut x = 10
     x = 20
     println_i32(x)
 }

@@ -2,7 +2,7 @@
 import std.io.println_i32
 
 fn main() {
-    let x = 1
+    let mut x = 1
     let cond = 5 > 3
     if cond {
         x = 10
