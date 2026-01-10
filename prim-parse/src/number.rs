@@ -4,8 +4,7 @@ fn parse_int_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, Par
     if suffix.is_empty() {
         return Ok(Type::Undetermined);
     }
-    let first = suffix.chars().next().unwrap_or(' ');
-    if first == 'e' || first == 'E' {
+    if suffix.starts_with('e') || suffix.starts_with('E') {
         return Err(ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
             position: span.start(),
@@ -98,7 +97,11 @@ pub fn parse_int_literal(literal: &str, span: Span) -> Result<(i64, Type), Parse
     }
 
     let suffix = suffix.strip_prefix('_').unwrap_or(suffix);
-    if !suffix.is_empty() && !suffix.chars().next().unwrap_or(' ').is_ascii_alphabetic() {
+    if suffix
+        .chars()
+        .next()
+        .is_some_and(|c| !c.is_ascii_alphabetic())
+    {
         return Err(ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
             position: span.start(),
@@ -163,7 +166,11 @@ pub fn parse_float_literal(literal: &str, span: Span) -> Result<(f64, Type), Par
         });
     }
     let suffix = suffix.strip_prefix('_').unwrap_or(suffix);
-    if !suffix.is_empty() && !suffix.chars().next().unwrap_or(' ').is_ascii_alphabetic() {
+    if suffix
+        .chars()
+        .next()
+        .is_some_and(|c| !c.is_ascii_alphabetic())
+    {
         return Err(ParseError::InvalidFloatLiteral {
             literal: literal.to_string(),
             position: span.start(),

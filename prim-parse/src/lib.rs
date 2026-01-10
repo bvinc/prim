@@ -137,14 +137,9 @@ impl Expr {
             | Expr::Dereference { span, .. }
             | Expr::ArrayLiteral { span, .. } => *span,
             Expr::FunctionCall { path, args, .. } => {
-                let mut span = path
-                    .segments
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| Span::empty_at(0));
-                if let Some(last) = path.segments.last().copied() {
-                    span = span.cover(last);
-                }
+                let first = *path.segments.first().expect("path must have segments");
+                let last = *path.segments.last().unwrap();
+                let mut span = first.cover(last);
                 if let Some(last_arg) = args.last() {
                     span = span.cover(last_arg.span());
                 }

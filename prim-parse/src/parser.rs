@@ -1017,7 +1017,7 @@ impl<'a> Parser<'a> {
 
     fn is_same_line(&self, left_end: usize, right_start: usize) -> bool {
         let start = left_end.min(self.source.len());
-        let end = right_start.min(self.source.len());
+        let end = right_start.max(start).min(self.source.len());
         !self.source.as_bytes()[start..end].contains(&b'\n')
     }
 
