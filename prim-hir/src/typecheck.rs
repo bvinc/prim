@@ -217,6 +217,32 @@ impl<'a> Checker<'a> {
                 self.check_expr(expr, locals)?;
                 Ok(())
             }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                span,
+            } => {
+                let cond_ty = self.check_expr(condition, locals)?;
+                if !matches!(cond_ty, Type::Bool) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: Type::Bool,
+                            found: cond_ty,
+                        },
+                    ));
+                }
+                for stmt in &mut then_body.stmts {
+                    self.check_stmt(stmt, locals)?;
+                }
+                if let Some(else_block) = else_body {
+                    for stmt in &mut else_block.stmts {
+                        self.check_stmt(stmt, locals)?;
+                    }
+                }
+                Ok(())
+            }
             HirStmt::Loop { body, .. } => {
                 self.loop_depth += 1;
                 for stmt in &mut body.stmts {

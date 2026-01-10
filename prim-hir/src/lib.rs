@@ -121,6 +121,12 @@ pub enum HirStmt {
         span: SpanId,
     },
     Expr(HirExpr),
+    If {
+        condition: HirExpr,
+        then_body: HirBlock,
+        else_body: Option<HirBlock>,
+        span: SpanId,
+    },
     Loop {
         body: HirBlock,
         span: SpanId,

@@ -302,6 +302,27 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*name, FileId(file_id.0)),
             },
             Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, module, file_id)),
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+                span,
+            } => HirStmt::If {
+                condition: self.lower_expr(condition, module, file_id),
+                then_body: HirBlock {
+                    stmts: then_body
+                        .iter()
+                        .map(|s| self.lower_stmt(s, module, file_id))
+                        .collect(),
+                },
+                else_body: else_body.as_ref().map(|body| HirBlock {
+                    stmts: body
+                        .iter()
+                        .map(|s| self.lower_stmt(s, module, file_id))
+                        .collect(),
+                }),
+                span: self.span_id(*span, FileId(file_id.0)),
+            },
             Stmt::Loop { body, span } => HirStmt::Loop {
                 body: HirBlock {
                     stmts: body

@@ -871,6 +871,7 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
         match self.peek_kind() {
             Some(TokenKind::Let) => self.parse_let_statement(),
+            Some(TokenKind::If) => self.parse_if_statement(),
             Some(TokenKind::Loop) => self.parse_loop_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
             _ => {
@@ -953,6 +954,42 @@ impl<'a> Parser<'a> {
     fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {
         let token = self.consume(TokenKind::Break, "Expected 'break'")?;
         Ok(Stmt::Break { span: token.span })
+    }
+
+    fn parse_if_statement(&mut self) -> Result<Stmt, ParseError> {
+        let if_start = {
+            let token = self.consume(TokenKind::If, "Expected 'if'")?;
+            token.span.start()
+        };
+
+        let condition = self.parse_expression(Precedence::NONE)?;
+
+        self.consume(TokenKind::LeftBrace, "Expected '{' after if condition")?;
+        let then_body = self.parse_statement_list()?;
+        let mut end = self
+            .consume(TokenKind::RightBrace, "Expected '}' to end if body")?
+            .span
+            .end();
+
+        let else_body = if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+            self.advance(); // consume 'else'
+            self.consume(TokenKind::LeftBrace, "Expected '{' after 'else'")?;
+            let body = self.parse_statement_list()?;
+            end = self
+                .consume(TokenKind::RightBrace, "Expected '}' to end else body")?
+                .span
+                .end();
+            Some(body)
+        } else {
+            None
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            else_body,
+            span: Span::new(if_start, end),
+        })
     }
 
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token, ParseError> {

@@ -329,6 +329,65 @@ impl CraneliftCodeGenerator {
                 builder.ins().jump(exit, &[]);
                 Ok(StmtFlow::Terminated)
             }
+            prim_hir::HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                let cond = self.lower_expr(condition, program, module_id, builder, locals)?;
+                let cond_val = cond[0];
+
+                let then_block = builder.create_block();
+                let merge_block = builder.create_block();
+                let else_block = if else_body.is_some() {
+                    builder.create_block()
+                } else {
+                    merge_block
+                };
+
+                builder
+                    .ins()
+                    .brif(cond_val, then_block, &[], else_block, &[]);
+
+                // Then block
+                builder.switch_to_block(then_block);
+                builder.seal_block(then_block);
+                let mut then_terminated = false;
+                for s in &then_body.stmts {
+                    let flow =
+                        self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
+                    if matches!(flow, StmtFlow::Terminated) {
+                        then_terminated = true;
+                        break;
+                    }
+                }
+                if !then_terminated {
+                    builder.ins().jump(merge_block, &[]);
+                }
+
+                // Else block (if present)
+                if let Some(else_block_body) = else_body {
+                    builder.switch_to_block(else_block);
+                    builder.seal_block(else_block);
+                    let mut else_terminated = false;
+                    for s in &else_block_body.stmts {
+                        let flow =
+                            self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
+                        if matches!(flow, StmtFlow::Terminated) {
+                            else_terminated = true;
+                            break;
+                        }
+                    }
+                    if !else_terminated {
+                        builder.ins().jump(merge_block, &[]);
+                    }
+                }
+
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
+                Ok(StmtFlow::Continue)
+            }
         }
     }
 

@@ -375,6 +375,22 @@ impl<'a> NameResolver<'a> {
             Stmt::Expr(expr) => {
                 self.resolve_expr(expr, file_id, source, module_scope, local_scope);
             }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.resolve_expr(condition, file_id, source, module_scope, local_scope);
+                for stmt in then_body {
+                    self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
+                }
+                if let Some(body) = else_body {
+                    for stmt in body {
+                        self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
+                    }
+                }
+            }
             Stmt::Loop { body, .. } => {
                 for stmt in body {
                     self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);

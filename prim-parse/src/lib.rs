@@ -190,6 +190,12 @@ pub enum Stmt {
         value: Expr,
     },
     Expr(Expr),
+    If {
+        condition: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+        span: Span,
+    },
     Loop {
         body: Vec<Stmt>,
         span: Span,
