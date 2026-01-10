@@ -672,10 +672,7 @@ impl VarEnv {
 }
 
 /// Entry point used by prim-cli.
-pub fn generate_object_code(
-    _program: &prim_compiler::Program,
-    hir: &HirProgram,
-) -> Result<Vec<u8>, CodegenError> {
+pub fn generate_object_code(hir: &HirProgram) -> Result<Vec<u8>, CodegenError> {
     if hir.main.is_none() {
         return Err(CodegenError::MissingMain);
     }

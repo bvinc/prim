@@ -5,13 +5,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ModuleId(pub u32);
+pub(crate) struct ModuleId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ModuleKey {
+pub(crate) enum ModuleKey {
     Name(Vec<String>),
     Path(PathBuf),
 }
@@ -20,11 +20,10 @@ pub enum ModuleKey {
 pub enum ModuleOrigin {
     User,
     Stdlib,
-    Other,
 }
 
 #[derive(Clone, Debug)]
-pub struct Program {
+pub(crate) struct Program {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
@@ -33,19 +32,16 @@ pub struct Program {
 }
 
 #[derive(Clone, Debug)]
-pub struct Module {
+pub(crate) struct Module {
     pub id: ModuleId,
-    pub key: ModuleKey,
     pub name: Vec<String>,
-    pub origin: ModuleOrigin,
     pub files: Vec<ModuleFile>,
     pub imports: Vec<ImportRequest>,
     pub exports: ExportTable,
-    pub body_source: String,
 }
 
 #[derive(Clone, Debug)]
-pub struct ModuleFile {
+pub(crate) struct ModuleFile {
     pub file_id: FileId,
     pub path: PathBuf,
     pub source: Arc<str>,
@@ -53,19 +49,19 @@ pub struct ModuleFile {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ImportRequest {
+pub(crate) struct ImportRequest {
     pub module: Vec<String>,
     pub coverage: ImportCoverage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ImportCoverage {
+pub(crate) enum ImportCoverage {
     All,
     Symbols(Vec<String>),
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ExportTable {
+pub(crate) struct ExportTable {
     pub functions: Vec<String>,
     pub structs: Vec<String>,
     pub traits: Vec<String>,
@@ -82,29 +78,28 @@ impl ExportTable {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SymbolKind {
+pub(crate) enum SymbolKind {
     Module,
     Function,
     Struct,
     Trait,
     Impl,
-    Global,
     Param,
     Local,
     Field,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SymbolId(pub u32);
+pub(crate) struct SymbolId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct NameRef {
+pub(crate) struct NameRef {
     pub file: FileId,
     pub span: Span,
 }
 
 #[derive(Clone, Debug)]
-pub struct SymbolInfo {
+pub(crate) struct SymbolInfo {
     pub id: SymbolId,
     pub name: String,
     pub kind: SymbolKind,
@@ -114,7 +109,7 @@ pub struct SymbolInfo {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct NameResolution {
+pub(crate) struct NameResolution {
     pub symbols: Vec<SymbolInfo>,
     pub uses: HashMap<NameRef, SymbolId>,
 }

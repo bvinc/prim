@@ -7,7 +7,6 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-prim-compiler = { path = "../prim-compiler" }
 prim-hir = { path = "../prim-hir" }
 cranelift = "0.122"
 cranelift-module = "0.122"

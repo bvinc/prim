@@ -516,10 +516,6 @@ impl<'a> LoweringContext<'a> {
                     .or_insert_with(|| StructId(self.items.structs.len() as u32));
                 SymbolKind::Struct(sid)
             }
-            ResSymbolKind::Global => {
-                let gid = GlobalId(self.items.globals.len() as u32);
-                SymbolKind::Global(gid)
-            }
             ResSymbolKind::Param => SymbolKind::Param,
             ResSymbolKind::Local => SymbolKind::Local,
             ResSymbolKind::Field => SymbolKind::Field,

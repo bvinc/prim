@@ -87,11 +87,6 @@ fn inject_prelude_imports(
     }
 }
 
-/// Load a program starting at `entry_path` (either a single file or a module directory).
-pub fn load_program(entry_path: impl AsRef<Path>) -> Result<LoadedProgram, LoadError> {
-    load_program_with_options(entry_path, LoadOptions::default())
-}
-
 pub fn load_program_with_options(
     entry_path: impl AsRef<Path>,
     options: LoadOptions,
@@ -133,14 +128,8 @@ struct Loader {
 
 #[derive(Clone, Debug)]
 struct ModuleCacheEntry {
-    fragments: Vec<DefinitionFragment>,
     imports: Vec<ImportRequest>,
     files: Vec<ModuleFile>,
-}
-
-#[derive(Clone, Debug)]
-struct DefinitionFragment {
-    text: String,
 }
 
 impl Loader {
@@ -214,20 +203,16 @@ impl Loader {
             vec![self.alloc_file(path.to_path_buf(), Arc::from(source.clone()), ast.clone())];
 
         let exports = collect_exports(&module_files);
-        let body_source = strip_to_body(&ast, &source);
-        let key = ModuleKey::Path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
         let module_id = ModuleId(self.program.modules.len() as u32);
         let module = Module {
             id: module_id,
-            key: key.clone(),
             name: vec![module_name],
-            origin: ModuleOrigin::User,
             files: module_files,
             imports: imports.clone(),
             exports,
-            body_source: body_source.clone(),
         };
 
+        let key = ModuleKey::Path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
         self.program.module_index.insert(key, module_id);
         self.program.root = module_id;
         self.program.modules.push(module);
@@ -261,7 +246,6 @@ impl Loader {
 
         let mut module_name: Option<String> = None;
         let mut module_files = Vec::new();
-        let mut stripped_sources = Vec::new();
         let mut imports = Vec::new();
         let mut import_index = HashMap::new();
 
@@ -301,7 +285,6 @@ impl Loader {
                 merge_import_request(&mut imports, &mut import_index, module, coverage);
             }
 
-            stripped_sources.push(strip_to_body(&ast, &source));
             module_files.push(self.alloc_file(file.clone(), Arc::from(source.clone()), ast));
         }
 
@@ -323,21 +306,17 @@ impl Loader {
         }
 
         let exports = collect_exports(&module_files);
-        let body_source = stripped_sources.join("\n");
         let module_segments = vec![module_name.clone()];
-        let key = ModuleKey::Name(module_segments.clone());
         let module_id = ModuleId(self.program.modules.len() as u32);
         let module = Module {
             id: module_id,
-            key: key.clone(),
             name: module_segments.clone(),
-            origin: ModuleOrigin::User,
             files: module_files,
             imports: imports.clone(),
             exports,
-            body_source: body_source.clone(),
         };
 
+        let key = ModuleKey::Name(module_segments.clone());
         self.program.module_index.insert(key, module_id);
         self.program.root = module_id;
         self.program.modules.push(module);
@@ -377,17 +356,13 @@ impl Loader {
 
         let entry = self.load_module_entry(module_segments)?.clone();
         let exports = collect_exports(&entry.files);
-        let body_source = join_fragments(&entry.fragments);
         let id = ModuleId(self.program.modules.len() as u32);
         let module = Module {
             id,
-            key: key.clone(),
             name: module_segments.to_vec(),
-            origin: module_origin(module_segments),
             files: entry.files.clone(),
             imports: entry.imports.clone(),
             exports,
-            body_source,
         };
         self.program.module_index.insert(key, id);
         self.program.modules.push(module);
@@ -439,7 +414,6 @@ impl Loader {
             }
 
             let mut module_name: Option<String> = None;
-            let mut fragments = Vec::new();
             let mut imports = Vec::new();
             let mut import_index = HashMap::new();
             let mut module_files = Vec::new();
@@ -475,7 +449,6 @@ impl Loader {
                     }
                 }
 
-                fragments.extend(extract_definitions(&program, &source));
                 let planned = plan_import_requests(
                     &program.imports,
                     &source,
@@ -505,7 +478,6 @@ impl Loader {
             self.module_cache.insert(
                 module_key.clone(),
                 ModuleCacheEntry {
-                    fragments,
                     imports,
                     files: module_files,
                 },
@@ -715,70 +687,6 @@ fn module_search_path(module_root: &Path, std_root: &Path, segments: &[String]) 
         }
         path
     }
-}
-
-fn extract_definitions(program: &prim_parse::Program, source: &str) -> Vec<DefinitionFragment> {
-    let mut annotated = Vec::new();
-
-    for s in &program.structs {
-        annotated.push((
-            s.span.start(),
-            DefinitionFragment {
-                text: s.span.text(source).to_string(),
-            },
-        ));
-    }
-
-    for f in &program.functions {
-        annotated.push((
-            f.span.start(),
-            DefinitionFragment {
-                text: f.span.text(source).to_string(),
-            },
-        ));
-    }
-
-    for t in &program.traits {
-        annotated.push((
-            t.span.start(),
-            DefinitionFragment {
-                text: t.span.text(source).to_string(),
-            },
-        ));
-    }
-
-    for im in &program.impls {
-        annotated.push((
-            im.span.start(),
-            DefinitionFragment {
-                text: im.span.text(source).to_string(),
-            },
-        ));
-    }
-
-    annotated.sort_by_key(|(start, _)| *start);
-    annotated
-        .into_iter()
-        .map(|(_, fragment)| fragment)
-        .collect()
-}
-
-fn strip_to_body(program: &prim_parse::Program, source: &str) -> String {
-    extract_definitions(program, source)
-        .into_iter()
-        .map(|fragment| fragment.text)
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn join_fragments(fragments: &[DefinitionFragment]) -> String {
-    fragments
-        .iter()
-        .map(|fragment| fragment.text.clone())
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 fn prim_root_from_env_or_exe() -> Result<PathBuf, LoadError> {

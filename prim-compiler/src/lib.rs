@@ -1,21 +1,15 @@
-pub mod hir_builder;
-pub mod loader;
-pub mod program;
-pub mod resolver;
+mod hir_builder;
+mod loader;
+mod program;
+mod resolver;
 
-pub use hir_builder::lower_to_hir;
-pub use loader::{
-    LoadError, LoadOptions, LoadedProgram, load_program, load_program_with_options, prim_root,
-};
+pub use loader::{LoadError, LoadOptions, prim_root};
 pub use prim_hir::{HirProgram, TypeCheckError};
-pub use program::{
-    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
-    ModuleOrigin, Program,
-};
-pub use resolver::{ResolveError, resolve_names};
+pub use resolver::ResolveError;
 
 #[derive(Debug)]
 pub enum CompileError {
+    Load(LoadError),
     Resolve(Vec<ResolveError>),
     TypeCheck(TypeCheckError),
 }
@@ -23,6 +17,7 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CompileError::Load(err) => err.fmt(f),
             CompileError::Resolve(errors) => {
                 writeln!(f, "Name resolution failed with {} error(s):", errors.len())?;
                 for err in errors {
@@ -37,18 +32,36 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+impl From<LoadError> for CompileError {
+    fn from(err: LoadError) -> Self {
+        CompileError::Load(err)
+    }
+}
+
 impl From<TypeCheckError> for CompileError {
     fn from(err: TypeCheckError) -> Self {
         CompileError::TypeCheck(err)
     }
 }
 
-/// Convenience helper: type check and immediately lower the structured program to HIR.
-pub fn type_check_and_lower(program: &mut Program) -> Result<HirProgram, CompileError> {
-    if let Err(errors) = resolve_names(program) {
+/// Compile a Prim source file to HIR.
+///
+/// This is the main entry point for compilation. It:
+/// 1. Loads and parses the source file and its dependencies
+/// 2. Resolves names across modules
+/// 3. Lowers the AST to HIR
+/// 4. Type checks the HIR
+pub fn compile(path: &str) -> Result<HirProgram, CompileError> {
+    compile_with_options(path, LoadOptions::default())
+}
+
+/// Compile with custom load options.
+pub fn compile_with_options(path: &str, options: LoadOptions) -> Result<HirProgram, CompileError> {
+    let mut loaded = loader::load_program_with_options(path, options)?;
+    if let Err(errors) = resolver::resolve_names(&mut loaded.program) {
         return Err(CompileError::Resolve(errors));
     }
-    let mut hir = lower_to_hir(program);
+    let mut hir = hir_builder::lower_to_hir(&loaded.program);
     prim_hir::type_check(&mut hir)?;
     Ok(hir)
 }

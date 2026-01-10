@@ -1,5 +1,5 @@
 use prim_codegen::generate_object_code;
-use prim_compiler::{CompileError, load_program, type_check_and_lower};
+use prim_compiler::{CompileError, HirProgram, compile, prim_root};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -119,11 +119,11 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let (program, hir, parse_dur, type_dur) = compile_source(filename)?;
+    let (hir, compile_dur) = compile_source(filename)?;
     let link_start = Instant::now();
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program, &hir)
+    let object_code = generate_object_code(&hir)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create executable name from source file name
@@ -144,9 +144,8 @@ fn build_program(filename: &str) -> Result<(), MainError> {
         let link_dur = link_start.elapsed();
         println!("Successfully built executable: {}", executable_name);
         println!(
-            "[timing] parse: {} ms, typecheck: {} ms, link: {} ms",
-            parse_dur.as_millis(),
-            type_dur.as_millis(),
+            "[timing] compile: {} ms, link: {} ms",
+            compile_dur.as_millis(),
             link_dur.as_millis()
         );
 
@@ -168,10 +167,10 @@ fn build_program(filename: &str) -> Result<(), MainError> {
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
-    let (program, hir, _, _) = compile_source(filename)?;
+    let (hir, _) = compile_source(filename)?;
 
     // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&program, &hir)
+    let object_code = generate_object_code(&hir)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
     // Create temporary files for object code and executable
@@ -224,24 +223,10 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     Ok(run_result.status.code().unwrap_or(0))
 }
 
-fn compile_source(
-    path: &str,
-) -> Result<
-    (
-        prim_compiler::Program,
-        prim_compiler::HirProgram,
-        Duration,
-        Duration,
-    ),
-    MainError,
-> {
-    let parse_start = Instant::now();
-    let mut loaded =
-        load_program(path).map_err(|err| MainError::CompilationError(err.to_string()))?;
-    let parse_dur = parse_start.elapsed();
-
-    let type_start = Instant::now();
-    let hir = type_check_and_lower(&mut loaded.program).map_err(|err| match err {
+fn compile_source(path: &str) -> Result<(HirProgram, Duration), MainError> {
+    let start = Instant::now();
+    let hir = compile(path).map_err(|err| match err {
+        CompileError::Load(err) => MainError::CompilationError(format!("Load error: {}", err)),
         CompileError::TypeCheck(err) => {
             MainError::CompilationError(format!("Type check error: {}", err))
         }
@@ -253,15 +238,13 @@ fn compile_source(
             MainError::CompilationError(msg)
         }
     })?;
-    let type_dur = type_start.elapsed();
-
-    Ok((loaded.program, hir, parse_dur, type_dur))
+    let duration = start.elapsed();
+    Ok((hir, duration))
 }
 
 /// Return a path to the runtime static library
 fn runtime_lib_path() -> Result<PathBuf, MainError> {
-    let prim_root =
-        prim_compiler::prim_root().map_err(|e| MainError::CompilationError(e.to_string()))?;
+    let prim_root = prim_root().map_err(|e| MainError::CompilationError(e.to_string()))?;
 
     let staticlib_name = if cfg!(target_os = "windows") {
         "prim_rt.lib"
