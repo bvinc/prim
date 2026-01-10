@@ -245,12 +245,10 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn operator_spacing(&self, left_space: bool, right_space: bool) -> OperatorSpacing {
-        if left_space && !right_space {
-            OperatorSpacing::Prefix
-        } else if !left_space && right_space {
-            OperatorSpacing::Postfix
-        } else {
-            OperatorSpacing::Infix
+        match (left_space, right_space) {
+            (true, false) => OperatorSpacing::Prefix,
+            (false, true) => OperatorSpacing::Postfix,
+            _ => OperatorSpacing::Infix,
         }
     }
 
@@ -297,8 +295,7 @@ impl<'a> Tokenizer<'a> {
                 break;
             }
         } else {
-            while self.current.is_some() {
-                let ch = self.current.unwrap_or('_');
+            while let Some(ch) = self.current {
                 if ch.is_ascii_digit() {
                     seen_digit = true;
                     self.advance();
@@ -437,15 +434,11 @@ impl<'a> Tokenizer<'a> {
         let end_pos = self.position;
 
         // Consume newline sequence so state resets at the next line.
-        match self.current {
-            Some('\r') => {
-                self.advance();
-                if self.current == Some('\n') {
-                    self.advance();
-                }
-            }
-            Some('\n') => self.advance(),
-            _ => {}
+        if self.current == Some('\r') {
+            self.advance();
+        }
+        if self.current == Some('\n') {
+            self.advance();
         }
 
         end_pos
