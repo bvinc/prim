@@ -49,11 +49,11 @@ fn expected_return_lanes(
 }
 
 fn validate_return_values(
-    builder: &mut FunctionBuilder,
-    vals: Vec<Value>,
+    builder: &FunctionBuilder,
+    vals: &[Value],
     ty: &prim_hir::Type,
     layouts: &HashMap<prim_hir::StructId, StructLayout>,
-) -> Result<Vec<Value>, CodegenError> {
+) -> Result<(), CodegenError> {
     let expected = expected_return_lanes(ty, layouts)?;
     if vals.len() != expected.len() {
         return Err(CodegenError::ReturnArityMismatch {
@@ -61,16 +61,16 @@ fn validate_return_values(
             found: vals.len(),
         });
     }
-    for (val, expected_ty) in vals.iter().copied().zip(expected.into_iter()) {
-        let got = builder.func.dfg.value_type(val);
-        if got != expected_ty {
+    for (val, expected_ty) in vals.iter().zip(expected.iter()) {
+        let got = builder.func.dfg.value_type(*val);
+        if got != *expected_ty {
             return Err(CodegenError::ReturnTypeMismatch {
-                expected: expected_ty,
+                expected: *expected_ty,
                 found: got,
             });
         }
     }
-    Ok(vals)
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -233,7 +233,8 @@ impl CraneliftCodeGenerator {
                 Some(vs) if !vs.is_empty() => vs,
                 _ => return Err(CodegenError::MissingReturnValue),
             };
-            validate_return_values(&mut builder, out, ret_ty, &self.struct_layouts)?
+            validate_return_values(&builder, &out, ret_ty, &self.struct_layouts)?;
+            out
         } else {
             Vec::new()
         };
@@ -634,7 +635,6 @@ fn make_string_data(
     Ok((ptr, len))
 }
 
-#[derive(Default)]
 struct VarEnv {
     locals: HashMap<prim_hir::SymbolId, Vec<Value>>,
 }
