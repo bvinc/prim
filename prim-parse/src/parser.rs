@@ -196,8 +196,18 @@ impl<'a> Parser<'a> {
 
     /// Parse an expression with minimum precedence
     pub fn parse_expression(&mut self, min_precedence: Precedence) -> Result<Expr, ParseError> {
+        self.parse_expression_inner(min_precedence, true)
+    }
+
+    /// Parse an expression, optionally disallowing struct literals at the top level.
+    /// This is needed for `if` conditions where `if x {` should not parse `x {` as a struct.
+    fn parse_expression_inner(
+        &mut self,
+        min_precedence: Precedence,
+        allow_struct_literal: bool,
+    ) -> Result<Expr, ParseError> {
         // Parse prefix expression
-        let mut left = self.parse_prefix()?;
+        let mut left = self.parse_prefix(allow_struct_literal)?;
 
         // Parse infix expressions while precedence is sufficient
         while self
@@ -213,7 +223,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a prefix expression (literals, identifiers, unary operators, grouping)
-    fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
+    fn parse_prefix(&mut self, allow_struct_literal: bool) -> Result<Expr, ParseError> {
         if self.is_at_end() {
             return Err(ParseError::UnexpectedEof);
         }
@@ -276,7 +286,9 @@ impl<'a> Parser<'a> {
                         args,
                         ty: Type::Undetermined,
                     })
-                } else if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+                } else if allow_struct_literal
+                    && matches!(self.peek_kind(), Some(TokenKind::LeftBrace))
+                {
                     // This is a struct literal
                     self.advance(); // consume '{'
                     let fields = self.parse_struct_literal_fields()?;
@@ -962,7 +974,8 @@ impl<'a> Parser<'a> {
             token.span.start()
         };
 
-        let condition = self.parse_expression(Precedence::NONE)?;
+        // Disallow struct literals in condition to avoid ambiguity with `if x { }`
+        let condition = self.parse_expression_inner(Precedence::NONE, false)?;
 
         self.consume(TokenKind::LeftBrace, "Expected '{' after if condition")?;
         let then_body = self.parse_statement_list()?;

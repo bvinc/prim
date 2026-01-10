@@ -1,15 +1,15 @@
 import std.io.println_i64
 
 fn main() {
-    let x = 10
-    let y = 20
-    if x > 0 {
-        if y > 0 {
+    let x: i64 = 10i64
+    let y: i64 = 20i64
+    if x > 0i64 {
+        if y > 0i64 {
             println_i64(x + y)
         } else {
             println_i64(x)
         }
     } else {
-        println_i64(0)
+        println_i64(0i64)
     }
 }
