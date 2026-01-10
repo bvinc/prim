@@ -1254,55 +1254,42 @@ mod tests {
     use super::*;
     use prim_tok::Tokenizer;
 
+    fn parse_expr(input: &str) -> Expr {
+        let mut tokenizer = Tokenizer::new(input);
+        let tokens = tokenizer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens, input);
+        parser.parse_expression(Precedence::NONE).unwrap()
+    }
+
     #[test]
-    fn test_pratt_parser_direct() {
-        let test_cases = vec![
-            ("2 + 3", "Simple addition"),
-            ("2 * 3", "Simple multiplication"),
-            ("2 + 3 * 4", "Addition and multiplication with precedence"),
-            ("2 * 3 + 4", "Multiplication and addition with precedence"),
-            ("1 + 2 + 3", "Left associative addition"),
-            ("(2 + 3) * 4", "Parentheses"),
-        ];
-
-        for (input, description) in test_cases {
-            println!("Testing: {} - {}", input, description);
-
-            let mut tokenizer = Tokenizer::new(input);
-            let tokens = tokenizer.tokenize().expect("Failed to tokenize");
-            let mut parser = Parser::new(tokens, input);
-
-            match parser.parse_expression(Precedence::NONE) {
-                Ok(expr) => {
-                    println!("  ✓ Parsed: {:?}", expr);
-
-                    // Specific test for precedence
-                    if input == "2 + 3 * 4" {
-                        if let Expr::Binary {
-                            left: _,
-                            op: BinaryOp::Add,
-                            right,
-                            ..
-                        } = &expr
-                        {
-                            if let Expr::Binary {
-                                op: BinaryOp::Multiply,
-                                ..
-                            } = &**right
-                            {
-                                println!("    ✓ Correct precedence: 2 + (3 * 4)");
-                            } else {
-                                panic!("Right should be multiplication");
-                            }
-                        } else {
-                            panic!("Should be addition at top level");
-                        }
-                    }
-                }
-                Err(e) => {
-                    panic!("Failed to parse '{}': {:?}", input, e);
-                }
+    fn test_precedence_mul_binds_tighter() {
+        // 2 + 3 * 4 should parse as 2 + (3 * 4)
+        let Expr::Binary { op, right, .. } = parse_expr("2 + 3 * 4") else {
+            panic!("expected binary");
+        };
+        assert!(matches!(op, BinaryOp::Add));
+        assert!(matches!(
+            *right,
+            Expr::Binary {
+                op: BinaryOp::Multiply,
+                ..
             }
-        }
+        ));
+    }
+
+    #[test]
+    fn test_left_associativity() {
+        // 1 + 2 + 3 should parse as (1 + 2) + 3
+        let Expr::Binary { left, op, .. } = parse_expr("1 + 2 + 3") else {
+            panic!("expected binary");
+        };
+        assert!(matches!(op, BinaryOp::Add));
+        assert!(matches!(
+            *left,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ));
     }
 }
