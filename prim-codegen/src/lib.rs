@@ -15,8 +15,7 @@ pub struct CraneliftCodeGenerator {
     pointer_type: cranelift::prelude::Type,
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
     func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
-    func_param_counts: HashMap<prim_hir::FuncId, usize>,
-    func_param_types: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
+    func_params: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
 }
 
 fn expected_return_lanes(
@@ -109,8 +108,7 @@ impl CraneliftCodeGenerator {
             pointer_type,
             struct_layouts: HashMap::new(),
             func_ids: HashMap::new(),
-            func_param_counts: HashMap::new(),
-            func_param_types: HashMap::new(),
+            func_params: HashMap::new(),
         })
     }
 
@@ -122,9 +120,7 @@ impl CraneliftCodeGenerator {
             for param in &func.params {
                 append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
             }
-            let param_count = sig.params.len();
-            let param_types: Vec<cranelift::prelude::Type> =
-                sig.params.iter().map(|p| p.value_type).collect();
+            let params: Vec<_> = sig.params.iter().map(|p| p.value_type).collect();
             if program.main == Some(func.name) {
                 sig.returns.push(AbiParam::new(types::I32));
             } else if let Some(ret) = &func.ret {
@@ -142,8 +138,7 @@ impl CraneliftCodeGenerator {
 
             let func_id = self.module.declare_function(&sym, linkage, &sig)?;
             self.func_ids.insert(func.id, func_id);
-            self.func_param_counts.insert(func.id, param_count);
-            self.func_param_types.insert(func.id, param_types);
+            self.func_params.insert(func.id, params);
         }
 
         let mut ctx = self.module.make_context();
@@ -382,24 +377,18 @@ impl CraneliftCodeGenerator {
                     lowered_args
                         .extend(self.lower_expr_static(a, program, module_id, builder, locals)?);
                 }
-                if let Some(expected) = self.func_param_counts.get(func) {
-                    if lowered_args.len() != *expected {
+                if let Some(params) = self.func_params.get(func) {
+                    if lowered_args.len() != params.len() {
                         return Err(CodegenError::ArityMismatch {
-                            expected: *expected,
+                            expected: params.len(),
                             found: lowered_args.len(),
                         });
                     }
-                }
-                if let Some(param_types) = self.func_param_types.get(func) {
-                    for (arg, expected_ty) in lowered_args
-                        .iter()
-                        .copied()
-                        .zip(param_types.iter().copied())
-                    {
-                        let got = builder.func.dfg.value_type(arg);
-                        if got != expected_ty {
+                    for (arg, expected_ty) in lowered_args.iter().zip(params.iter()) {
+                        let got = builder.func.dfg.value_type(*arg);
+                        if got != *expected_ty {
                             return Err(CodegenError::ArgTypeMismatch {
-                                expected: expected_ty,
+                                expected: *expected_ty,
                                 found: got,
                             });
                         }
