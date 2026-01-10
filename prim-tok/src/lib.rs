@@ -192,7 +192,7 @@ impl<'a> Tokenizer<'a> {
             Some('\'') => self.read_char_literal(start_pos).map(Some),
             Some(c) if c.is_ascii_digit() => self.read_number(start_pos).map(Some),
             Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-                self.read_identifier(start_pos).map(Some)
+                Ok(Some(self.read_identifier(start_pos)))
             }
             Some(c) => Err(TokenError::UnexpectedCharacter {
                 ch: c,
@@ -201,7 +201,6 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    #[inline]
     fn emit_simple(
         &mut self,
         kind: TokenKind,
@@ -260,32 +259,24 @@ impl<'a> Tokenizer<'a> {
     fn read_number(&mut self, start_pos: usize) -> Result<Token, TokenError> {
         let mut is_float = false;
         let mut seen_digit = false;
-        let mut seen_dot = false;
         let mut seen_exp = false;
 
-        let mut radix: Option<u32> = None;
-        if self.current == Some('0') {
-            if let Some(next) = self.peek() {
-                radix = match next {
-                    'b' => Some(2),
-                    'o' => Some(8),
-                    'x' => Some(16),
-                    _ => None,
-                };
+        let is_radix_digit: Option<fn(char) -> bool> = if self.current == Some('0') {
+            match self.peek() {
+                Some('b') => Some(|c| c == '0' || c == '1'),
+                Some('o') => Some(|c: char| c.is_ascii_digit() && c < '8'),
+                Some('x') => Some(|c: char| c.is_ascii_hexdigit()),
+                _ => None,
             }
-        }
+        } else {
+            None
+        };
 
-        if let Some(radix) = radix {
+        if let Some(is_digit) = is_radix_digit {
             self.advance(); // '0'
             self.advance(); // prefix
             while let Some(ch) = self.current {
-                let is_digit = match radix {
-                    2 => ch == '0' || ch == '1',
-                    8 => ch.is_ascii_digit() && ch < '8',
-                    16 => ch.is_ascii_hexdigit(),
-                    _ => ch.is_ascii_digit(),
-                };
-                if is_digit {
+                if is_digit(ch) {
                     seen_digit = true;
                     self.advance();
                     continue;
@@ -313,8 +304,7 @@ impl<'a> Tokenizer<'a> {
                     self.advance();
                     continue;
                 }
-                if ch == '.' && !seen_dot && !seen_exp {
-                    seen_dot = true;
+                if ch == '.' && !is_float {
                     is_float = true;
                     self.advance();
                     continue;
@@ -357,7 +347,7 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
-    fn read_identifier(&mut self, start_pos: usize) -> Result<Token, TokenError> {
+    fn read_identifier(&mut self, start_pos: usize) -> Token {
         while self
             .current
             .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -398,10 +388,10 @@ impl<'a> Tokenizer<'a> {
             _ => TokenKind::Identifier,
         };
 
-        Ok(Token {
+        Token {
             kind,
             span: Span::new(start_pos, self.position),
-        })
+        }
     }
 
     fn advance(&mut self) {
