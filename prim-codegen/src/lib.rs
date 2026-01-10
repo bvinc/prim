@@ -381,8 +381,22 @@ impl CraneliftCodeGenerator {
                     prim_hir::BinaryOp::Subtract => builder.ins().isub(l, r),
                     prim_hir::BinaryOp::Multiply => builder.ins().imul(l, r),
                     prim_hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
-                    prim_hir::BinaryOp::Equals => {
-                        let cmp = builder.ins().icmp(IntCC::Equal, l, r);
+                    prim_hir::BinaryOp::Equals
+                    | prim_hir::BinaryOp::NotEquals
+                    | prim_hir::BinaryOp::Greater
+                    | prim_hir::BinaryOp::GreaterEquals
+                    | prim_hir::BinaryOp::Less
+                    | prim_hir::BinaryOp::LessEquals => {
+                        let cc = match op {
+                            prim_hir::BinaryOp::Equals => IntCC::Equal,
+                            prim_hir::BinaryOp::NotEquals => IntCC::NotEqual,
+                            prim_hir::BinaryOp::Greater => IntCC::SignedGreaterThan,
+                            prim_hir::BinaryOp::GreaterEquals => IntCC::SignedGreaterThanOrEqual,
+                            prim_hir::BinaryOp::Less => IntCC::SignedLessThan,
+                            prim_hir::BinaryOp::LessEquals => IntCC::SignedLessThanOrEqual,
+                            _ => unreachable!(),
+                        };
+                        let cmp = builder.ins().icmp(cc, l, r);
                         let one = builder.ins().iconst(types::I8, 1);
                         let zero = builder.ins().iconst(types::I8, 0);
                         builder.ins().select(cmp, one, zero)

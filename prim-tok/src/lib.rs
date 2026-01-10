@@ -22,6 +22,7 @@ pub enum TokenKind {
     Import,
     Mod,
     If,
+    Else,
     Loop,
     Break,
     For,
@@ -49,17 +50,22 @@ pub enum TokenKind {
     Identifier,
 
     // Operators
-    Plus,         // +
-    Minus,        // -
-    Star,         // *
-    Slash,        // /
-    Equals,       // =
-    DoubleEquals, // ==
-    Arrow,        // ->
-    UnaryPlus,    // +
-    UnaryMinus,   // -
-    UnaryStar,    // *
-    PostfixStar,  // *
+    Plus,          // +
+    Minus,         // -
+    Star,          // *
+    Slash,         // /
+    Equals,        // =
+    DoubleEquals,  // ==
+    NotEquals,     // !=
+    Greater,       // >
+    GreaterEquals, // >=
+    Less,          // <
+    LessEquals,    // <=
+    Arrow,         // ->
+    UnaryPlus,     // +
+    UnaryMinus,    // -
+    UnaryStar,     // *
+    PostfixStar,   // *
 
     // Punctuation
     LeftParen,    // (
@@ -167,6 +173,54 @@ impl<'a> Tokenizer<'a> {
                     self.read_operator("==", start_pos)
                 } else {
                     self.read_operator("=", start_pos)
+                }
+            }
+            Some('>') => {
+                if self.peek() == Some('=') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::GreaterEquals,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else {
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::Greater,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                }
+            }
+            Some('<') => {
+                if self.peek() == Some('=') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::LessEquals,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else {
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::Less,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                }
+            }
+            Some('!') => {
+                if self.peek() == Some('=') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::NotEquals,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else {
+                    let end_pos = start_pos + 1;
+                    Err(TokenError::UnexpectedCharacter {
+                        ch: '!',
+                        span: Span::new(start_pos, end_pos),
+                    })
                 }
             }
             Some('(') => self.emit_simple(TokenKind::LeftParen, start_pos),
@@ -383,6 +437,7 @@ impl<'a> Tokenizer<'a> {
             "impl" => TokenKind::Impl,
             "trait" => TokenKind::Trait,
             "if" => TokenKind::If,
+            "else" => TokenKind::Else,
             "loop" => TokenKind::Loop,
             "break" => TokenKind::Break,
             "import" => TokenKind::Import,

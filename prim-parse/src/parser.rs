@@ -12,7 +12,8 @@ pub struct Precedence(pub i32);
 
 impl Precedence {
     pub const NONE: Precedence = Precedence(0);
-    pub const EQUALITY: Precedence = Precedence(10); // ==
+    pub const EQUALITY: Precedence = Precedence(10); // == !=
+    pub const COMPARISON: Precedence = Precedence(15); // > < >= <=
     pub const ADDITION: Precedence = Precedence(20); // + -
     pub const MULTIPLICATION: Precedence = Precedence(30); // * /
     pub const UNARY: Precedence = Precedence(40); // -x
@@ -1111,6 +1112,11 @@ fn token_to_binary_op(token_kind: TokenKind) -> Option<BinaryOp> {
         TokenKind::Star => Some(BinaryOp::Multiply),
         TokenKind::Slash => Some(BinaryOp::Divide),
         TokenKind::DoubleEquals => Some(BinaryOp::Equals),
+        TokenKind::NotEquals => Some(BinaryOp::NotEquals),
+        TokenKind::Greater => Some(BinaryOp::Greater),
+        TokenKind::GreaterEquals => Some(BinaryOp::GreaterEquals),
+        TokenKind::Less => Some(BinaryOp::Less),
+        TokenKind::LessEquals => Some(BinaryOp::LessEquals),
         _ => None,
     }
 }
@@ -1138,7 +1144,10 @@ fn token_to_primitive_type(token_kind: TokenKind) -> Option<Type> {
 /// Get precedence for a specific token kind - standalone function
 fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
     match token_kind {
-        TokenKind::DoubleEquals => Precedence::EQUALITY,
+        TokenKind::DoubleEquals | TokenKind::NotEquals => Precedence::EQUALITY,
+        TokenKind::Greater | TokenKind::GreaterEquals | TokenKind::Less | TokenKind::LessEquals => {
+            Precedence::COMPARISON
+        }
         TokenKind::Plus | TokenKind::Minus => Precedence::ADDITION,
         TokenKind::Star | TokenKind::Slash => Precedence::MULTIPLICATION,
         TokenKind::LeftParen => Precedence::CALL,

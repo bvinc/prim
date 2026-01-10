@@ -270,6 +270,11 @@ pub enum BinaryOp {
     Multiply,
     Divide,
     Equals,
+    NotEquals,
+    Greater,
+    GreaterEquals,
+    Less,
+    LessEquals,
 }
 
 impl fmt::Display for BinaryOp {
@@ -280,6 +285,11 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Multiply => "*",
             BinaryOp::Divide => "/",
             BinaryOp::Equals => "==",
+            BinaryOp::NotEquals => "!=",
+            BinaryOp::Greater => ">",
+            BinaryOp::GreaterEquals => ">=",
+            BinaryOp::Less => "<",
+            BinaryOp::LessEquals => "<=",
         };
         write!(f, "{symbol}")
     }

@@ -288,8 +288,26 @@ impl<'a> Checker<'a> {
                         *ty = l.clone();
                         Ok(l)
                     }
-                    BinaryOp::Equals => {
+                    BinaryOp::Equals | BinaryOp::NotEquals => {
                         if !self.types_equal(&l, &r) || !self.is_equality_compatible(&l) {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::InvalidBinaryOperands {
+                                    op: *op,
+                                    left: l,
+                                    right: r,
+                                },
+                            ));
+                        }
+                        *ty = Type::Bool;
+                        Ok(Type::Bool)
+                    }
+                    BinaryOp::Greater
+                    | BinaryOp::GreaterEquals
+                    | BinaryOp::Less
+                    | BinaryOp::LessEquals => {
+                        if !self.is_numeric(&l) || !self.is_numeric(&r) || !self.types_equal(&l, &r)
+                        {
                             return Err(self.error(
                                 *span,
                                 TypeCheckKind::InvalidBinaryOperands {
