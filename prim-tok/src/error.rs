@@ -1,29 +1,27 @@
+use crate::Span;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenError {
-    UnexpectedCharacter { ch: char, position: usize },
-    UnterminatedString { position: usize },
-    InvalidNumber { text: String, position: usize },
-    InvalidOperatorSpacing { op: &'static str, position: usize },
+    UnexpectedCharacter { ch: char, span: Span },
+    UnterminatedString { span: Span },
+    InvalidNumber { text: String, span: Span },
+    InvalidOperatorSpacing { op: &'static str, span: Span },
 }
 
 impl std::fmt::Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenError::UnexpectedCharacter { ch, position } => {
-                write!(f, "Unexpected character '{}' at position {}", ch, position)
+            TokenError::UnexpectedCharacter { ch, span } => {
+                write!(f, "Unexpected character '{}' at {}", ch, span)
             }
-            TokenError::UnterminatedString { position } => {
-                write!(f, "Unterminated string literal at position {}", position)
+            TokenError::UnterminatedString { span } => {
+                write!(f, "Unterminated string literal at {}", span)
             }
-            TokenError::InvalidNumber { text, position } => {
-                write!(f, "Invalid number '{}' at position {}", text, position)
+            TokenError::InvalidNumber { text, span } => {
+                write!(f, "Invalid number '{}' at {}", text, span)
             }
-            TokenError::InvalidOperatorSpacing { op, position } => {
-                write!(
-                    f,
-                    "Invalid spacing around operator '{}' at position {}",
-                    op, position
-                )
+            TokenError::InvalidOperatorSpacing { op, span } => {
+                write!(f, "Invalid spacing around operator '{}' at {}", op, span)
             }
         }
     }
@@ -46,12 +44,12 @@ impl TokenError {
         "Tokenization"
     }
 
-    pub fn position(&self) -> Option<usize> {
+    pub fn span(&self) -> Span {
         match self {
-            TokenError::UnexpectedCharacter { position, .. } => Some(*position),
-            TokenError::UnterminatedString { position } => Some(*position),
-            TokenError::InvalidNumber { position, .. } => Some(*position),
-            TokenError::InvalidOperatorSpacing { position, .. } => Some(*position),
+            TokenError::UnexpectedCharacter { span, .. } => *span,
+            TokenError::UnterminatedString { span } => *span,
+            TokenError::InvalidNumber { span, .. } => *span,
+            TokenError::InvalidOperatorSpacing { span, .. } => *span,
         }
     }
 

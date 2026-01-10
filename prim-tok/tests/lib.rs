@@ -1,4 +1,4 @@
-use prim_tok::{TokenError, TokenKind, Tokenizer};
+use prim_tok::{Span, TokenError, TokenKind, Tokenizer};
 
 #[test]
 fn test_simple_tokens() {
@@ -114,9 +114,9 @@ fn test_invalid_postfix_plus_spacing() {
     let result = tokenizer.tokenize();
 
     match result {
-        Err(TokenError::InvalidOperatorSpacing { op, position }) => {
+        Err(TokenError::InvalidOperatorSpacing { op, span }) => {
             assert_eq!(op, "+");
-            assert_eq!(position, 1);
+            assert_eq!(span, Span::new(1, 2));
         }
         _ => panic!(
             "Expected InvalidOperatorSpacing error for '+', got {:?}",
@@ -131,9 +131,9 @@ fn test_invalid_postfix_minus_spacing() {
     let result = tokenizer.tokenize();
 
     match result {
-        Err(TokenError::InvalidOperatorSpacing { op, position }) => {
+        Err(TokenError::InvalidOperatorSpacing { op, span }) => {
             assert_eq!(op, "-");
-            assert_eq!(position, 1);
+            assert_eq!(span, Span::new(1, 2));
         }
         _ => panic!(
             "Expected InvalidOperatorSpacing error for '-', got {:?}",
@@ -230,12 +230,13 @@ fn test_empty_string() {
 
 #[test]
 fn test_unterminated_string() {
-    let mut tokenizer = Tokenizer::new(r#"let s = "unterminated"#);
+    let input = r#"let s = "unterminated"#;
+    let mut tokenizer = Tokenizer::new(input);
     let result = tokenizer.tokenize();
 
     match result {
-        Err(TokenError::UnterminatedString { position }) => {
-            assert_eq!(position, 8); // Position of opening quote
+        Err(TokenError::UnterminatedString { span }) => {
+            assert_eq!(span, Span::new(8, input.len()));
         }
         _ => panic!("Expected UnterminatedString error, got {:?}", result),
     }
@@ -247,8 +248,8 @@ fn test_newline_in_string() {
     let result = tokenizer.tokenize();
 
     match result {
-        Err(TokenError::UnterminatedString { position }) => {
-            assert_eq!(position, 8); // Position of opening quote
+        Err(TokenError::UnterminatedString { span }) => {
+            assert_eq!(span, Span::new(8, 14)); // From opening quote to newline
         }
         _ => panic!("Expected UnterminatedString error, got {:?}", result),
     }
@@ -293,12 +294,13 @@ fn test_escaped_char_literals() {
 
 #[test]
 fn test_unterminated_char_literal() {
-    let mut tokenizer = Tokenizer::new("let c = 'a");
+    let input = "let c = 'a";
+    let mut tokenizer = Tokenizer::new(input);
     let result = tokenizer.tokenize();
 
     match result {
-        Err(TokenError::UnterminatedString { position }) => {
-            assert_eq!(position, 8); // Position of opening quote
+        Err(TokenError::UnterminatedString { span }) => {
+            assert_eq!(span, Span::new(8, input.len()));
         }
         _ => panic!("Expected UnterminatedString error, got {:?}", result),
     }

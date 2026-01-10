@@ -193,7 +193,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::TokenError(
                             prim_tok::TokenError::UnexpectedCharacter {
                                 ch: '@',
-                                position: tok.span.start(),
+                                span: tok.span,
                             },
                         ));
                     }
@@ -410,10 +410,11 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::At) => {
                 // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
+                let pos = self.position();
                 Err(ParseError::TokenError(
                     prim_tok::TokenError::UnexpectedCharacter {
                         ch: '@',
-                        position: self.position(),
+                        span: prim_tok::Span::new(pos, pos + 1),
                     },
                 ))
             }

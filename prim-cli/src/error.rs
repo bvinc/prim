@@ -93,7 +93,7 @@ impl PrimError for CompilerError {
 
     fn position(&self) -> Option<usize> {
         match self {
-            CompilerError::Token(err) => err.position(),
+            CompilerError::Token(err) => Some(err.span().start()),
             CompilerError::Parse(err) => err.position(),
             CompilerError::Codegen(err) => err.position(),
             CompilerError::TypeCheck(err) => err.position(),

@@ -104,7 +104,7 @@ impl ParseError {
         match self {
             ParseError::UnexpectedToken { position, .. } => Some(*position),
             ParseError::UnexpectedEof => None,
-            ParseError::TokenError(token_err) => token_err.position(),
+            ParseError::TokenError(token_err) => Some(token_err.span().start()),
             ParseError::MissingMainFunction => None,
             ParseError::StatementsOutsideFunction => None,
             ParseError::InvalidAttributeUsage { position, .. } => Some(*position),

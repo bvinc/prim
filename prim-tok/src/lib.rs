@@ -194,10 +194,13 @@ impl<'a> Tokenizer<'a> {
             Some(c) if c.is_ascii_alphabetic() || c == '_' => {
                 Ok(Some(self.read_identifier(start_pos)))
             }
-            Some(c) => Err(TokenError::UnexpectedCharacter {
-                ch: c,
-                position: start_pos,
-            }),
+            Some(c) => {
+                let end_pos = start_pos + c.len_utf8();
+                Err(TokenError::UnexpectedCharacter {
+                    ch: c,
+                    span: Span::new(start_pos, end_pos),
+                })
+            }
         }
     }
 
@@ -238,7 +241,7 @@ impl<'a> Tokenizer<'a> {
             _ => {
                 return Err(TokenError::InvalidOperatorSpacing {
                     op,
-                    position: start_pos,
+                    span: Span::new(start_pos, self.position),
                 });
             }
         };
@@ -333,7 +336,7 @@ impl<'a> Tokenizer<'a> {
         if !seen_digit {
             return Err(TokenError::InvalidNumber {
                 text: self.input[start_pos..self.position].to_string(),
-                position: start_pos,
+                span: Span::new(start_pos, self.position),
             });
         }
 
@@ -433,7 +436,7 @@ impl<'a> Tokenizer<'a> {
                 }
                 '\n' | '\r' => {
                     return Err(TokenError::UnterminatedString {
-                        position: start_pos,
+                        span: Span::new(start_pos, self.position),
                     });
                 }
                 _ => self.advance(),
@@ -441,7 +444,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         Err(TokenError::UnterminatedString {
-            position: start_pos,
+            span: Span::new(start_pos, self.position),
         })
     }
 
@@ -450,7 +453,7 @@ impl<'a> Tokenizer<'a> {
 
         if self.current.is_none() {
             return Err(TokenError::UnterminatedString {
-                position: start_pos,
+                span: Span::new(start_pos, self.position),
             });
         }
 
@@ -459,7 +462,7 @@ impl<'a> Tokenizer<'a> {
             self.advance(); // consume backslash
             if self.current.is_none() {
                 return Err(TokenError::UnterminatedString {
-                    position: start_pos,
+                    span: Span::new(start_pos, self.position),
                 });
             }
             self.advance(); // consume escaped character
@@ -470,7 +473,7 @@ impl<'a> Tokenizer<'a> {
         // Expect closing quote
         if self.current != Some('\'') {
             return Err(TokenError::UnterminatedString {
-                position: start_pos,
+                span: Span::new(start_pos, self.position),
             });
         }
 
