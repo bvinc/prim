@@ -250,10 +250,7 @@ impl<'a> Parser<'a> {
         }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
-                let token_span = {
-                    let token = self.advance();
-                    token.span
-                };
+                let token_span = self.advance().span;
                 let literal_text = token_span.text(self.source).to_string();
                 let (value, ty) = parse_int_literal(&literal_text, token_span)?;
                 Ok(Expr::IntLiteral {
@@ -263,10 +260,7 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::StringLiteral) => {
-                let token_span = {
-                    let token = self.advance();
-                    token.span
-                };
+                let token_span = self.advance().span;
                 Ok(Expr::StringLiteral {
                     span: token_span,
                     value: Self::unescape_string_literal(token_span.text(self.source)),
@@ -274,10 +268,7 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::FloatLiteral) => {
-                let token_span = {
-                    let token = self.advance();
-                    token.span
-                };
+                let token_span = self.advance().span;
                 let literal_text = token_span.text(self.source).to_string();
                 let (value, ty) = parse_float_literal(&literal_text, token_span)?;
                 Ok(Expr::FloatLiteral {
@@ -1072,7 +1063,6 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.current)
     }
 
-    #[inline]
     fn peek_kind(&self) -> Option<TokenKind> {
         self.tokens.get(self.current).map(|t| t.kind)
     }
@@ -1081,7 +1071,6 @@ impl<'a> Parser<'a> {
         &self.tokens[self.current - 1]
     }
 
-    #[inline]
     fn position(&self) -> usize {
         self.peek()
             .map(|t| t.span.start())

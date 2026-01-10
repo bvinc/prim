@@ -126,10 +126,6 @@ impl Expr {
         }
     }
 
-    pub fn resolved_type_cloned(&self) -> Type {
-        self.resolved_type().clone()
-    }
-
     pub fn span(&self) -> Span {
         match self {
             Expr::IntLiteral { span, .. }
