@@ -301,6 +301,11 @@ impl<'a> LoweringContext<'a> {
                 value: self.lower_expr(value, module, file_id),
                 span: self.span_id(*name, FileId(file_id.0)),
             },
+            Stmt::Assign { target, value } => HirStmt::Assign {
+                target: self.symbol_for_use(file_id, *target, Some(module)),
+                value: self.lower_expr(value, module, file_id),
+                span: self.span_id(*target, FileId(file_id.0)),
+            },
             Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, module, file_id)),
             Stmt::If {
                 condition,

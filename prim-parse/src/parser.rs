@@ -886,6 +886,25 @@ impl<'a> Parser<'a> {
             Some(TokenKind::If) => self.parse_if_statement(),
             Some(TokenKind::Loop) => self.parse_loop_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
+            Some(TokenKind::Identifier) => {
+                // Check if this is an assignment (identifier followed by '=')
+                // We need to look ahead to distinguish `x = value` from `x + y`
+                let saved_pos = self.current;
+                let ident_span = self.advance().span;
+                if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
+                    self.advance(); // consume '='
+                    let value = self.parse_expression(Precedence::NONE)?;
+                    Ok(Stmt::Assign {
+                        target: ident_span,
+                        value,
+                    })
+                } else {
+                    // Not an assignment, backtrack and parse as expression
+                    self.current = saved_pos;
+                    let expr = self.parse_expression(Precedence::NONE)?;
+                    Ok(Stmt::Expr(expr))
+                }
+            }
             _ => {
                 // Expression statement (no semicolon required)
                 let expr = self.parse_expression(Precedence::NONE)?;

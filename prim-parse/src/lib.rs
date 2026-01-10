@@ -189,6 +189,10 @@ pub enum Stmt {
         type_annotation: Option<Type>,
         value: Expr,
     },
+    Assign {
+        target: Span,
+        value: Expr,
+    },
     Expr(Expr),
     If {
         condition: Expr,

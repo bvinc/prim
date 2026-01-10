@@ -385,6 +385,25 @@ impl<'a> NameResolver<'a> {
                 });
                 local_scope.insert(name.text(source).to_string(), sym);
             }
+            Stmt::Assign { target, value } => {
+                self.resolve_expr(value, file_id, source, module_scope, local_scope);
+                // Look up the target in local scope - it must already be defined
+                let name = target.text(source);
+                if let Some(&sym) = local_scope.get(name) {
+                    // Record the use of the target symbol
+                    let key = NameRef {
+                        file: file_id,
+                        span: *target,
+                    };
+                    self.program.name_resolution.uses.insert(key, sym);
+                } else {
+                    self.errors.push(ResolveError::UnknownSymbol {
+                        name: name.to_string(),
+                        file: file_id,
+                        span: *target,
+                    });
+                }
+            }
             Stmt::Expr(expr) => {
                 self.resolve_expr(expr, file_id, source, module_scope, local_scope);
             }

@@ -240,6 +240,34 @@ impl<'a> Checker<'a> {
                 locals.insert(*name, ty.clone());
                 Ok(())
             }
+            HirStmt::Assign {
+                target,
+                value,
+                span,
+            } => {
+                // Look up the target's type
+                let target_ty = locals
+                    .get(target)
+                    .cloned()
+                    .ok_or_else(|| self.error(*span, TypeCheckKind::UndefinedSymbol(*target)))?;
+
+                // Propagate expected type to value
+                self.apply_expected(value, &target_ty);
+
+                let val_ty = self.check_expr(value, locals)?;
+
+                // Check type compatibility
+                if self.unify(&target_ty, &val_ty).is_none() {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: target_ty,
+                            found: val_ty,
+                        },
+                    ));
+                }
+                Ok(())
+            }
             HirStmt::Expr(expr) => {
                 self.check_expr(expr, locals)?;
                 Ok(())
@@ -659,6 +687,9 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(value.ty());
                 }
+            }
+            HirStmt::Assign { value, .. } => {
+                self.finalize_expr(value);
             }
             HirStmt::Expr(e) => self.finalize_expr(e),
             HirStmt::If {

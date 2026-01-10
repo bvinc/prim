@@ -1,0 +1,13 @@
+// Test mutable variable modified in conditional - exercises SSA phi nodes
+import std.io.println_i32
+
+fn main() {
+    let x = 1
+    let cond = 5 > 3
+    if cond {
+        x = 10
+    } else {
+        x = 20
+    }
+    println_i32(x)
+}

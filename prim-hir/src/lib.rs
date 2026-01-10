@@ -120,6 +120,11 @@ pub enum HirStmt {
         value: HirExpr,
         span: SpanId,
     },
+    Assign {
+        target: SymbolId,
+        value: HirExpr,
+        span: SpanId,
+    },
     Expr(HirExpr),
     If {
         condition: HirExpr,

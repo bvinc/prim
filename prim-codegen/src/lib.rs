@@ -233,7 +233,13 @@ impl CraneliftCodeGenerator {
 
         let abi_params = builder.block_params(entry).to_vec();
         let mut locals = VarEnv::new();
-        bind_params(&mut locals, &abi_params, func, &self.struct_layouts)?;
+        bind_params(
+            &mut builder,
+            &mut locals,
+            &abi_params,
+            func,
+            &self.struct_layouts,
+        )?;
 
         let mut last_val: Option<Vec<Value>> = None;
         let mut loop_exits: Vec<Block> = Vec::new();
@@ -285,7 +291,12 @@ impl CraneliftCodeGenerator {
         match stmt {
             prim_hir::HirStmt::Let { name, value, .. } => {
                 let vals = self.lower_expr(value, program, module_id, builder, locals)?;
-                locals.bind_local(*name, vals.clone());
+                locals.declare_local(builder, *name, vals);
+                Ok(StmtFlow::Continue)
+            }
+            prim_hir::HirStmt::Assign { target, value, .. } => {
+                let vals = self.lower_expr(value, program, module_id, builder, locals)?;
+                locals.assign_local(builder, *target, vals)?;
                 Ok(StmtFlow::Continue)
             }
             prim_hir::HirStmt::Expr(expr) => {
@@ -428,7 +439,7 @@ impl CraneliftCodeGenerator {
                 let _ = ty;
                 vec![ptr, len]
             }
-            prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(*symbol)?,
+            prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
             prim_hir::HirExpr::Binary {
                 op, left, right, ..
             } => {
@@ -689,6 +700,7 @@ fn abi_slot_count(
 }
 
 fn bind_params(
+    builder: &mut FunctionBuilder,
     locals: &mut VarEnv,
     abi_params: &[Value],
     func: &prim_hir::HirFunction,
@@ -700,7 +712,7 @@ fn bind_params(
         let slice = abi_params
             .get(idx..idx + slots)
             .expect("missing ABI parameter slots");
-        locals.bind_local(param.name, slice.to_vec());
+        locals.declare_local(builder, param.name, slice.to_vec());
         idx += slots;
     }
     Ok(())
@@ -732,7 +744,8 @@ fn make_string_data(
 }
 
 struct VarEnv {
-    locals: HashMap<prim_hir::SymbolId, Vec<Value>>,
+    /// Maps symbol to a list of Cranelift Variables (one per slot for structs).
+    locals: HashMap<prim_hir::SymbolId, Vec<Variable>>,
 }
 
 impl VarEnv {
@@ -742,15 +755,54 @@ impl VarEnv {
         }
     }
 
-    fn bind_local(&mut self, sym: prim_hir::SymbolId, values: Vec<Value>) {
-        self.locals.insert(sym, values);
+    /// Declare and initialize a new local variable binding.
+    fn declare_local(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        sym: prim_hir::SymbolId,
+        values: Vec<Value>,
+    ) {
+        let mut vars = Vec::with_capacity(values.len());
+        for val in values {
+            let ty = builder.func.dfg.value_type(val);
+            let var = builder.declare_var(ty);
+            builder.def_var(var, val);
+            vars.push(var);
+        }
+        self.locals.insert(sym, vars);
     }
 
-    fn use_symbol(&self, sym: prim_hir::SymbolId) -> Result<Vec<Value>, CodegenError> {
-        self.locals
+    /// Assign new values to an existing local variable.
+    fn assign_local(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        sym: prim_hir::SymbolId,
+        values: Vec<Value>,
+    ) -> Result<(), CodegenError> {
+        let vars = self
+            .locals
             .get(&sym)
-            .cloned()
-            .ok_or(CodegenError::UndefinedLocal(sym))
+            .ok_or(CodegenError::UndefinedLocal(sym))?;
+        if vars.len() != values.len() {
+            return Err(CodegenError::UndefinedLocal(sym));
+        }
+        for (var, val) in vars.iter().zip(values.iter()) {
+            builder.def_var(*var, *val);
+        }
+        Ok(())
+    }
+
+    /// Read the current values of a local variable.
+    fn use_symbol(
+        &self,
+        builder: &mut FunctionBuilder,
+        sym: prim_hir::SymbolId,
+    ) -> Result<Vec<Value>, CodegenError> {
+        let vars = self
+            .locals
+            .get(&sym)
+            .ok_or(CodegenError::UndefinedLocal(sym))?;
+        Ok(vars.iter().map(|v| builder.use_var(*v)).collect())
     }
 }
 
