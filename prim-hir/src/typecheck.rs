@@ -2,12 +2,13 @@ use crate::{
     BinaryOp, FileId, FuncId, HirExpr, HirFunction, HirProgram, HirStmt, SpanId, StructId,
     SymbolId, Type,
 };
+use prim_tok::Span;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeCheckError {
     pub file: FileId,
-    pub span: SpanId,
+    pub span: Span,
     pub kind: TypeCheckKind,
 }
 
@@ -68,7 +69,7 @@ impl TypeCheckError {
     }
 
     pub fn position(&self) -> Option<usize> {
-        Some(self.span.0 as usize)
+        Some(self.span.start())
     }
 
     pub fn context(&self) -> Option<&str> {
@@ -568,13 +569,13 @@ impl<'a> Checker<'a> {
         )
     }
 
-    fn error(&self, span: SpanId, kind: TypeCheckKind) -> TypeCheckError {
-        let file = self
+    fn error(&self, span_id: SpanId, kind: TypeCheckKind) -> TypeCheckError {
+        let (file, span) = self
             .program
-            .span_files
-            .get(span.0 as usize)
+            .spans
+            .get(span_id.0 as usize)
             .copied()
-            .expect("missing span file");
+            .expect("missing span");
         TypeCheckError { file, span, kind }
     }
 }

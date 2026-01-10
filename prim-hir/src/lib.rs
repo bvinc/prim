@@ -34,8 +34,7 @@ pub struct HirProgram {
     pub symbols: SymbolTable,
     pub main: Option<SymbolId>,
     pub files: Vec<FileInfo>,
-    pub spans: Vec<Span>,
-    pub span_files: Vec<FileId>,
+    pub spans: Vec<(FileId, Span)>,
 }
 
 #[derive(Clone, Debug)]

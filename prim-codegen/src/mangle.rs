@@ -53,11 +53,8 @@ pub(crate) fn string_literal_symbol(
         }
     }
     push_tag(&mut name, "K", "str");
-    let span_idx = span_id.0 as usize;
-    if let Some(file_id) = program.span_files.get(span_idx) {
+    if let Some((file_id, span)) = program.spans.get(span_id.0 as usize) {
         push_tag(&mut name, "F", &file_id.0.to_string());
-    }
-    if let Some(span) = program.spans.get(span_idx) {
         use std::fmt::Write;
         let _ = write!(name, "$S{}_{}", span.start(), span.end());
     }
@@ -109,8 +106,7 @@ mod tests {
                 path: PathBuf::from("dummy.prim"),
                 source: String::new(),
             }],
-            spans: vec![Span::new(0, 0)],
-            span_files: vec![FileId(0)],
+            spans: vec![(FileId(0), Span::new(0, 0))],
         }
     }
 
@@ -132,8 +128,7 @@ mod tests {
             "main",
             SymbolKind::Function(prim_hir::FuncId(0)),
         );
-        program.spans = vec![Span::new(5, 9)];
-        program.span_files = vec![FileId(7)];
+        program.spans = vec![(FileId(7), Span::new(5, 9))];
         let got = string_literal_symbol(&program, ModuleId(0), SpanId(0), 4);
         assert_eq!(got, "prim$M3_app$Kstr$F7$S5_9$B4");
     }

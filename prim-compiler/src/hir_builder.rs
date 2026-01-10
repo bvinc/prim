@@ -16,7 +16,7 @@ pub fn lower_to_hir(program: &Program) -> HirProgram {
 
 struct LoweringContext<'a> {
     program: &'a Program,
-    spans: Vec<Span>,
+    spans: Vec<(FileId, Span)>,
     files: Vec<FileInfo>,
     symbols: SymbolTable,
     items: Items,
@@ -29,7 +29,6 @@ struct LoweringContext<'a> {
     def_lookup: HashMap<(ProgFileId, Span), ResSymbolId>,
     uses: &'a HashMap<NameRef, ResSymbolId>,
     symbols_info: &'a [SymbolInfo],
-    span_files: Vec<FileId>,
     stdlib_str_struct: Option<StructId>,
 }
 
@@ -43,7 +42,6 @@ impl<'a> LoweringContext<'a> {
             .map(|m| m + 1)
             .unwrap_or(0);
         let mut files = vec![None; max_file];
-        let span_files = Vec::new();
         for module in &program.modules {
             for file in &module.files {
                 let id = FileId(file.file_id.0);
@@ -82,7 +80,6 @@ impl<'a> LoweringContext<'a> {
             def_lookup,
             uses: &program.name_resolution.uses,
             symbols_info: &program.name_resolution.symbols,
-            span_files,
             stdlib_str_struct: None,
         }
     }
@@ -259,7 +256,6 @@ impl<'a> LoweringContext<'a> {
             main: self.main,
             files: self.files,
             spans: self.spans,
-            span_files: self.span_files,
         }
     }
 
@@ -460,8 +456,7 @@ impl<'a> LoweringContext<'a> {
 
     fn span_id(&mut self, span: Span, file: FileId) -> SpanId {
         let id = SpanId(self.spans.len() as u32);
-        self.spans.push(span);
-        self.span_files.push(file);
+        self.spans.push((file, span));
         id
     }
 
