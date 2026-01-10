@@ -266,13 +266,9 @@ impl CraneliftCodeGenerator {
                 Ok(StmtFlow::Value(vals))
             }
             prim_hir::HirStmt::Loop { body, .. } => {
-                let header = builder.create_block();
                 let body_block = builder.create_block();
                 let exit = builder.create_block();
-                builder.ins().jump(header, &[]);
-                builder.switch_to_block(header);
                 builder.ins().jump(body_block, &[]);
-                builder.seal_block(header);
 
                 builder.switch_to_block(body_block);
                 loop_exits.push(exit);
@@ -290,7 +286,7 @@ impl CraneliftCodeGenerator {
                 }
                 loop_exits.pop();
                 if !terminated {
-                    builder.ins().jump(header, &[]);
+                    builder.ins().jump(body_block, &[]);
                 }
                 builder.seal_block(body_block);
 
