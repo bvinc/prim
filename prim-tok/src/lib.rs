@@ -226,7 +226,7 @@ impl<'a> Tokenizer<'a> {
             self.advance();
         }
         let spacing =
-            self.operator_spacing(left_space, self.current.is_some_and(is_whitespace_char));
+            Self::operator_spacing(left_space, self.current.is_some_and(is_whitespace_char));
         let kind = match (op, spacing) {
             ("+", OperatorSpacing::Prefix) => TokenKind::UnaryPlus,
             ("+", OperatorSpacing::Infix) => TokenKind::Plus,
@@ -251,7 +251,7 @@ impl<'a> Tokenizer<'a> {
         }))
     }
 
-    fn operator_spacing(&self, left_space: bool, right_space: bool) -> OperatorSpacing {
+    fn operator_spacing(left_space: bool, right_space: bool) -> OperatorSpacing {
         match (left_space, right_space) {
             (true, false) => OperatorSpacing::Prefix,
             (false, true) => OperatorSpacing::Postfix,
