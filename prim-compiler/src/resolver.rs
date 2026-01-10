@@ -39,6 +39,19 @@ pub enum ResolveError {
     },
 }
 
+impl ResolveError {
+    pub fn span(&self) -> Span {
+        match self {
+            ResolveError::DuplicateSymbol { span, .. }
+            | ResolveError::UnknownSymbol { span, .. }
+            | ResolveError::UnknownFunction { span, .. }
+            | ResolveError::UnknownStruct { span, .. }
+            | ResolveError::UnknownField { span, .. }
+            | ResolveError::UnknownType { span, .. } => *span,
+        }
+    }
+}
+
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

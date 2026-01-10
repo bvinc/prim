@@ -1,1 +1,1 @@
-ERROR: Type check error: Invalid binary operands for '+' (left: bool, right: bool)
+ERROR: Invalid binary operands for '+' (left: bool, right: bool)

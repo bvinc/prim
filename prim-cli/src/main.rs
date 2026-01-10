@@ -1,5 +1,6 @@
 use prim_codegen::generate_object_code;
-use prim_compiler::{CompileError, HirProgram, compile, prim_root};
+use prim_compiler::{CompileError, HirProgram, LoadError, compile, prim_root};
+use prim_tok::{Span, byte_offset_to_line_col};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -193,21 +194,39 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
 
 fn compile_source(path: &str) -> Result<(HirProgram, Duration), MainError> {
     let start = Instant::now();
-    let hir = compile(path).map_err(|err| match err {
-        CompileError::Load(err) => MainError::CompilationError(format!("Load error: {}", err)),
-        CompileError::TypeCheck(err) => {
-            MainError::CompilationError(format!("Type check error: {}", err))
-        }
-        CompileError::Resolve(errors) => {
-            let mut msg = format!("Name resolution error(s): {}", errors.len());
-            for err in errors {
-                msg.push_str(&format!("\n- {}", err));
-            }
-            MainError::CompilationError(msg)
-        }
-    })?;
+    let source = fs::read_to_string(path)?;
+    let hir = compile(path).map_err(|err| format_compile_error(path, &source, err))?;
     let duration = start.elapsed();
     Ok((hir, duration))
+}
+
+fn format_compile_error(path: &str, source: &str, err: CompileError) -> MainError {
+    let msg = match err {
+        CompileError::Load(LoadError::Parse(e)) => format_with_span(path, source, e.span(), &e),
+        CompileError::Load(e) => e.to_string(),
+        CompileError::TypeCheck(e) => format_with_span(path, source, Some(e.span), &e),
+        CompileError::Resolve(errors) => errors
+            .iter()
+            .map(|e| format_with_span(path, source, Some(e.span()), e))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    MainError::CompilationError(msg)
+}
+
+fn format_with_span(
+    path: &str,
+    source: &str,
+    span: Option<Span>,
+    msg: &impl std::fmt::Display,
+) -> String {
+    match span {
+        Some(s) => {
+            let (line, col) = byte_offset_to_line_col(source, s.start());
+            format!("{}:{}:{}: {}", path, line, col, msg)
+        }
+        None => format!("{}: {}", path, msg),
+    }
 }
 
 /// Link object code into an executable

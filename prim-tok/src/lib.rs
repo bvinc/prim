@@ -2,7 +2,7 @@ mod error;
 pub use error::TokenError;
 
 mod span;
-pub use span::Span;
+pub use span::{Span, byte_offset_to_line_col};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenKind {

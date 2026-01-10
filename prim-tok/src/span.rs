@@ -62,6 +62,29 @@ impl Span {
         );
         self.end = end;
     }
+
+    /// Convert the start position to (line, column), both 1-based.
+    pub fn line_col(&self, source: &str) -> (usize, usize) {
+        byte_offset_to_line_col(source, self.start)
+    }
+}
+
+/// Convert a byte offset to (line, column), both 1-based.
+pub fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
 }
 
 impl From<Range<usize>> for Span {

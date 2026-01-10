@@ -1,1 +1,1 @@
-ERROR: Type mismatch
+ERROR: Type mismatch: expected bool, found i64
