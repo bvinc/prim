@@ -1,0 +1,4 @@
+// Test error: cannot mix integer and float in binary operation
+fn main() {
+    let x = 1 + 2.0
+}

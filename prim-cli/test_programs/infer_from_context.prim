@@ -1,0 +1,22 @@
+// Test bidirectional inference: type flows from context to literals
+import std.io.println_u64
+import std.io.println_i8
+import std.io.println_f32
+
+fn main() {
+    // Type annotation propagates to unsuffixed literal
+    let a: u64 = 100
+    println_u64(a)
+
+    // Type annotation propagates through binary op
+    let b: i8 = 10 + 5
+    println_i8(b)
+
+    // Float annotation propagates to float literal
+    let c: f32 = 2.5
+    println_f32(c)
+
+    // Mixed: one suffixed, one unsuffixed - unsuffixed takes suffixed type
+    let d: u64 = 50u64 + 25
+    println_u64(d)
+}

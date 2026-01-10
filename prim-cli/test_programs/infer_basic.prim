@@ -1,0 +1,21 @@
+// Test basic type inference: unsuffixed literals default to i32/f64
+import std.io.println_i32
+import std.io.println_f64
+
+fn main() {
+    // Unsuffixed integer defaults to i32
+    let a = 42
+    println_i32(a)
+
+    // Unsuffixed float defaults to f64
+    let b = 3.14
+    println_f64(b)
+
+    // Binary ops with unsuffixed literals default to i32
+    let c = 10 + 20
+    println_i32(c)
+
+    // Nested binary ops
+    let d = 1 + 2 * 3 - 4
+    println_i32(d)
+}

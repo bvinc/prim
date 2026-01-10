@@ -1,0 +1,23 @@
+// Test inference from function parameter types
+import std.io.println_i64
+
+fn add_i64(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn double(x: i64) -> i64 {
+    x * 2
+}
+
+fn main() {
+    // Unsuffixed literals inferred as i64 from parameter types
+    let result = add_i64(100, 200)
+    println_i64(result)
+
+    // Nested call with inference
+    let doubled = double(add_i64(5, 10))
+    println_i64(doubled)
+
+    // Direct call with unsuffixed literal
+    println_i64(add_i64(1, 2))
+}

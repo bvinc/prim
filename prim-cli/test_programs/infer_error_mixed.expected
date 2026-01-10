@@ -1,0 +1,1 @@
+ERROR: Invalid binary operands for '+' (left: {integer}, right: {float})
