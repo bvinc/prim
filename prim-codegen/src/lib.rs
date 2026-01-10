@@ -206,12 +206,12 @@ impl CraneliftCodeGenerator {
 
         let abi_params = builder.block_params(entry).to_vec();
         let mut locals = VarEnv::new();
-        bind_params_static(&mut locals, &abi_params, func, &self.struct_layouts)?;
+        bind_params(&mut locals, &abi_params, func, &self.struct_layouts)?;
 
         let mut last_val: Option<Vec<Value>> = None;
         let mut loop_exits: Vec<Block> = Vec::new();
         for stmt in &func.body.stmts {
-            let flow = self.lower_stmt_static(
+            let flow = self.lower_stmt(
                 stmt,
                 program,
                 func.module,
@@ -245,7 +245,7 @@ impl CraneliftCodeGenerator {
         Ok(())
     }
 
-    fn lower_stmt_static(
+    fn lower_stmt(
         &mut self,
         stmt: &prim_hir::HirStmt,
         program: &HirProgram,
@@ -256,12 +256,12 @@ impl CraneliftCodeGenerator {
     ) -> Result<StmtFlow, CodegenError> {
         match stmt {
             prim_hir::HirStmt::Let { name, value, .. } => {
-                let vals = self.lower_expr_static(value, program, module_id, builder, locals)?;
+                let vals = self.lower_expr(value, program, module_id, builder, locals)?;
                 locals.bind_local(*name, vals.clone());
                 Ok(StmtFlow::Continue)
             }
             prim_hir::HirStmt::Expr(expr) => {
-                let vals = self.lower_expr_static(expr, program, module_id, builder, locals)?;
+                let vals = self.lower_expr(expr, program, module_id, builder, locals)?;
                 Ok(StmtFlow::Value(vals))
             }
             prim_hir::HirStmt::Loop { body, .. } => {
@@ -278,7 +278,7 @@ impl CraneliftCodeGenerator {
                 let mut terminated = false;
                 for s in &body.stmts {
                     let flow =
-                        self.lower_stmt_static(s, program, module_id, builder, locals, loop_exits)?;
+                        self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
                     match flow {
                         StmtFlow::Terminated => {
                             terminated = true;
@@ -308,7 +308,7 @@ impl CraneliftCodeGenerator {
         }
     }
 
-    fn lower_expr_static(
+    fn lower_expr(
         &mut self,
         expr: &prim_hir::HirExpr,
         program: &HirProgram,
@@ -334,7 +334,7 @@ impl CraneliftCodeGenerator {
                 vec![v]
             }
             prim_hir::HirExpr::Str { value, ty, span } => {
-                let (ptr, len) = make_string_data_static(
+                let (ptr, len) = make_string_data(
                     builder,
                     &mut self.module,
                     program,
@@ -349,8 +349,8 @@ impl CraneliftCodeGenerator {
             prim_hir::HirExpr::Binary {
                 op, left, right, ..
             } => {
-                let l = self.lower_expr_static(left, program, module_id, builder, locals)?;
-                let r = self.lower_expr_static(right, program, module_id, builder, locals)?;
+                let l = self.lower_expr(left, program, module_id, builder, locals)?;
+                let r = self.lower_expr(right, program, module_id, builder, locals)?;
                 let (l, r) = (l[0], r[0]);
                 let res = match op {
                     prim_hir::BinaryOp::Add => builder.ins().iadd(l, r),
@@ -374,8 +374,7 @@ impl CraneliftCodeGenerator {
                 let callee = self.module.declare_func_in_func(target, builder.func);
                 let mut lowered_args = Vec::new();
                 for a in args {
-                    lowered_args
-                        .extend(self.lower_expr_static(a, program, module_id, builder, locals)?);
+                    lowered_args.extend(self.lower_expr(a, program, module_id, builder, locals)?);
                 }
                 if let Some(params) = self.func_params.get(func) {
                     if lowered_args.len() != params.len() {
@@ -407,7 +406,7 @@ impl CraneliftCodeGenerator {
                     .ok_or(CodegenError::MissingStructLayout(*struct_id))?;
                 let mut provided: HashMap<prim_hir::SymbolId, Value> = HashMap::new();
                 for (field_sym, expr) in fields {
-                    let vals = self.lower_expr_static(expr, program, module_id, builder, locals)?;
+                    let vals = self.lower_expr(expr, program, module_id, builder, locals)?;
                     let v = *vals.first().ok_or(CodegenError::MissingStructValue {
                         struct_id: *struct_id,
                         field: *field_sym,
@@ -445,8 +444,7 @@ impl CraneliftCodeGenerator {
                 values
             }
             prim_hir::HirExpr::Field { base, field, .. } => {
-                let base_vals =
-                    self.lower_expr_static(base, program, module_id, builder, locals)?;
+                let base_vals = self.lower_expr(base, program, module_id, builder, locals)?;
                 let struct_id = base
                     .ty()
                     .as_struct()
@@ -471,7 +469,7 @@ impl CraneliftCodeGenerator {
                 vec![val]
             }
             prim_hir::HirExpr::Deref { base, .. } => {
-                let ptr = self.lower_expr_static(base, program, module_id, builder, locals)?[0];
+                let ptr = self.lower_expr(base, program, module_id, builder, locals)?[0];
                 let pointee = match base.ty() {
                     prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
                     _ => return Err(CodegenError::InvalidDereference),
@@ -491,7 +489,7 @@ impl CraneliftCodeGenerator {
                     vec![builder.ins().iconst(types::I64, 0)]
                 } else {
                     // For now, return the first element value as a stand-in.
-                    self.lower_expr_static(&elements[0], program, module_id, builder, locals)?
+                    self.lower_expr(&elements[0], program, module_id, builder, locals)?
                 }
             }
         })
@@ -593,7 +591,7 @@ fn abi_slot_count(
     }
 }
 
-fn bind_params_static(
+fn bind_params(
     locals: &mut VarEnv,
     abi_params: &[Value],
     func: &prim_hir::HirFunction,
@@ -617,7 +615,7 @@ enum StmtFlow {
     Terminated,
 }
 
-fn make_string_data_static(
+fn make_string_data(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
     program: &HirProgram,
