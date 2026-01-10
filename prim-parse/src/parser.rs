@@ -17,7 +17,6 @@ impl Precedence {
     pub const MULTIPLICATION: Precedence = Precedence(30); // * /
     pub const UNARY: Precedence = Precedence(40); // -x
     pub const CALL: Precedence = Precedence(50); // func()
-    pub const PRIMARY: Precedence = Precedence(60); // literals, identifiers
 }
 
 pub struct Parser<'a> {

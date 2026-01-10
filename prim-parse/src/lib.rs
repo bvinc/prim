@@ -9,12 +9,11 @@ pub use error::{Diagnostic, ParseError, Severity};
 pub use prim_tok::Span;
 
 mod number;
-pub mod parser;
+mod parser;
+use parser::Parser;
 
-pub use parser::Parser;
-
-pub type InternSymbol = SymbolU32;
-pub type Interner = StringInterner<BufferBackend<InternSymbol>>;
+type InternSymbol = SymbolU32;
+type Interner = StringInterner<BufferBackend<InternSymbol>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerMutability {

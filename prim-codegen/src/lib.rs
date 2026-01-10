@@ -10,7 +10,7 @@ pub mod error;
 mod mangle;
 pub use error::CodegenError;
 
-pub struct CraneliftCodeGenerator {
+struct CraneliftCodeGenerator {
     module: ObjectModule,
     pointer_type: cranelift::prelude::Type,
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,

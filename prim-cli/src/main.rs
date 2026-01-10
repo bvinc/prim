@@ -119,48 +119,31 @@ fn build_program(filename: &str) -> Result<(), MainError> {
     let (hir, compile_dur) = compile_source(filename)?;
     let link_start = Instant::now();
 
-    // Generate object code directly using Cranelift
     let object_code = generate_object_code(&hir)
         .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
 
-    // Create executable name from source file name
     let executable_name = filename.trim_end_matches(".prim");
     let obj_filename = format!("{}.o", executable_name);
 
-    // Write object code to file
     fs::write(&obj_filename, &object_code)?;
+    link_executable(&obj_filename, executable_name)?;
 
-    // Ensure runtime is built and link it so it provides the C `main` symbol
-    let rt_lib = runtime_lib_path()?;
-    let link_output = Command::new("gcc")
-        .args([&obj_filename, rt_lib.to_string_lossy().as_ref(), "-o", executable_name])
-        .output()
-        .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
+    let link_dur = link_start.elapsed();
+    println!("Successfully built executable: {}", executable_name);
+    println!(
+        "[timing] compile: {} ms, link: {} ms",
+        compile_dur.as_millis(),
+        link_dur.as_millis()
+    );
 
-    if link_output.status.success() {
-        let link_dur = link_start.elapsed();
-        println!("Successfully built executable: {}", executable_name);
-        println!(
-            "[timing] compile: {} ms, link: {} ms",
-            compile_dur.as_millis(),
-            link_dur.as_millis()
+    // Clean up object file
+    if let Err(err) = fs::remove_file(&obj_filename) {
+        eprintln!(
+            "Warning: Could not clean up object file {}: {}",
+            obj_filename, err
         );
-
-        // Clean up object file
-        if let Err(err) = fs::remove_file(&obj_filename) {
-            eprintln!(
-                "Warning: Could not clean up object file {}: {}",
-                obj_filename, err
-            );
-        }
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&link_output.stderr);
-        Err(MainError::LinkingError(format!(
-            "Linking failed: {}",
-            stderr
-        )))
     }
+    Ok(())
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
@@ -188,20 +171,8 @@ fn run_program(filename: &str) -> Result<i32, MainError> {
     // Write object code to temporary file
     fs::write(&obj_filename, &object_code)?;
 
-    // Ensure runtime is built and link it so it provides the C `main` symbol
-    let rt_lib = runtime_lib_path()?;
-    let link_output = Command::new("gcc")
-        .args([&obj_filename, rt_lib.to_string_lossy().as_ref(), "-o", &executable_name])
-        .output()
-        .map_err(|err| MainError::LinkingError(format!("Error running linker: {}. Make sure GNU binutils (ld) is installed and in your PATH", err)))?;
-
-    if !link_output.status.success() {
-        let stderr = String::from_utf8_lossy(&link_output.stderr);
-        return Err(MainError::LinkingError(format!(
-            "Linking failed: {}",
-            stderr
-        )));
-    }
+    // Link the object code with the runtime
+    link_executable(&obj_filename, &executable_name)?;
 
     // Run the program immediately
     let run_result = Command::new(&executable_name)
@@ -237,6 +208,30 @@ fn compile_source(path: &str) -> Result<(HirProgram, Duration), MainError> {
     })?;
     let duration = start.elapsed();
     Ok((hir, duration))
+}
+
+/// Link object code into an executable
+fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), MainError> {
+    let rt_lib = runtime_lib_path()?;
+    let output = Command::new("gcc")
+        .args([obj_path, rt_lib.to_string_lossy().as_ref(), "-o", exe_path])
+        .output()
+        .map_err(|err| {
+            MainError::LinkingError(format!(
+                "Error running linker: {}. Make sure gcc is installed and in your PATH",
+                err
+            ))
+        })?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(MainError::LinkingError(format!(
+            "Linking failed: {}",
+            stderr
+        )))
+    }
 }
 
 /// Return a path to the runtime static library
