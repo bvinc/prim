@@ -55,6 +55,8 @@ impl From<prim_parse::ParseError> for LoadError {
 pub struct LoadOptions {
     /// Automatically include the standard prelude when compiling a single file.
     pub include_prelude: bool,
+    /// Optional override for the prim root directory. Defaults to `PRIM_ROOT` env var or exe-relative discovery.
+    pub prim_root: Option<PathBuf>,
     /// Optional override for the std root. Defaults to `<prim_root>/src` (or `<prim_root>/prim-std/src` as a fallback).
     pub std_root: Option<PathBuf>,
 }
@@ -63,6 +65,7 @@ impl Default for LoadOptions {
     fn default() -> Self {
         Self {
             include_prelude: true,
+            prim_root: None,
             std_root: None,
         }
     }
@@ -92,7 +95,10 @@ pub fn load_program_with_options(
     options: LoadOptions,
 ) -> Result<LoadedProgram, LoadError> {
     let entry_path = entry_path.as_ref();
-    let prim_root = prim_root_from_env_or_exe()?;
+    let prim_root = match &options.prim_root {
+        Some(root) => root.clone(),
+        None => prim_root_from_env_or_exe()?,
+    };
     let default_std_root = default_std_root(&prim_root);
     let std_root = options.std_root.clone().unwrap_or(default_std_root);
 

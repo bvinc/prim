@@ -1,90 +1,105 @@
 mod common;
 use common::staged_prim_root;
+use prim::compile_and_run_with_root;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
-
-fn prim_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_prim"))
-}
 
 fn run_test_program(prim_path: &Path, expected_path: &Path) {
+    let prim_root = staged_prim_root();
+
     // Read expected output
     let expected = fs::read_to_string(expected_path)
         .unwrap_or_else(|_| panic!("Failed to read expected file: {}", expected_path.display()))
         .trim()
         .to_string();
 
-    // Run the prim program
-    let prim_root = staged_prim_root();
-    let output = Command::new(prim_bin())
-        .args(["run", prim_path.to_string_lossy().as_ref()])
-        .env("PRIM_ROOT", prim_root.to_string_lossy().as_ref())
-        .output()
-        .unwrap_or_else(|_| {
-            panic!(
-                "Failed to execute prim compiler for: {}",
-                prim_path.display()
-            )
-        });
+    // Compile and run in-process with explicit prim_root
+    let result =
+        compile_and_run_with_root(prim_path.to_str().expect("valid path"), Some(&prim_root));
 
     // Handle different expected outcomes
     if let Some(message) = expected.strip_prefix("ERROR: ") {
-        assert!(
-            !output.status.success(),
-            "Program {} should have failed but succeeded",
-            prim_path.display()
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(message),
-            "Expected error message '{}' in stderr, got: {}",
-            message,
-            stderr
-        );
+        match result {
+            Ok(output) => {
+                // Program ran, but we expected a compile error - check if it might be a runtime error
+                if output.exit_code != 0 && output.stderr.contains(message) {
+                    // Runtime error matched
+                    return;
+                }
+                panic!(
+                    "Program {} should have failed but succeeded with output: {}",
+                    prim_path.display(),
+                    output.stdout
+                );
+            }
+            Err(err) => {
+                let err_msg = err.to_string();
+                assert!(
+                    err_msg.contains(message),
+                    "Expected error message '{}' in error, got: {}",
+                    message,
+                    err_msg
+                );
+            }
+        }
     } else if expected == "PARSE_ERROR" {
-        // Should fail to parse
         assert!(
-            !output.status.success(),
+            result.is_err(),
             "Program {} should have failed to parse but succeeded",
             prim_path.display()
         );
     } else if expected == "COMPILE_ERROR" {
         assert!(
-            !output.status.success(),
+            result.is_err(),
             "Program {} should have failed to compile but succeeded",
             prim_path.display()
         );
     } else if expected == "RUNTIME_ERROR" {
-        // Should compile but fail at runtime
-        assert!(
-            !output.status.success(),
-            "Program {} should have failed at runtime but succeeded",
-            prim_path.display()
-        );
+        match result {
+            Ok(output) => {
+                assert!(
+                    output.exit_code != 0,
+                    "Program {} should have failed at runtime but exited with code 0",
+                    prim_path.display()
+                );
+            }
+            Err(_) => {
+                // Compile error is also acceptable for RUNTIME_ERROR expectation
+                // (the test is saying "this should fail somewhere")
+            }
+        }
     } else {
         // Should succeed and produce expected output
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            panic!(
-                "Program {} failed unexpectedly.\nStdout: {}\nStderr: {}",
-                prim_path.display(),
-                stdout,
-                stderr
-            );
-        }
+        match result {
+            Ok(output) => {
+                if output.exit_code != 0 {
+                    panic!(
+                        "Program {} failed with exit code {}.\nStdout: {}\nStderr: {}",
+                        prim_path.display(),
+                        output.exit_code,
+                        output.stdout,
+                        output.stderr
+                    );
+                }
 
-        let actual = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(
-            actual,
-            expected,
-            "Program {} produced wrong output.\nExpected: '{}'\nActual: '{}'",
-            prim_path.display(),
-            expected,
-            actual
-        );
+                let actual = output.stdout.trim().to_string();
+                assert_eq!(
+                    actual,
+                    expected,
+                    "Program {} produced wrong output.\nExpected: '{}'\nActual: '{}'",
+                    prim_path.display(),
+                    expected,
+                    actual
+                );
+            }
+            Err(err) => {
+                panic!(
+                    "Program {} failed unexpectedly: {}",
+                    prim_path.display(),
+                    err
+                );
+            }
+        }
     }
 }
 

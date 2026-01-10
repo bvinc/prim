@@ -1,11 +1,7 @@
+use prim::{RunError, compile_and_run, compile_source, link_executable};
 use prim_codegen::generate_object_code;
-use prim_compiler::{CompileError, HirProgram, LoadError, compile, prim_root};
-use prim_tok::{Span, byte_offset_to_line_col};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Debug)]
@@ -13,10 +9,7 @@ enum MainError {
     InsufficientArguments,
     InvalidUsage(String),
     UnknownCommand(String),
-    CompilationError(String),
-    IoError(std::io::Error),
-    LinkingError(String),
-    ExecutionError(String),
+    Run(RunError),
 }
 
 impl std::fmt::Display for MainError {
@@ -25,19 +18,16 @@ impl std::fmt::Display for MainError {
             MainError::InsufficientArguments => write!(f, "Insufficient arguments provided"),
             MainError::InvalidUsage(usage) => write!(f, "{}", usage),
             MainError::UnknownCommand(cmd) => write!(f, "Unknown command: {}", cmd),
-            MainError::CompilationError(msg) => write!(f, "Compilation error: {}", msg),
-            MainError::IoError(err) => write!(f, "IO error: {}", err),
-            MainError::LinkingError(msg) => write!(f, "Linking error: {}", msg),
-            MainError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
+            MainError::Run(err) => write!(f, "{}", err),
         }
     }
 }
 
 impl std::error::Error for MainError {}
 
-impl From<std::io::Error> for MainError {
-    fn from(err: std::io::Error) -> Self {
-        MainError::IoError(err)
+impl From<RunError> for MainError {
+    fn from(err: RunError) -> Self {
+        MainError::Run(err)
     }
 }
 
@@ -117,16 +107,18 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let (hir, compile_dur) = compile_source(filename)?;
-    let link_start = Instant::now();
+    let compile_start = Instant::now();
+    let hir = compile_source(filename)?;
+    let compile_dur = compile_start.elapsed();
 
+    let link_start = Instant::now();
     let object_code = generate_object_code(&hir)
-        .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
+        .map_err(|err| RunError::CompilationError(format!("Code generation error: {}", err)))?;
 
     let executable_name = filename.trim_end_matches(".prim");
     let obj_filename = format!("{}.o", executable_name);
 
-    fs::write(&obj_filename, &object_code)?;
+    fs::write(&obj_filename, &object_code).map_err(RunError::IoError)?;
     link_executable(&obj_filename, executable_name)?;
 
     let link_dur = link_start.elapsed();
@@ -148,128 +140,12 @@ fn build_program(filename: &str) -> Result<(), MainError> {
 }
 
 fn run_program(filename: &str) -> Result<i32, MainError> {
-    let (hir, _) = compile_source(filename)?;
+    let output = compile_and_run(filename)?;
 
-    // Generate object code directly using Cranelift
-    let object_code = generate_object_code(&hir)
-        .map_err(|err| MainError::CompilationError(format!("Code generation error: {}", err)))?;
-
-    // Create temporary files for object code and executable
-    let temp_obj = tempfile::Builder::new()
-        .suffix(".o")
-        .tempfile()
-        .map_err(MainError::IoError)?;
-    let obj_filename = temp_obj.path().to_string_lossy().to_string();
-
-    // Create a unique temporary file path for the executable
-    // We use tempfile to get a unique name, then convert to a persistent path
-    let temp_exe_file = tempfile::Builder::new()
-        .tempfile()
-        .map_err(MainError::IoError)?;
-    let temp_exe_path = temp_exe_file.into_temp_path();
-    let executable_name = temp_exe_path.to_string_lossy().to_string();
-
-    // Write object code to temporary file
-    fs::write(&obj_filename, &object_code)?;
-
-    // Link the object code with the runtime
-    link_executable(&obj_filename, &executable_name)?;
-
-    // Run the program immediately
-    let run_result = Command::new(&executable_name)
-        .output()
-        .map_err(|err| MainError::ExecutionError(format!("Error running program: {}", err)))?;
-
-    // Print program output
-    print!("{}", String::from_utf8_lossy(&run_result.stdout));
-    if !run_result.stderr.is_empty() {
-        eprint!("{}", String::from_utf8_lossy(&run_result.stderr));
+    print!("{}", output.stdout);
+    if !output.stderr.is_empty() {
+        eprint!("{}", output.stderr);
     }
 
-    // Temporary files will be automatically cleaned up when temp_obj and temp_exe_path drop
-
-    // Return the same exit code as the executed program
-    Ok(run_result.status.code().unwrap_or(0))
-}
-
-fn compile_source(path: &str) -> Result<(HirProgram, Duration), MainError> {
-    let start = Instant::now();
-    let source = fs::read_to_string(path)?;
-    let hir = compile(path).map_err(|err| format_compile_error(path, &source, err))?;
-    let duration = start.elapsed();
-    Ok((hir, duration))
-}
-
-fn format_compile_error(path: &str, source: &str, err: CompileError) -> MainError {
-    let msg = match err {
-        CompileError::Load(LoadError::Parse(e)) => format_with_span(path, source, e.span(), &e),
-        CompileError::Load(e) => e.to_string(),
-        CompileError::TypeCheck(e) => format_with_span(path, source, Some(e.span), &e),
-        CompileError::Resolve(errors) => errors
-            .iter()
-            .map(|e| format_with_span(path, source, Some(e.span()), e))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    };
-    MainError::CompilationError(msg)
-}
-
-fn format_with_span(
-    path: &str,
-    source: &str,
-    span: Option<Span>,
-    msg: &impl std::fmt::Display,
-) -> String {
-    match span {
-        Some(s) => {
-            let (line, col) = byte_offset_to_line_col(source, s.start());
-            format!("{}:{}:{}: {}", path, line, col, msg)
-        }
-        None => format!("{}: {}", path, msg),
-    }
-}
-
-/// Link object code into an executable
-fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), MainError> {
-    let rt_lib = runtime_lib_path()?;
-    let output = Command::new("gcc")
-        .args([obj_path, rt_lib.to_string_lossy().as_ref(), "-o", exe_path])
-        .output()
-        .map_err(|err| {
-            MainError::LinkingError(format!(
-                "Error running linker: {}. Make sure gcc is installed and in your PATH",
-                err
-            ))
-        })?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(MainError::LinkingError(format!(
-            "Linking failed: {}",
-            stderr
-        )))
-    }
-}
-
-/// Return a path to the runtime static library
-fn runtime_lib_path() -> Result<PathBuf, MainError> {
-    let prim_root = prim_root().map_err(|e| MainError::CompilationError(e.to_string()))?;
-
-    let staticlib_name = if cfg!(target_os = "windows") {
-        "prim_rt.lib"
-    } else {
-        "libprim_rt.a"
-    };
-
-    let staticlib_path = prim_root.join("lib").join(staticlib_name);
-    if !staticlib_path.exists() {
-        return Err(MainError::LinkingError(format!(
-            "runtime static library not found at {}",
-            staticlib_path.display()
-        )));
-    }
-
-    Ok(staticlib_path)
+    Ok(output.exit_code)
 }

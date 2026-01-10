@@ -3,6 +3,10 @@ name = "prim"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "prim"
+path = "src/lib.rs"
+
 [[bin]]
 name = "prim"
 path = "src/main.rs"
