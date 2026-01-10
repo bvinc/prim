@@ -605,7 +605,7 @@ fn scalar_lane(ty: &prim_hir::Type) -> Result<(cranelift::prelude::Type, u32), C
         Pointer { .. } => return Err(CodegenError::InvalidPointerLane),
         Struct(_) => return Err(CodegenError::InvalidStructLane),
         Array(_) => return Err(CodegenError::InvalidArrayLane),
-        Undetermined => return Err(CodegenError::UndeterminedType),
+        IntVar | FloatVar | Undetermined => return Err(CodegenError::UndeterminedType),
     };
     let size = lane.bytes();
     Ok((lane, size))

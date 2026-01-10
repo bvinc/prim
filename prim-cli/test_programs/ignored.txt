@@ -1,5 +1,4 @@
 byte_array_literal
-type_annotations
 float_ops
 literal_errors
 numeric_min_max

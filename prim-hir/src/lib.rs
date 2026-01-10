@@ -318,7 +318,14 @@ pub enum Type {
     Bool,
     Array(Box<Type>),
     Struct(StructId),
-    Pointer { mutable: bool, pointee: Box<Type> },
+    Pointer {
+        mutable: bool,
+        pointee: Box<Type>,
+    },
+    /// Undetermined integer type (will default to i32).
+    IntVar,
+    /// Undetermined float type (will default to f64).
+    FloatVar,
     Undetermined,
 }
 
@@ -356,6 +363,8 @@ impl fmt::Display for Type {
                     write!(f, "*const {pointee}")
                 }
             }
+            Type::IntVar => write!(f, "{{integer}}"),
+            Type::FloatVar => write!(f, "{{float}}"),
             Type::Undetermined => write!(f, "unknown"),
         }
     }

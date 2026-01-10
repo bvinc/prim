@@ -342,12 +342,12 @@ impl<'a> LoweringContext<'a> {
         match expr {
             Expr::IntLiteral { span, ty, value } => HirExpr::Int {
                 value: *value,
-                ty: self.lower_type(ty, file_id),
+                ty: self.lower_int_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::FloatLiteral { span, value, ty } => HirExpr::Float {
                 value: *value,
-                ty: self.lower_type(ty, file_id),
+                ty: self.lower_float_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::BoolLiteral { span, value, ty } => HirExpr::Bool {
@@ -477,6 +477,22 @@ impl<'a> LoweringContext<'a> {
             Type::F32 => prim_hir::Type::F32,
             Type::F64 => prim_hir::Type::F64,
             Type::Bool => prim_hir::Type::Bool,
+        }
+    }
+
+    /// Lower a type for an integer literal, using IntVar for unsuffixed literals.
+    fn lower_int_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {
+        match ty {
+            Type::Undetermined => prim_hir::Type::IntVar,
+            _ => self.lower_type(ty, file_id),
+        }
+    }
+
+    /// Lower a type for a float literal, using FloatVar for unsuffixed literals.
+    fn lower_float_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {
+        match ty {
+            Type::Undetermined => prim_hir::Type::FloatVar,
+            _ => self.lower_type(ty, file_id),
         }
     }
 

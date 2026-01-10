@@ -1,6 +1,6 @@
 use crate::{
-    BinaryOp, FileId, FuncId, HirExpr, HirFunction, HirProgram, HirStmt, SpanId, StructId,
-    SymbolId, Type,
+    BinaryOp, FileId, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, SpanId,
+    StructId, SymbolId, Type,
 };
 use prim_tok::Span;
 use std::collections::HashMap;
@@ -155,27 +155,34 @@ impl<'a> Checker<'a> {
             locals.insert(p.name, p.ty.clone());
         }
         self.loop_depth = 0;
+
+        // Type check all statements
         for stmt in &mut func.body.stmts {
             self.check_stmt(stmt, &mut locals)?;
         }
+
+        // Check return type
         if let Some(ret_ty) = &func.ret {
             match func.body.stmts.last_mut() {
                 Some(HirStmt::Expr(expr)) => {
-                    if !matches!(ret_ty, Type::Undetermined) {
-                        self.apply_expected_literal_type(expr, ret_ty);
-                    }
+                    // Propagate expected return type
+                    self.apply_expected(expr, ret_ty);
                     let expr_ty = self.check_expr(expr, &mut locals)?;
-                    if matches!(expr_ty, Type::Undetermined) {
-                        return Err(self.error(expr.span(), TypeCheckKind::UndeterminedReturn));
-                    }
-                    if !self.types_equal(ret_ty, &expr_ty) {
-                        return Err(self.error(
-                            expr.span(),
-                            TypeCheckKind::TypeMismatch {
-                                expected: ret_ty.clone(),
-                                found: expr_ty,
-                            },
-                        ));
+
+                    // Unify and check
+                    match self.unify(&expr_ty, ret_ty) {
+                        Some(unified) => {
+                            self.apply_expected(expr, &unified);
+                        }
+                        None => {
+                            return Err(self.error(
+                                expr.span(),
+                                TypeCheckKind::TypeMismatch {
+                                    expected: ret_ty.clone(),
+                                    found: expr_ty,
+                                },
+                            ));
+                        }
                     }
                 }
                 _ => {
@@ -183,6 +190,10 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+
+        // Finalize all types (apply defaults for IntVar -> i32, FloatVar -> f64)
+        self.finalize_block(&mut func.body);
+
         Ok(())
     }
 
@@ -198,17 +209,33 @@ impl<'a> Checker<'a> {
                 value,
                 span,
             } => {
+                // If we have an expected type, propagate it to the value
+                if !matches!(ty, Type::Undetermined) {
+                    self.apply_expected(value, ty);
+                }
+
                 let val_ty = self.check_expr(value, locals)?;
+
                 if matches!(ty, Type::Undetermined) {
+                    // Infer type from value
                     *ty = val_ty.clone();
-                } else if !self.types_equal(ty, &val_ty) {
-                    return Err(self.error(
-                        *span,
-                        TypeCheckKind::TypeMismatch {
-                            expected: ty.clone(),
-                            found: val_ty,
-                        },
-                    ));
+                } else {
+                    // Check compatibility via unification
+                    match self.unify(ty, &val_ty) {
+                        Some(unified) => {
+                            *ty = unified.clone();
+                            self.apply_expected(value, &unified);
+                        }
+                        None => {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::TypeMismatch {
+                                    expected: ty.clone(),
+                                    found: val_ty,
+                                },
+                            ));
+                        }
+                    }
                 }
                 locals.insert(*name, ty.clone());
                 Ok(())
@@ -276,11 +303,7 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             HirExpr::Str { ty, .. } => Ok(ty.clone()),
-            HirExpr::Ident {
-                symbol,
-                ty,
-                span: _,
-            } => {
+            HirExpr::Ident { symbol, ty, .. } => {
                 if let Some(t) = locals.get(symbol) {
                     *ty = t.clone();
                     Ok(t.clone())
@@ -298,53 +321,68 @@ impl<'a> Checker<'a> {
             } => {
                 let l = self.check_expr(left, locals)?;
                 let r = self.check_expr(right, locals)?;
+
                 match op {
                     BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
-                        if !self.is_numeric(&l) || !self.is_numeric(&r) || !self.types_equal(&l, &r)
-                        {
-                            return Err(self.error(
+                        // Try to unify the operand types
+                        match self.unify_numeric(&l, &r) {
+                            Some(unified) => {
+                                // Propagate the unified type back to operands
+                                self.apply_expected(left, &unified);
+                                self.apply_expected(right, &unified);
+                                *ty = unified.clone();
+                                Ok(unified)
+                            }
+                            None => Err(self.error(
                                 *span,
                                 TypeCheckKind::InvalidBinaryOperands {
                                     op: *op,
                                     left: l,
                                     right: r,
                                 },
-                            ));
+                            )),
                         }
-                        *ty = l.clone();
-                        Ok(l)
                     }
                     BinaryOp::Equals | BinaryOp::NotEquals => {
-                        if !self.types_equal(&l, &r) || !self.is_equality_compatible(&l) {
-                            return Err(self.error(
+                        // Try to unify for equality comparison
+                        match self.unify(&l, &r) {
+                            Some(unified) if self.is_equality_compatible(&unified) => {
+                                self.apply_expected(left, &unified);
+                                self.apply_expected(right, &unified);
+                                *ty = Type::Bool;
+                                Ok(Type::Bool)
+                            }
+                            _ => Err(self.error(
                                 *span,
                                 TypeCheckKind::InvalidBinaryOperands {
                                     op: *op,
                                     left: l,
                                     right: r,
                                 },
-                            ));
+                            )),
                         }
-                        *ty = Type::Bool;
-                        Ok(Type::Bool)
                     }
                     BinaryOp::Greater
                     | BinaryOp::GreaterEquals
                     | BinaryOp::Less
                     | BinaryOp::LessEquals => {
-                        if !self.is_numeric(&l) || !self.is_numeric(&r) || !self.types_equal(&l, &r)
-                        {
-                            return Err(self.error(
+                        // Try to unify for comparison
+                        match self.unify_numeric(&l, &r) {
+                            Some(unified) => {
+                                self.apply_expected(left, &unified);
+                                self.apply_expected(right, &unified);
+                                *ty = Type::Bool;
+                                Ok(Type::Bool)
+                            }
+                            None => Err(self.error(
                                 *span,
                                 TypeCheckKind::InvalidBinaryOperands {
                                     op: *op,
                                     left: l,
                                     right: r,
                                 },
-                            ));
+                            )),
                         }
-                        *ty = Type::Bool;
-                        Ok(Type::Bool)
                     }
                 }
             }
@@ -370,20 +408,24 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (arg, expected) in args.iter_mut().zip(params.iter()) {
-                    if !matches!(expected, Type::Undetermined) {
-                        self.apply_expected_literal_type(arg, expected);
-                    }
+                    // Propagate expected parameter type
+                    self.apply_expected(arg, expected);
                     let got = self.check_expr(arg, locals)?;
-                    if matches!(expected, Type::Undetermined) {
-                        // accept unknown/undetermined parameter types
-                    } else if !self.types_equal(expected, &got) {
-                        return Err(self.error(
-                            *span,
-                            TypeCheckKind::TypeMismatch {
-                                expected: expected.clone(),
-                                found: got,
-                            },
-                        ));
+
+                    // Check via unification
+                    match self.unify(expected, &got) {
+                        Some(unified) => {
+                            self.apply_expected(arg, &unified);
+                        }
+                        None => {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::TypeMismatch {
+                                    expected: expected.clone(),
+                                    found: got,
+                                },
+                            ));
+                        }
                     }
                 }
                 let ret_ty = ret.clone().unwrap_or(Type::Undetermined);
@@ -411,20 +453,22 @@ impl<'a> Checker<'a> {
                             )
                         })?
                     };
-                    if !matches!(expected, Type::Undetermined) {
-                        self.apply_expected_literal_type(val, &expected);
-                    }
+                    self.apply_expected(val, &expected);
                     let got = self.check_expr(val, locals)?;
-                    if matches!(expected, Type::Undetermined) {
-                        // Accept unknown/undetermined struct field types for now.
-                    } else if !self.types_equal(&expected, &got) {
-                        return Err(self.error(
-                            *span,
-                            TypeCheckKind::TypeMismatch {
-                                expected,
-                                found: got,
-                            },
-                        ));
+
+                    match self.unify(&expected, &got) {
+                        Some(unified) => {
+                            self.apply_expected(val, &unified);
+                        }
+                        None => {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::TypeMismatch {
+                                    expected,
+                                    found: got,
+                                },
+                            ));
+                        }
                     }
                 }
                 let struct_ty = Type::Struct(*struct_id);
@@ -472,20 +516,26 @@ impl<'a> Checker<'a> {
             }
             HirExpr::ArrayLit { elements, ty, span } => {
                 let mut elem_ty: Option<Type> = None;
-                for elem in elements {
+                for elem in elements.iter_mut() {
+                    // Propagate expected element type if known
+                    if let Some(ref expected) = elem_ty {
+                        self.apply_expected(elem, expected);
+                    }
                     let t = self.check_expr(elem, locals)?;
                     match &elem_ty {
                         None => elem_ty = Some(t),
-                        Some(existing) if self.types_equal(existing, &t) => {}
-                        Some(existing) => {
-                            return Err(self.error(
-                                *span,
-                                TypeCheckKind::TypeMismatch {
-                                    expected: existing.clone(),
-                                    found: t,
-                                },
-                            ));
-                        }
+                        Some(existing) => match self.unify(existing, &t) {
+                            Some(unified) => elem_ty = Some(unified),
+                            None => {
+                                return Err(self.error(
+                                    *span,
+                                    TypeCheckKind::TypeMismatch {
+                                        expected: existing.clone(),
+                                        found: t,
+                                    },
+                                ));
+                            }
+                        },
                     }
                 }
                 let arr = Type::Array(Box::new(elem_ty.unwrap_or(Type::Undetermined)));
@@ -495,15 +545,202 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn apply_expected_literal_type(&self, expr: &mut HirExpr, expected: &Type) {
-        match (expr, expected) {
-            (HirExpr::Int { ty, .. }, exp) if self.is_integer(exp) => *ty = exp.clone(),
-            (HirExpr::Float { ty, .. }, Type::F32) => *ty = Type::F32,
-            (HirExpr::Float { ty, .. }, Type::F64) => *ty = Type::F64,
-            (HirExpr::Bool { ty, .. }, Type::Bool) => *ty = Type::Bool,
+    // === Type Inference Helpers ===
+
+    /// Unify two types, returning a concrete type if possible.
+    /// Returns None if the types are incompatible.
+    fn unify(&self, a: &Type, b: &Type) -> Option<Type> {
+        match (a, b) {
+            // Undetermined unifies with anything
+            (Type::Undetermined, other) | (other, Type::Undetermined) => Some(other.clone()),
+
+            // IntVar unifies with any integer type or another IntVar
+            (Type::IntVar, Type::IntVar) => Some(Type::IntVar),
+            (Type::IntVar, t) | (t, Type::IntVar) if self.is_integer(t) => Some(t.clone()),
+
+            // FloatVar unifies with any float type or another FloatVar
+            (Type::FloatVar, Type::FloatVar) => Some(Type::FloatVar),
+            (Type::FloatVar, t) | (t, Type::FloatVar) if self.is_float(t) => Some(t.clone()),
+
+            // IntVar and FloatVar are incompatible
+            (Type::IntVar, Type::FloatVar) | (Type::FloatVar, Type::IntVar) => None,
+
+            // Struct types must match exactly
+            (Type::Struct(x), Type::Struct(y)) if x == y => Some(a.clone()),
+
+            // Pointer types
+            (
+                Type::Pointer {
+                    mutable: ma,
+                    pointee: pa,
+                },
+                Type::Pointer {
+                    mutable: mb,
+                    pointee: pb,
+                },
+            ) if ma == mb => self.unify(pa, pb).map(|p| Type::Pointer {
+                mutable: *ma,
+                pointee: Box::new(p),
+            }),
+
+            // Array types
+            (Type::Array(a_elem), Type::Array(b_elem)) => {
+                self.unify(a_elem, b_elem).map(|e| Type::Array(Box::new(e)))
+            }
+
+            // Same concrete types
+            (a, b) if a == b => Some(a.clone()),
+
+            // Otherwise incompatible
+            _ => None,
+        }
+    }
+
+    /// Unify two types for numeric operations.
+    /// Both types must be numeric (or unify to a numeric type).
+    fn unify_numeric(&self, a: &Type, b: &Type) -> Option<Type> {
+        let unified = self.unify(a, b)?;
+        if self.is_numeric_or_var(&unified) {
+            Some(unified)
+        } else {
+            None
+        }
+    }
+
+    /// Apply expected type to an expression tree (propagate downward).
+    fn apply_expected(&self, expr: &mut HirExpr, expected: &Type) {
+        if matches!(expected, Type::Undetermined) {
+            return;
+        }
+        match expr {
+            HirExpr::Int { ty, .. } => {
+                if matches!(ty, Type::IntVar | Type::Undetermined) && self.is_integer(expected) {
+                    *ty = expected.clone();
+                }
+            }
+            HirExpr::Float { ty, .. } => {
+                if matches!(ty, Type::FloatVar | Type::Undetermined) && self.is_float(expected) {
+                    *ty = expected.clone();
+                }
+            }
+            HirExpr::Bool { ty, .. } => {
+                if matches!(ty, Type::Undetermined) && matches!(expected, Type::Bool) {
+                    *ty = Type::Bool;
+                }
+            }
+            HirExpr::Binary {
+                left, right, ty, ..
+            } => {
+                // Propagate to operands if the result type is undetermined
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    self.apply_expected(left, expected);
+                    self.apply_expected(right, expected);
+                    if self.is_numeric(expected) {
+                        *ty = expected.clone();
+                    }
+                }
+            }
             _ => {}
         }
     }
+
+    /// Finalize all types in a block, applying defaults.
+    fn finalize_block(&self, block: &mut HirBlock) {
+        for stmt in &mut block.stmts {
+            self.finalize_stmt(stmt);
+        }
+    }
+
+    fn finalize_stmt(&self, stmt: &mut HirStmt) {
+        match stmt {
+            HirStmt::Let { ty, value, .. } => {
+                self.finalize_expr(value);
+                // Update let binding type from finalized value type
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    *ty = self.finalize_type(value.ty());
+                }
+            }
+            HirStmt::Expr(e) => self.finalize_expr(e),
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.finalize_expr(condition);
+                self.finalize_block(then_body);
+                if let Some(eb) = else_body {
+                    self.finalize_block(eb);
+                }
+            }
+            HirStmt::Loop { body, .. } => {
+                self.finalize_block(body);
+            }
+            HirStmt::Break { .. } => {}
+        }
+    }
+
+    fn finalize_expr(&self, expr: &mut HirExpr) {
+        match expr {
+            HirExpr::Int { ty, .. } => {
+                if matches!(ty, Type::IntVar) {
+                    *ty = Type::I32;
+                }
+            }
+            HirExpr::Float { ty, .. } => {
+                if matches!(ty, Type::FloatVar) {
+                    *ty = Type::F64;
+                }
+            }
+            HirExpr::Binary {
+                left, right, ty, ..
+            } => {
+                self.finalize_expr(left);
+                self.finalize_expr(right);
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    *ty = self.finalize_type(left.ty());
+                }
+            }
+            HirExpr::Call { args, .. } => {
+                for arg in args {
+                    self.finalize_expr(arg);
+                }
+            }
+            HirExpr::StructLit { fields, .. } => {
+                for (_, val) in fields {
+                    self.finalize_expr(val);
+                }
+            }
+            HirExpr::Field { base, .. } => {
+                self.finalize_expr(base);
+            }
+            HirExpr::Deref { base, .. } => {
+                self.finalize_expr(base);
+            }
+            HirExpr::ArrayLit { elements, ty, .. } => {
+                for elem in elements {
+                    self.finalize_expr(elem);
+                }
+                if let Type::Array(elem_ty) = ty {
+                    if matches!(elem_ty.as_ref(), Type::IntVar | Type::FloatVar) {
+                        *ty = Type::Array(Box::new(self.finalize_type(elem_ty)));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply default types: IntVar -> i32, FloatVar -> f64
+    fn finalize_type(&self, ty: &Type) -> Type {
+        match ty {
+            Type::IntVar => Type::I32,
+            Type::FloatVar => Type::F64,
+            _ => ty.clone(),
+        }
+    }
+
+    // === Type Classification Helpers ===
 
     fn is_integer(&self, t: &Type) -> bool {
         matches!(
@@ -521,42 +758,16 @@ impl<'a> Checker<'a> {
         )
     }
 
-    #[allow(clippy::only_used_in_recursion)]
-    fn types_equal(&self, a: &Type, b: &Type) -> bool {
-        match (a, b) {
-            (Type::Undetermined, _) | (_, Type::Undetermined) => true,
-            (Type::Struct(x), Type::Struct(y)) => x == y,
-            (
-                Type::Pointer {
-                    mutable: ma,
-                    pointee: pa,
-                },
-                Type::Pointer {
-                    mutable: mb,
-                    pointee: pb,
-                },
-            ) => ma == mb && self.types_equal(pa, pb),
-            (Type::Array(a), Type::Array(b)) => self.types_equal(a, b),
-            _ => a == b,
-        }
+    fn is_float(&self, t: &Type) -> bool {
+        matches!(t, Type::F32 | Type::F64)
     }
 
     fn is_numeric(&self, t: &Type) -> bool {
-        matches!(
-            t,
-            Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::Isize
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::Usize
-                | Type::F32
-                | Type::F64
-        )
+        self.is_integer(t) || self.is_float(t)
+    }
+
+    fn is_numeric_or_var(&self, t: &Type) -> bool {
+        self.is_numeric(t) || matches!(t, Type::IntVar | Type::FloatVar)
     }
 
     fn is_equality_compatible(&self, t: &Type) -> bool {
@@ -575,6 +786,8 @@ impl<'a> Checker<'a> {
                 | Type::Usize
                 | Type::F32
                 | Type::F64
+                | Type::IntVar
+                | Type::FloatVar
                 | Type::Pointer { .. }
                 | Type::Struct(_)
         )
