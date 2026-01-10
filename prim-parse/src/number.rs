@@ -4,7 +4,6 @@ fn parse_int_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, Par
     if suffix.is_empty() {
         return Ok(Type::Undetermined);
     }
-    let suffix = suffix.strip_prefix('_').unwrap_or(suffix);
     let first = suffix.chars().next().unwrap_or(' ');
     if first == 'e' || first == 'E' {
         return Err(ParseError::InvalidIntegerLiteral {
@@ -37,7 +36,6 @@ fn parse_float_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, P
     if suffix.is_empty() {
         return Ok(Type::Undetermined);
     }
-    let suffix = suffix.strip_prefix('_').unwrap_or(suffix);
     let ty = match suffix {
         "f32" => Type::F32,
         "f64" => Type::F64,
