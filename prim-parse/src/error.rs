@@ -1,26 +1,26 @@
-use prim_tok::{TokenError, TokenKind};
+use prim_tok::{Span, TokenError, TokenKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
     UnexpectedToken {
         expected: String,
         found: TokenKind,
-        position: usize,
+        span: Span,
     },
     UnexpectedEof,
     TokenError(TokenError),
     StatementsOutsideFunction,
     InvalidAttributeUsage {
         message: String,
-        position: usize,
+        span: Span,
     },
     InvalidIntegerLiteral {
         literal: String,
-        position: usize,
+        span: Span,
     },
     InvalidFloatLiteral {
         literal: String,
-        position: usize,
+        span: Span,
     },
     /// Parsing completed but error-level diagnostics were emitted
     HasErrors,
@@ -38,12 +38,12 @@ impl std::fmt::Display for ParseError {
             ParseError::UnexpectedToken {
                 expected,
                 found,
-                position,
+                span,
             } => {
                 write!(
                     f,
-                    "Parse error at position {}: expected {}, found {:?}",
-                    position, expected, found
+                    "Parse error at {}: expected {}, found {:?}",
+                    span, expected, found
                 )
             }
             ParseError::UnexpectedEof => {
@@ -55,8 +55,8 @@ impl std::fmt::Display for ParseError {
             ParseError::StatementsOutsideFunction => {
                 write!(f, "Parse error: statements must be inside a function")
             }
-            ParseError::InvalidAttributeUsage { message, position } => {
-                write!(f, "Parse error at position {}: {}", position, message)
+            ParseError::InvalidAttributeUsage { message, span } => {
+                write!(f, "Parse error at {}: {}", span, message)
             }
             ParseError::InvalidIntegerLiteral { literal, .. } => {
                 write!(f, "Invalid integer literal: {}", literal)
@@ -73,50 +73,16 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-/// Implementation of unified error trait for ParseError
 impl ParseError {
-    pub fn error_code(&self) -> &'static str {
+    pub fn span(&self) -> Option<Span> {
         match self {
-            ParseError::UnexpectedToken { .. } => "PAR001",
-            ParseError::UnexpectedEof => "PAR002",
-            ParseError::TokenError(token_err) => token_err.error_code(),
-            ParseError::StatementsOutsideFunction => "PAR003",
-            ParseError::InvalidAttributeUsage { .. } => "PAR004",
-            ParseError::InvalidIntegerLiteral { .. } => "PAR005",
-            ParseError::InvalidFloatLiteral { .. } => "PAR006",
-            ParseError::HasErrors => "PAR007",
-        }
-    }
-
-    pub fn category(&self) -> &'static str {
-        match self {
-            ParseError::TokenError(_) => "Tokenization",
-            _ => "Parsing",
-        }
-    }
-
-    pub fn position(&self) -> Option<usize> {
-        match self {
-            ParseError::UnexpectedToken { position, .. } => Some(*position),
+            ParseError::UnexpectedToken { span, .. } => Some(*span),
             ParseError::UnexpectedEof => None,
-            ParseError::TokenError(token_err) => Some(token_err.span().start()),
+            ParseError::TokenError(token_err) => Some(token_err.span()),
             ParseError::StatementsOutsideFunction => None,
-            ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
-            ParseError::InvalidIntegerLiteral { position, .. } => Some(*position),
-            ParseError::InvalidFloatLiteral { position, .. } => Some(*position),
-            ParseError::HasErrors => None,
-        }
-    }
-
-    pub fn context(&self) -> Option<&str> {
-        match self {
-            ParseError::UnexpectedToken { .. } => Some("syntax parsing"),
-            ParseError::UnexpectedEof => Some("end of file"),
-            ParseError::TokenError(token_err) => token_err.context(),
-            ParseError::StatementsOutsideFunction => Some("program structure"),
-            ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
-            ParseError::InvalidIntegerLiteral { .. } => Some("literal parsing"),
-            ParseError::InvalidFloatLiteral { .. } => Some("literal parsing"),
+            ParseError::InvalidAttributeUsage { span, .. } => Some(*span),
+            ParseError::InvalidIntegerLiteral { span, .. } => Some(*span),
+            ParseError::InvalidFloatLiteral { span, .. } => Some(*span),
             ParseError::HasErrors => None,
         }
     }
@@ -131,7 +97,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub message: String,
-    pub position: usize,
+    pub span: Span,
     pub severity: Severity,
 }
 
@@ -141,10 +107,6 @@ impl std::fmt::Display for Diagnostic {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        write!(
-            f,
-            "{} at position {}: {}",
-            level, self.position, self.message
-        )
+        write!(f, "{} at {}: {}", level, self.span, self.message)
     }
 }

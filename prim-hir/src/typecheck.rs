@@ -44,39 +44,6 @@ pub enum TypeCheckKind {
     Legacy(String),
 }
 
-impl TypeCheckError {
-    pub fn error_code(&self) -> &'static str {
-        match self.kind {
-            TypeCheckKind::UndefinedSymbol(_) => "TYP001",
-            TypeCheckKind::UnknownFunction(_) => "TYP002",
-            TypeCheckKind::TypeMismatch { .. } => "TYP003",
-            TypeCheckKind::InvalidBinaryOperands { .. } => "TYP004",
-            TypeCheckKind::InvalidDereference(_) => "TYP005",
-            TypeCheckKind::UnknownStruct(_) => "TYP006",
-            TypeCheckKind::UnknownField { .. } => "TYP007",
-            TypeCheckKind::ArityMismatch { .. } => "TYP008",
-            TypeCheckKind::BreakOutsideLoop => "TYP010",
-            TypeCheckKind::UndeterminedReturn => "TYP011",
-            TypeCheckKind::MissingReturnValue => "TYP012",
-            TypeCheckKind::UndeterminedParamType => "TYP013",
-            TypeCheckKind::UndeterminedFieldType => "TYP014",
-            TypeCheckKind::Legacy(_) => "TYP999",
-        }
-    }
-
-    pub fn category(&self) -> &'static str {
-        "type checking"
-    }
-
-    pub fn position(&self) -> Option<usize> {
-        Some(self.span.start())
-    }
-
-    pub fn context(&self) -> Option<&str> {
-        None
-    }
-}
-
 impl std::fmt::Display for TypeCheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {

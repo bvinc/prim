@@ -7,7 +7,7 @@ fn parse_int_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, Par
     if suffix.starts_with('e') || suffix.starts_with('E') {
         return Err(ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         });
     }
     let ty = match suffix {
@@ -24,7 +24,7 @@ fn parse_int_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, Par
         _ => {
             return Err(ParseError::InvalidIntegerLiteral {
                 literal: literal.to_string(),
-                position: span.start(),
+                span,
             });
         }
     };
@@ -41,7 +41,7 @@ fn parse_float_suffix(suffix: &str, span: Span, literal: &str) -> Result<Type, P
         _ => {
             return Err(ParseError::InvalidFloatLiteral {
                 literal: literal.to_string(),
-                position: span.start(),
+                span,
             });
         }
     };
@@ -92,7 +92,7 @@ pub fn parse_int_literal(literal: &str, span: Span) -> Result<(i64, Type), Parse
     if digit_part.is_empty() {
         return Err(ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         });
     }
 
@@ -104,7 +104,7 @@ pub fn parse_int_literal(literal: &str, span: Span) -> Result<(i64, Type), Parse
     {
         return Err(ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         });
     }
 
@@ -113,7 +113,7 @@ pub fn parse_int_literal(literal: &str, span: Span) -> Result<(i64, Type), Parse
     let value =
         i64::from_str_radix(&digit_part, radix).map_err(|_| ParseError::InvalidIntegerLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         })?;
     Ok((value, ty))
 }
@@ -162,7 +162,7 @@ pub fn parse_float_literal(literal: &str, span: Span) -> Result<(f64, Type), Par
     if num_part.is_empty() || !saw_digit {
         return Err(ParseError::InvalidFloatLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         });
     }
     let suffix = suffix.strip_prefix('_').unwrap_or(suffix);
@@ -173,7 +173,7 @@ pub fn parse_float_literal(literal: &str, span: Span) -> Result<(f64, Type), Par
     {
         return Err(ParseError::InvalidFloatLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         });
     }
     let ty = parse_float_suffix(suffix, span, literal)?;
@@ -182,7 +182,7 @@ pub fn parse_float_literal(literal: &str, span: Span) -> Result<(f64, Type), Par
         .parse::<f64>()
         .map_err(|_| ParseError::InvalidFloatLiteral {
             literal: literal.to_string(),
-            position: span.start(),
+            span,
         })?;
     Ok((value, ty))
 }

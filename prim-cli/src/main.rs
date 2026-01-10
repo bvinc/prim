@@ -7,9 +7,6 @@ use std::process::Command;
 use std::time::Duration;
 use std::time::Instant;
 
-mod error;
-pub use error::{CompilerError, CompilerResult, PrimError};
-
 #[derive(Debug)]
 enum MainError {
     InsufficientArguments,

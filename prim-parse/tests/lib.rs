@@ -22,7 +22,7 @@ fn test_error_same_line_statements() {
             .message
             .contains("statements on the same line")
     );
-    assert_eq!(diagnostics[0].position, source.find("let y").unwrap());
+    assert_eq!(diagnostics[0].span.start(), source.find("let y").unwrap());
 }
 
 #[test]

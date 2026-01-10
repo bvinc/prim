@@ -66,10 +66,10 @@ impl<'a> Parser<'a> {
         (result, diagnostics)
     }
 
-    fn emit(&mut self, message: impl Into<String>, position: usize, severity: Severity) {
+    fn emit(&mut self, message: impl Into<String>, span: Span, severity: Severity) {
         self.diagnostics.push(Diagnostic {
             message: message.into(),
-            position,
+            span,
             severity,
         });
     }
@@ -140,7 +140,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::UnexpectedToken {
                             expected: "identifier or '{' after '.' in import".to_string(),
                             found: other,
-                            position: self.position(),
+                            span: self.current_span(),
                         });
                     }
                     None => return Err(ParseError::UnexpectedEof),
@@ -370,18 +370,17 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::At) => {
                 // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
-                let pos = self.position();
                 Err(ParseError::TokenError(
                     prim_tok::TokenError::UnexpectedCharacter {
                         ch: '@',
-                        span: prim_tok::Span::new(pos, pos + 1),
+                        span: self.current_span(),
                     },
                 ))
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: self.peek_kind().unwrap(),
-                position: self.position(),
+                span: self.current_span(),
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -420,7 +419,7 @@ impl<'a> Parser<'a> {
                             return Err(ParseError::UnexpectedToken {
                                 expected: "module name before '.'".to_string(),
                                 found: kind,
-                                position: self.position(),
+                                span: self.current_span(),
                             });
                         }
                     }
@@ -428,7 +427,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::UnexpectedToken {
                             expected: "function name".to_string(),
                             found: kind,
-                            position: self.position(),
+                            span: self.current_span(),
                         });
                     }
                 };
@@ -511,7 +510,7 @@ impl<'a> Parser<'a> {
         if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
                 message: "@repr is only valid on structs".to_string(),
-                position: name_span.start(),
+                span: name_span,
             });
         }
 
@@ -522,7 +521,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "function declarations without body require @runtime attribute"
                         .to_string(),
-                    position: name_span.start(),
+                    span: name_span,
                 });
             }
             (Vec::new(), semicolon.span.end())
@@ -530,7 +529,7 @@ impl<'a> Parser<'a> {
             if runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "@runtime functions must not have a body".to_string(),
-                    position: name_span.start(),
+                    span: name_span,
                 });
             }
             self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
@@ -819,7 +818,7 @@ impl<'a> Parser<'a> {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
                             found: self.peek_kind().unwrap(),
-                            position: self.position(),
+                            span: self.current_span(),
                         });
                     }
                     None => return Err(ParseError::UnexpectedEof),
@@ -833,7 +832,7 @@ impl<'a> Parser<'a> {
             _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),
                 found: kind,
-                position: self.position(),
+                span: self.current_span(),
             }),
         }
     }
@@ -852,12 +851,11 @@ impl<'a> Parser<'a> {
             if has_semicolon {
                 self.advance();
             } else if let Some(next) = self.peek() {
-                let next_start = next.span.start();
                 let is_right_brace = next.kind == TokenKind::RightBrace;
-                if !is_right_brace && self.is_same_line(statement_end, next_start) {
+                if !is_right_brace && self.is_same_line(statement_end, next.span.start()) {
                     self.emit(
                         "statements on the same line should be separated by a semicolon",
-                        next_start,
+                        next.span,
                         Severity::Error,
                     );
                     // Continue parsing to collect more errors
@@ -963,7 +961,7 @@ impl<'a> Parser<'a> {
             Some(tok) => Err(ParseError::UnexpectedToken {
                 expected: message.to_string(),
                 found: tok.kind,
-                position: tok.span.start(),
+                span: tok.span,
             }),
             None => Err(ParseError::UnexpectedEof),
         }
@@ -992,10 +990,10 @@ impl<'a> Parser<'a> {
         &self.tokens[self.current - 1]
     }
 
-    fn position(&self) -> usize {
+    fn current_span(&self) -> Span {
         self.peek()
-            .map(|t| t.span.start())
-            .unwrap_or_else(|| self.source.len())
+            .map(|t| t.span)
+            .unwrap_or_else(|| Span::new(self.source.len(), self.source.len()))
     }
 
     fn is_same_line(&self, left_end: usize, right_start: usize) -> bool {
@@ -1065,7 +1063,7 @@ impl<'a> Parser<'a> {
                     if attrs.runtime.is_some() {
                         return Err(ParseError::InvalidAttributeUsage {
                             message: "duplicate @runtime attribute".to_string(),
-                            position: name_span.start(),
+                            span: name_span,
                         });
                     }
                     attrs.runtime = Some(sym_clean);
@@ -1081,14 +1079,14 @@ impl<'a> Parser<'a> {
                     if val != "C" {
                         return Err(ParseError::InvalidAttributeUsage {
                             message: "@repr only supports \"C\"".to_string(),
-                            position: name_span.start(),
+                            span: name_span,
                         });
                     }
                     self.consume(TokenKind::RightParen, "Expected ')' after attribute")?;
                     if attrs.repr_c {
                         return Err(ParseError::InvalidAttributeUsage {
                             message: "duplicate @repr attribute".to_string(),
-                            position: name_span.start(),
+                            span: name_span,
                         });
                     }
                     attrs.repr_c = true;
@@ -1096,7 +1094,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     return Err(ParseError::InvalidAttributeUsage {
                         message: format!("unknown attribute @{}", name),
-                        position: name_span.start(),
+                        span: name_span,
                     });
                 }
             }

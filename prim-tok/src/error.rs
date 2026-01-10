@@ -29,36 +29,13 @@ impl std::fmt::Display for TokenError {
 
 impl std::error::Error for TokenError {}
 
-/// Implementation of unified error trait for TokenError
 impl TokenError {
-    pub fn error_code(&self) -> &'static str {
-        match self {
-            TokenError::UnexpectedCharacter { .. } => "TOK001",
-            TokenError::UnterminatedString { .. } => "TOK002",
-            TokenError::InvalidNumber { .. } => "TOK004",
-            TokenError::InvalidOperatorSpacing { .. } => "TOK005",
-        }
-    }
-
-    pub fn category(&self) -> &'static str {
-        "Tokenization"
-    }
-
     pub fn span(&self) -> Span {
         match self {
             TokenError::UnexpectedCharacter { span, .. } => *span,
             TokenError::UnterminatedString { span } => *span,
             TokenError::InvalidNumber { span, .. } => *span,
             TokenError::InvalidOperatorSpacing { span, .. } => *span,
-        }
-    }
-
-    pub fn context(&self) -> Option<&str> {
-        match self {
-            TokenError::UnexpectedCharacter { .. } => Some("character scanning"),
-            TokenError::UnterminatedString { .. } => Some("string literal"),
-            TokenError::InvalidNumber { .. } => Some("number literal"),
-            TokenError::InvalidOperatorSpacing { .. } => Some("operator spacing"),
         }
     }
 }

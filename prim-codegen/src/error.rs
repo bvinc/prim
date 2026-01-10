@@ -133,49 +133,6 @@ impl std::fmt::Display for CodegenError {
 
 impl Error for CodegenError {}
 
-impl CodegenError {
-    pub fn error_code(&self) -> &'static str {
-        match self {
-            CodegenError::UnsupportedTarget { .. } => "COD003",
-            CodegenError::CraneliftSettingsError(_) => "COD004",
-            CodegenError::CraneliftModuleError(_) => "COD005",
-            CodegenError::CraneliftCodegenError(_) => "COD006",
-            CodegenError::CraneliftObjectError(_) => "COD007",
-            CodegenError::UndefinedLocal(_) => "COD010",
-            CodegenError::ArityMismatch { .. } => "COD011",
-            CodegenError::MissingStructLayout(_) => "COD012",
-            CodegenError::MissingStructField { .. } => "COD013",
-            CodegenError::MissingStructValue { .. } => "COD014",
-            CodegenError::MissingFunction(_) => "COD015",
-            CodegenError::InvalidFieldAccess => "COD016",
-            CodegenError::InvalidDereference => "COD017",
-            CodegenError::InvalidBreak => "COD018",
-            CodegenError::ReturnArityMismatch { .. } => "COD019",
-            CodegenError::ReturnTypeMismatch { .. } => "COD020",
-            CodegenError::MissingReturnValue => "COD021",
-            CodegenError::ArgTypeMismatch { .. } => "COD022",
-            CodegenError::FieldTypeMismatch { .. } => "COD023",
-            CodegenError::InvalidPointerLane => "COD024",
-            CodegenError::InvalidStructLane => "COD025",
-            CodegenError::InvalidArrayLane => "COD026",
-            CodegenError::UndeterminedType => "COD027",
-            CodegenError::MissingMain => "COD100",
-        }
-    }
-
-    pub fn category(&self) -> &'static str {
-        "Code Generation"
-    }
-
-    pub fn position(&self) -> Option<usize> {
-        None
-    }
-
-    pub fn context(&self) -> Option<&str> {
-        None
-    }
-}
-
 impl From<cranelift::codegen::settings::SetError> for CodegenError {
     fn from(error: cranelift::codegen::settings::SetError) -> Self {
         CodegenError::CraneliftSettingsError(error)
