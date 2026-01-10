@@ -116,16 +116,8 @@ impl CraneliftCodeGenerator {
         self.compute_struct_layouts(program, self.pointer_type)?;
         // Declare all functions first to populate func_ids.
         for func in &program.items.functions {
-            let mut sig = self.module.make_signature();
-            for param in &func.params {
-                append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
-            }
+            let sig = self.build_signature(func, program)?;
             let params: Vec<_> = sig.params.iter().map(|p| p.value_type).collect();
-            if program.main == Some(func.name) {
-                sig.returns.push(AbiParam::new(types::I32));
-            } else if let Some(ret) = &func.ret {
-                append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
-            }
 
             let sym = export_symbol(func, program)?;
             let linkage = if program.main == Some(func.name) {
@@ -178,13 +170,11 @@ impl CraneliftCodeGenerator {
         Ok(())
     }
 
-    fn generate_function(
-        &mut self,
+    fn build_signature(
+        &self,
         func: &prim_hir::HirFunction,
         program: &HirProgram,
-        ctx: &mut codegen::Context,
-        builder_context: &mut FunctionBuilderContext,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<Signature, CodegenError> {
         let mut sig = self.module.make_signature();
         for param in &func.params {
             append_abi_params(&mut sig, &param.ty, &self.struct_layouts, self.pointer_type)?;
@@ -194,9 +184,19 @@ impl CraneliftCodeGenerator {
         } else if let Some(ret) = &func.ret {
             append_return(&mut sig, ret, &self.struct_layouts, self.pointer_type)?;
         }
+        Ok(sig)
+    }
 
+    fn generate_function(
+        &mut self,
+        func: &prim_hir::HirFunction,
+        program: &HirProgram,
+        ctx: &mut codegen::Context,
+        builder_context: &mut FunctionBuilderContext,
+    ) -> Result<(), CodegenError> {
+        let sig = self.build_signature(func, program)?;
         let func_id = *self.func_ids.get(&func.id).expect("missing function id");
-        ctx.func.signature = sig.clone();
+        ctx.func.signature = sig;
 
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_context);
         let entry = builder.create_block();
