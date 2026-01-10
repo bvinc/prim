@@ -265,7 +265,7 @@ impl ImportDecl {
     }
 }
 
-/// Parse a Prim program. Requires a main function.
+/// Parse a Prim source file into an AST.
 /// Returns (Result, diagnostics) - diagnostics are returned on both success and failure.
 pub fn parse(input: &str) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
     let mut tokenizer = Tokenizer::new(input);
@@ -275,18 +275,6 @@ pub fn parse(input: &str) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
     };
     let mut parser = Parser::new(tokens, input);
     parser.parse()
-}
-
-/// Parse a Prim program unit (module/library) without requiring a main function.
-/// Returns (Result, diagnostics) - diagnostics are returned on both success and failure.
-pub fn parse_unit(input: &str) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
-    let mut tokenizer = Tokenizer::new(input);
-    let tokens = match tokenizer.tokenize() {
-        Ok(tokens) => tokens,
-        Err(e) => return (Err(e.into()), Vec::new()),
-    };
-    let mut parser = Parser::new(tokens, input);
-    parser.parse_unit()
 }
 
 #[derive(Debug, Clone, PartialEq)]

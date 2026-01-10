@@ -674,8 +674,11 @@ impl VarEnv {
 /// Entry point used by prim-cli.
 pub fn generate_object_code(
     _program: &prim_compiler::Program,
-    _hir: &HirProgram,
+    hir: &HirProgram,
 ) -> Result<Vec<u8>, CodegenError> {
+    if hir.main.is_none() {
+        return Err(CodegenError::MissingMain);
+    }
     let codegen = CraneliftCodeGenerator::new()?;
-    codegen.generate(_hir)
+    codegen.generate(hir)
 }

@@ -9,7 +9,6 @@ pub enum ParseError {
     },
     UnexpectedEof,
     TokenError(TokenError),
-    MissingMainFunction,
     StatementsOutsideFunction,
     InvalidAttributeUsage {
         message: String,
@@ -53,9 +52,6 @@ impl std::fmt::Display for ParseError {
             ParseError::TokenError(token_err) => {
                 write!(f, "Tokenizer {}", token_err)
             }
-            ParseError::MissingMainFunction => {
-                write!(f, "Parse error: program must have a main function")
-            }
             ParseError::StatementsOutsideFunction => {
                 write!(f, "Parse error: statements must be inside a function")
             }
@@ -84,12 +80,11 @@ impl ParseError {
             ParseError::UnexpectedToken { .. } => "PAR001",
             ParseError::UnexpectedEof => "PAR002",
             ParseError::TokenError(token_err) => token_err.error_code(),
-            ParseError::MissingMainFunction => "PAR003",
-            ParseError::StatementsOutsideFunction => "PAR004",
-            ParseError::InvalidAttributeUsage { .. } => "PAR005",
-            ParseError::InvalidIntegerLiteral { .. } => "PAR006",
-            ParseError::InvalidFloatLiteral { .. } => "PAR007",
-            ParseError::HasErrors => "PAR008",
+            ParseError::StatementsOutsideFunction => "PAR003",
+            ParseError::InvalidAttributeUsage { .. } => "PAR004",
+            ParseError::InvalidIntegerLiteral { .. } => "PAR005",
+            ParseError::InvalidFloatLiteral { .. } => "PAR006",
+            ParseError::HasErrors => "PAR007",
         }
     }
 
@@ -105,7 +100,6 @@ impl ParseError {
             ParseError::UnexpectedToken { position, .. } => Some(*position),
             ParseError::UnexpectedEof => None,
             ParseError::TokenError(token_err) => Some(token_err.span().start()),
-            ParseError::MissingMainFunction => None,
             ParseError::StatementsOutsideFunction => None,
             ParseError::InvalidAttributeUsage { position, .. } => Some(*position),
             ParseError::InvalidIntegerLiteral { position, .. } => Some(*position),
@@ -119,7 +113,6 @@ impl ParseError {
             ParseError::UnexpectedToken { .. } => Some("syntax parsing"),
             ParseError::UnexpectedEof => Some("end of file"),
             ParseError::TokenError(token_err) => token_err.context(),
-            ParseError::MissingMainFunction => Some("program structure"),
             ParseError::StatementsOutsideFunction => Some("program structure"),
             ParseError::InvalidAttributeUsage { .. } => Some("attribute usage"),
             ParseError::InvalidIntegerLiteral { .. } => Some("literal parsing"),

@@ -180,7 +180,7 @@ impl Loader {
 
     fn load_single_file(&mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
         let source = std::fs::read_to_string(path)?;
-        let (ast, _diagnostics) = prim_parse::parse_unit(&source);
+        let (ast, _diagnostics) = prim_parse::parse(&source);
         let ast = ast?;
 
         let module_name = ast
@@ -267,7 +267,7 @@ impl Loader {
 
         for file in &files {
             let source = std::fs::read_to_string(file)?;
-            let (ast, _diagnostics) = prim_parse::parse_unit(&source);
+            let (ast, _diagnostics) = prim_parse::parse(&source);
             let ast = ast
                 .map_err(|err| LoadError::InvalidModule(format!("{}: {}", file.display(), err)))?;
 
@@ -446,7 +446,7 @@ impl Loader {
 
             for file in &files {
                 let source = std::fs::read_to_string(file)?;
-                let (program, _diagnostics) = prim_parse::parse_unit(&source);
+                let (program, _diagnostics) = prim_parse::parse(&source);
                 let program = program.map_err(|err| {
                     LoadError::InvalidModule(format!("{}: {}", file.display(), err))
                 })?;

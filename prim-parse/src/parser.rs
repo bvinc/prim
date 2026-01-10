@@ -48,12 +48,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
-        let result = self.parse_internal(true);
-        self.finalize(result)
-    }
-
-    pub fn parse_unit(&mut self) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
-        let result = self.parse_internal(false);
+        let result = self.parse_internal();
         self.finalize(result)
     }
 
@@ -79,7 +74,7 @@ impl<'a> Parser<'a> {
         });
     }
 
-    fn parse_internal(&mut self, require_main: bool) -> Result<Program, ParseError> {
+    fn parse_internal(&mut self) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         let mut traits = Vec::new();
@@ -186,18 +181,6 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::StatementsOutsideFunction);
                 }
             }
-        }
-
-        // Validate that a main function exists
-        if require_main
-            && !functions.iter().any(|f| {
-                self.interner
-                    .resolve(f.name)
-                    .expect("missing interned function name")
-                    == "main"
-            })
-        {
-            return Err(ParseError::MissingMainFunction);
         }
 
         Ok(Program {

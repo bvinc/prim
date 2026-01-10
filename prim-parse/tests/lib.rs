@@ -1,14 +1,10 @@
 use prim_parse::{
-    BinaryOp, Expr, ImportSelector, ParseError, PointerMutability, Stmt, Type, parse, parse_unit,
+    BinaryOp, Expr, ImportSelector, ParseError, PointerMutability, Stmt, Type, parse,
 };
 use prim_tok::TokenKind;
 
 fn parse_ok(source: &str) -> prim_parse::Program {
     parse(source).0.unwrap()
-}
-
-fn parse_unit_ok(source: &str) -> prim_parse::Program {
-    parse_unit(source).0.unwrap()
 }
 
 #[test]
@@ -272,16 +268,6 @@ fn test_parse_error_from_tokenizer() {
             assert_eq!(ch, '@');
         }
         _ => panic!("Expected TokenError from tokenizer, got {:?}", result),
-    }
-}
-
-#[test]
-fn test_parse_error_missing_main() {
-    let result = parse("fn foo() { let x = 42 }").0;
-
-    match result {
-        Err(ParseError::MissingMainFunction) => {}
-        _ => panic!("Expected MissingMainFunction error, got {:?}", result),
     }
 }
 
@@ -1391,12 +1377,12 @@ fn test_import_decl_variants() {
 #[test]
 fn test_definition_spans_include_attributes() {
     let struct_source = "@repr(\"C\")\nstruct Foo { }";
-    let struct_program = parse_unit_ok(struct_source);
+    let struct_program = parse_ok(struct_source);
     let def = &struct_program.structs[0];
     assert_eq!(def.span.text(struct_source), "@repr(\"C\")\nstruct Foo { }");
 
     let func_source = "@runtime(\"puts\")\nfn print(message: Str);";
-    let func_program = parse_unit_ok(func_source);
+    let func_program = parse_ok(func_source);
     let func = &func_program.functions[0];
     assert_eq!(
         func.span.text(func_source),
@@ -1407,7 +1393,7 @@ fn test_definition_spans_include_attributes() {
 #[test]
 fn test_trait_and_impl_spans() {
     let source = "trait Greeter { fn greet(person: Person); }\n\nimpl Greeter for Person {\n    fn greet(person: Person) {}\n}\n";
-    let program = parse_unit_ok(source);
+    let program = parse_ok(source);
     assert_eq!(program.traits.len(), 1);
     assert_eq!(program.impls.len(), 1);
     let trait_def = &program.traits[0];
