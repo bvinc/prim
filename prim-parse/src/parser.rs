@@ -183,20 +183,6 @@ impl<'a> Parser<'a> {
                     impls.push(im);
                 }
                 _ => {
-                    // If there is a stray '@' anywhere, surface it as a tokenizer error for compatibility
-                    if let Some(tok) = self
-                        .tokens
-                        .iter()
-                        .skip(self.current)
-                        .find(|t| t.kind == TokenKind::At)
-                    {
-                        return Err(ParseError::TokenError(
-                            prim_tok::TokenError::UnexpectedCharacter {
-                                ch: '@',
-                                span: tok.span,
-                            },
-                        ));
-                    }
                     return Err(ParseError::StatementsOutsideFunction);
                 }
             }

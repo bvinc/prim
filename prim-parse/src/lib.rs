@@ -1927,24 +1927,4 @@ impl NamePath {
             segments: vec![seg],
         }
     }
-
-    pub fn is_single(&self) -> bool {
-        self.segments.len() == 1
-    }
-
-    pub fn to_string(&self, source: &str) -> String {
-        self.segments
-            .iter()
-            .map(|s| s.text(source).to_string())
-            .collect::<Vec<_>>()
-            .join(".")
-    }
-
-    pub fn mangle(&self, source: &str, sep: &str) -> String {
-        self.segments
-            .iter()
-            .map(|s| s.text(source).to_string())
-            .collect::<Vec<_>>()
-            .join(sep)
-    }
 }
