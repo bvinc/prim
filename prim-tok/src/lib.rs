@@ -136,7 +136,7 @@ impl<'a> Tokenizer<'a> {
             None => Ok(None),
             Some('+') => self.read_operator("+", start_pos),
             Some('-') => {
-                if self.peek_ahead(1) == Some('>') {
+                if self.peek() == Some('>') {
                     self.advance();
                     self.advance();
                     Ok(Some(Token {
@@ -149,7 +149,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some('*') => self.read_operator("*", start_pos),
             Some('/') => {
-                if self.peek_ahead(1) == Some('/') {
+                if self.peek() == Some('/') {
                     self.advance();
                     self.read_line_comment(start_pos).map(Some)
                 } else {
@@ -157,7 +157,7 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             Some('=') => {
-                if self.peek_ahead(1) == Some('=') {
+                if self.peek() == Some('=') {
                     self.read_operator("==", start_pos)
                 } else {
                     self.read_operator("=", start_pos)
@@ -176,7 +176,7 @@ impl<'a> Tokenizer<'a> {
             Some('@') => self.emit_simple(TokenKind::At, start_pos),
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
-                if self.peek_ahead(1).is_none_or(|c| !c.is_ascii_digit()) {
+                if self.peek().is_none_or(|c| !c.is_ascii_digit()) {
                     self.emit_simple(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
@@ -262,7 +262,7 @@ impl<'a> Tokenizer<'a> {
 
         let mut radix: Option<u32> = None;
         if self.current == Some('0') {
-            if let Some(next) = self.peek_ahead(1) {
+            if let Some(next) = self.peek() {
                 radix = match next {
                     'b' => Some(2),
                     'o' => Some(8),
@@ -288,7 +288,7 @@ impl<'a> Tokenizer<'a> {
                     continue;
                 }
                 if ch == '_' {
-                    if self.peek_ahead(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+                    if self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
                         break;
                     }
                     self.advance();
@@ -305,7 +305,7 @@ impl<'a> Tokenizer<'a> {
                     continue;
                 }
                 if ch == '_' {
-                    if self.peek_ahead(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+                    if self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
                         break;
                     }
                     self.advance();
@@ -413,12 +413,8 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn peek_ahead(&self, n: usize) -> Option<char> {
-        let mut temp_chars = self.chars.clone();
-        for _ in 1..n {
-            temp_chars.next();
-        }
-        temp_chars.next()
+    fn peek(&self) -> Option<char> {
+        self.chars.clone().next()
     }
 
     fn read_line_comment(&mut self, start_pos: usize) -> Result<Token, TokenError> {
