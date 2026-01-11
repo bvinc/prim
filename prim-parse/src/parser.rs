@@ -27,6 +27,9 @@ pub struct Parser<'a> {
     module_name: Option<Span>,
     interner: Interner,
     diagnostics: Vec<Diagnostic>,
+    /// Whether struct literals are allowed in the current expression context.
+    /// Disabled when parsing if/while conditions to avoid ambiguity with block braces.
+    allow_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -44,6 +47,7 @@ impl<'a> Parser<'a> {
             module_name: None,
             interner: Interner::new(),
             diagnostics: Vec::new(),
+            allow_struct_literal: true,
         }
     }
 
@@ -200,20 +204,20 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an expression with minimum precedence
-    pub fn parse_expression(&mut self, min_precedence: Precedence) -> Result<Expr, ParseError> {
-        self.parse_expression_inner(min_precedence, true)
+    /// Temporarily disable struct literals and run the given closure.
+    /// Used for parsing if/while conditions where `x { }` should not be a struct literal.
+    fn without_struct_literals<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let prev = self.allow_struct_literal;
+        self.allow_struct_literal = false;
+        let result = f(self);
+        self.allow_struct_literal = prev;
+        result
     }
 
-    /// Parse an expression, optionally disallowing struct literals at the top level.
-    /// This is needed for `if` conditions where `if x {` should not parse `x {` as a struct.
-    fn parse_expression_inner(
-        &mut self,
-        min_precedence: Precedence,
-        allow_struct_literal: bool,
-    ) -> Result<Expr, ParseError> {
+    /// Parse an expression with minimum precedence
+    pub fn parse_expression(&mut self, min_precedence: Precedence) -> Result<Expr, ParseError> {
         // Parse prefix expression
-        let mut left = self.parse_prefix(allow_struct_literal)?;
+        let mut left = self.parse_prefix()?;
 
         // Parse infix expressions while precedence is sufficient
         while self
@@ -229,7 +233,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a prefix expression (literals, identifiers, unary operators, grouping)
-    fn parse_prefix(&mut self, allow_struct_literal: bool) -> Result<Expr, ParseError> {
+    fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.is_at_end() {
             return Err(ParseError::UnexpectedEof {
                 span: self.current_span(),
@@ -294,7 +298,7 @@ impl<'a> Parser<'a> {
                         args,
                         ty: Type::Undetermined,
                     })
-                } else if allow_struct_literal
+                } else if self.allow_struct_literal
                     && matches!(self.peek_kind(), Some(TokenKind::LeftBrace))
                 {
                     // This is a struct literal
@@ -1010,7 +1014,8 @@ impl<'a> Parser<'a> {
             let token = self.consume(TokenKind::While, "Expected 'while'")?;
             token.span.start()
         };
-        let condition = self.parse_expression(Precedence::NONE)?;
+        // Disallow struct literals in condition to avoid ambiguity with `while x { }`
+        let condition = self.without_struct_literals(|p| p.parse_expression(Precedence::NONE))?;
         self.consume(TokenKind::LeftBrace, "Expected '{' after while condition")?;
         let body = self.parse_statement_list()?;
         let end = self.consume(TokenKind::RightBrace, "Expected '}' to end while body")?;
@@ -1034,7 +1039,7 @@ impl<'a> Parser<'a> {
         };
 
         // Disallow struct literals in condition to avoid ambiguity with `if x { }`
-        let condition = self.parse_expression_inner(Precedence::NONE, false)?;
+        let condition = self.without_struct_literals(|p| p.parse_expression(Precedence::NONE))?;
 
         self.consume(TokenKind::LeftBrace, "Expected '{' after if condition")?;
         let then_body = self.parse_statement_list()?;

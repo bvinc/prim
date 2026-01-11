@@ -1458,3 +1458,135 @@ fn test_parse_let_mut_without_type() {
         _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
     }
 }
+
+#[test]
+fn test_if_condition_no_struct_literal_ambiguity() {
+    // `if x { }` should parse as: if (x) { }, not if (x { }) which would be a struct literal
+    let source = "fn main() { if x { } }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    assert_eq!(main_func.body.len(), 1);
+    match &main_func.body[0] {
+        Stmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            // Condition should be a simple identifier, not a struct literal
+            match condition {
+                Expr::Identifier { span, .. } => {
+                    assert_eq!(span.text(source), "x");
+                }
+                _ => panic!("Expected identifier in condition, got {:?}", condition),
+            }
+            assert!(then_body.is_empty());
+            assert!(else_body.is_none());
+        }
+        _ => panic!("Expected if statement, got {:?}", &main_func.body[0]),
+    }
+}
+
+#[test]
+fn test_while_condition_no_struct_literal_ambiguity() {
+    // `while x { }` should parse as: while (x) { }, not while (x { }) which would be a struct literal
+    let source = "fn main() { while x { } }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    assert_eq!(main_func.body.len(), 1);
+    match &main_func.body[0] {
+        Stmt::While {
+            condition, body, ..
+        } => {
+            // Condition should be a simple identifier, not a struct literal
+            match condition {
+                Expr::Identifier { span, .. } => {
+                    assert_eq!(span.text(source), "x");
+                }
+                _ => panic!("Expected identifier in condition, got {:?}", condition),
+            }
+            assert!(body.is_empty());
+        }
+        _ => panic!("Expected while statement, got {:?}", &main_func.body[0]),
+    }
+}
+
+#[test]
+fn test_while_condition_with_comparison() {
+    // `while x < y { }` should parse the full comparison as the condition
+    let source = "fn main() { while x < y { } }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    assert_eq!(main_func.body.len(), 1);
+    match &main_func.body[0] {
+        Stmt::While {
+            condition, body, ..
+        } => {
+            match condition {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
+                    assert_eq!(op, &BinaryOp::Less);
+                    match left.as_ref() {
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
+                        _ => panic!("Expected identifier for left, got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
+                        _ => panic!("Expected identifier for right, got {:?}", right),
+                    }
+                }
+                _ => panic!(
+                    "Expected binary expression in condition, got {:?}",
+                    condition
+                ),
+            }
+            assert!(body.is_empty());
+        }
+        _ => panic!("Expected while statement, got {:?}", &main_func.body[0]),
+    }
+}
+
+#[test]
+fn test_if_condition_with_comparison() {
+    // `if x < y { }` should parse the full comparison as the condition
+    let source = "fn main() { if x < y { } }";
+    let program = parse_ok(source);
+
+    let main_func = &program.functions[0];
+    assert_eq!(main_func.body.len(), 1);
+    match &main_func.body[0] {
+        Stmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            match condition {
+                Expr::Binary {
+                    left, op, right, ..
+                } => {
+                    assert_eq!(op, &BinaryOp::Less);
+                    match left.as_ref() {
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
+                        _ => panic!("Expected identifier for left, got {:?}", left),
+                    }
+                    match right.as_ref() {
+                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
+                        _ => panic!("Expected identifier for right, got {:?}", right),
+                    }
+                }
+                _ => panic!(
+                    "Expected binary expression in condition, got {:?}",
+                    condition
+                ),
+            }
+            assert!(then_body.is_empty());
+            assert!(else_body.is_none());
+        }
+        _ => panic!("Expected if statement, got {:?}", &main_func.body[0]),
+    }
+}
