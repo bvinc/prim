@@ -55,6 +55,7 @@ pub enum TokenKind {
     Minus,         // -
     Star,          // *
     Slash,         // /
+    Percent,       // %
     Equals,        // =
     DoubleEquals,  // ==
     NotEquals,     // !=
@@ -169,6 +170,7 @@ impl<'a> Tokenizer<'a> {
                     self.read_operator("/", start_pos)
                 }
             }
+            Some('%') => self.read_operator("%", start_pos),
             Some('=') => {
                 if self.peek() == Some('=') {
                     self.read_operator("==", start_pos)
@@ -308,6 +310,7 @@ impl<'a> Tokenizer<'a> {
             ("*", OperatorSpacing::Postfix) => TokenKind::PostfixStar,
             ("*", OperatorSpacing::Infix) => TokenKind::Star,
             ("/", OperatorSpacing::Infix) => TokenKind::Slash,
+            ("%", OperatorSpacing::Infix) => TokenKind::Percent,
             ("=", OperatorSpacing::Infix) => TokenKind::Equals,
             ("==", OperatorSpacing::Infix) => TokenKind::DoubleEquals,
             _ => {

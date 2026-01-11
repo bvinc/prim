@@ -163,6 +163,7 @@ pub enum BinaryOp {
     Subtract,
     Multiply,
     Divide,
+    Modulo,
     Equals,
     NotEquals,
     Greater,

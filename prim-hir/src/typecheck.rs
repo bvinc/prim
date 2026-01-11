@@ -364,7 +364,11 @@ impl<'a> Checker<'a> {
                 let r = self.check_expr(right, locals)?;
 
                 match op {
-                    BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
+                    BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Modulo => {
                         // Try to unify the operand types
                         match self.unify_numeric(&l, &r) {
                             Some(unified) => {

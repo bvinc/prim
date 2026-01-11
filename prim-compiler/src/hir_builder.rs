@@ -403,6 +403,7 @@ impl<'a> LoweringContext<'a> {
                     AstBinaryOp::Subtract => BinaryOp::Subtract,
                     AstBinaryOp::Multiply => BinaryOp::Multiply,
                     AstBinaryOp::Divide => BinaryOp::Divide,
+                    AstBinaryOp::Modulo => BinaryOp::Modulo,
                     AstBinaryOp::Equals => BinaryOp::Equals,
                     AstBinaryOp::NotEquals => BinaryOp::NotEquals,
                     AstBinaryOp::Greater => BinaryOp::Greater,

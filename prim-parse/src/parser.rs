@@ -1294,6 +1294,7 @@ fn token_to_binary_op(token_kind: TokenKind) -> Option<BinaryOp> {
         TokenKind::Minus => Some(BinaryOp::Subtract),
         TokenKind::Star => Some(BinaryOp::Multiply),
         TokenKind::Slash => Some(BinaryOp::Divide),
+        TokenKind::Percent => Some(BinaryOp::Modulo),
         TokenKind::DoubleEquals => Some(BinaryOp::Equals),
         TokenKind::NotEquals => Some(BinaryOp::NotEquals),
         TokenKind::Greater => Some(BinaryOp::Greater),
@@ -1332,7 +1333,7 @@ fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
             Precedence::COMPARISON
         }
         TokenKind::Plus | TokenKind::Minus => Precedence::ADDITION,
-        TokenKind::Star | TokenKind::Slash => Precedence::MULTIPLICATION,
+        TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::MULTIPLICATION,
         TokenKind::LeftParen => Precedence::CALL,
         TokenKind::Dot => Precedence::CALL, // Field access has same precedence as function calls
         _ => Precedence::NONE,

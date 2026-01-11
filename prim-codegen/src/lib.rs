@@ -663,6 +663,7 @@ impl CraneliftCodeGenerator {
                     prim_hir::BinaryOp::Subtract => builder.ins().isub(l, r),
                     prim_hir::BinaryOp::Multiply => builder.ins().imul(l, r),
                     prim_hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
+                    prim_hir::BinaryOp::Modulo => builder.ins().srem(l, r),
                     prim_hir::BinaryOp::Equals
                     | prim_hir::BinaryOp::NotEquals
                     | prim_hir::BinaryOp::Greater
