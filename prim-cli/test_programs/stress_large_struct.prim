@@ -1,0 +1,43 @@
+// Stress test: large struct with many fields
+// This should fail or produce incorrect results due to struct flattening limitation
+
+import std.io.println_i32
+
+struct Large {
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+    e: i32,
+    f: i32,
+    g: i32,
+    h: i32,
+    i: i32,
+    j: i32,
+}
+
+fn make_large() -> Large {
+    Large {
+        a = 1,
+        b = 2,
+        c = 3,
+        d = 4,
+        e = 5,
+        f = 6,
+        g = 7,
+        h = 8,
+        i = 9,
+        j = 10,
+    }
+}
+
+fn sum_large(s: Large) -> i32 {
+    s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i + s.j
+}
+
+fn main() {
+    let s = make_large();
+    let total = sum_large(s);
+    // Expected: 1+2+3+4+5+6+7+8+9+10 = 55
+    println_i32(total);
+}
