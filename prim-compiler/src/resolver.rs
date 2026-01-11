@@ -609,6 +609,9 @@ impl<'a> NameResolver<'a> {
                     self.resolve_block(else_block, file_id, source, module_scope, local_scope);
                 }
             }
+            Expr::Block { block, .. } => {
+                self.resolve_block(block, file_id, source, module_scope, local_scope);
+            }
             Expr::IntLiteral { .. }
             | Expr::FloatLiteral { .. }
             | Expr::BoolLiteral { .. }

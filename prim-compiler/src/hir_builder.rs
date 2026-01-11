@@ -484,6 +484,11 @@ impl<'a> LoweringContext<'a> {
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
+            Expr::Block { block, ty } => HirExpr::Block {
+                block: self.lower_block(block, module, file_id),
+                ty: self.lower_type(ty, file_id),
+                span: self.span_id(block.span, FileId(file_id.0)),
+            },
         }
     }
 

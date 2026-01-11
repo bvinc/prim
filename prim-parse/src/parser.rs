@@ -393,6 +393,14 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::If) => self.parse_if_expression(),
+            Some(TokenKind::LeftBrace) => {
+                // Block expression: { stmts; expr }
+                let block = self.parse_block()?;
+                Ok(Expr::Block {
+                    block,
+                    ty: Type::Undetermined,
+                })
+            }
             Some(TokenKind::At) => {
                 // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
                 Err(ParseError::TokenError(

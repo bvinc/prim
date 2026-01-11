@@ -1018,6 +1018,12 @@ impl CraneliftCodeGenerator {
                     vec![]
                 }
             }
+            prim_hir::HirExpr::Block { block, .. } => {
+                let mut loop_exits: Vec<Block> = Vec::new();
+                let (vals, _terminated) =
+                    self.lower_block(block, program, module_id, builder, locals, &mut loop_exits)?;
+                vals.unwrap_or_default()
+            }
         })
     }
 }

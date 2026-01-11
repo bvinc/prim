@@ -645,6 +645,13 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
+            HirExpr::Block { block, ty, .. } => {
+                // Check the block and get its type from trailing expression
+                let block_ty = self.check_block(block, locals)?;
+                let result_ty = block_ty.unwrap_or(Type::Undetermined);
+                *ty = result_ty.clone();
+                Ok(result_ty)
+            }
         }
     }
 
@@ -846,6 +853,14 @@ impl<'a> Checker<'a> {
                     // Try to get type from branches
                     if let Some(then_expr) = &then_branch.expr {
                         *ty = self.finalize_type(then_expr.ty());
+                    }
+                }
+            }
+            HirExpr::Block { block, ty, .. } => {
+                self.finalize_block(block);
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    if let Some(expr) = &block.expr {
+                        *ty = self.finalize_type(expr.ty());
                     }
                 }
             }

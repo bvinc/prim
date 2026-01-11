@@ -212,6 +212,11 @@ pub enum HirExpr {
         ty: Type,
         span: SpanId,
     },
+    Block {
+        block: HirBlock,
+        ty: Type,
+        span: SpanId,
+    },
 }
 
 impl HirExpr {
@@ -228,7 +233,8 @@ impl HirExpr {
             | HirExpr::Field { ty, .. }
             | HirExpr::Deref { ty, .. }
             | HirExpr::ArrayLit { ty, .. }
-            | HirExpr::If { ty, .. } => ty,
+            | HirExpr::If { ty, .. }
+            | HirExpr::Block { ty, .. } => ty,
         }
     }
 
@@ -245,7 +251,8 @@ impl HirExpr {
             | HirExpr::Field { span, .. }
             | HirExpr::Deref { span, .. }
             | HirExpr::ArrayLit { span, .. }
-            | HirExpr::If { span, .. } => *span,
+            | HirExpr::If { span, .. }
+            | HirExpr::Block { span, .. } => *span,
         }
     }
 }

@@ -111,6 +111,10 @@ pub enum Expr {
         span: Span,
         ty: Type,
     },
+    Block {
+        block: Block,
+        ty: Type,
+    },
 }
 
 impl Expr {
@@ -127,7 +131,8 @@ impl Expr {
             | Expr::FieldAccess { ty, .. }
             | Expr::Dereference { ty, .. }
             | Expr::ArrayLiteral { ty, .. }
-            | Expr::If { ty, .. } => ty,
+            | Expr::If { ty, .. }
+            | Expr::Block { ty, .. } => ty,
         }
     }
 
@@ -144,6 +149,7 @@ impl Expr {
             | Expr::Dereference { span, .. }
             | Expr::ArrayLiteral { span, .. }
             | Expr::If { span, .. } => *span,
+            Expr::Block { block, .. } => block.span,
             Expr::FunctionCall { path, args, .. } => {
                 let first = *path.segments.first().expect("path must have segments");
                 let last = *path.segments.last().unwrap();

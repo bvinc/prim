@@ -1,0 +1,126 @@
+// Test block expressions in various contexts
+import std.io.println_i32
+
+fn block_as_return() -> i32 {
+    // Block as the return expression of a function
+    {
+        let x = 10
+        let y = 20
+        x + y
+    }
+}
+
+fn assign_block_to_variable() -> i32 {
+    // Assign a block expression to a variable
+    let result = {
+        let a = 5
+        let b = 7
+        a * b
+    }
+    result
+}
+
+fn nested_blocks() -> i32 {
+    // Nested block expressions
+    let outer = {
+        let inner = {
+            let deep = {
+                42
+            }
+            deep + 8
+        }
+        inner * 2
+    }
+    outer
+}
+
+fn block_in_arithmetic() -> i32 {
+    // Block expression used in arithmetic
+    let x = 10 + {
+        let temp = 5
+        temp * 2
+    }
+    x
+}
+
+fn block_in_middle() -> i32 {
+    let before = 100
+
+    // Random block in the middle for scoping
+    {
+        let scoped = 999
+        println_i32(scoped)
+    }
+
+    let after = 200
+    before + after
+}
+
+fn block_in_function_arg() {
+    // Block expression as function argument
+    println_i32({
+        let computed = 7 * 8
+        computed + 1
+    })
+}
+
+fn multiple_blocks_in_expression() -> i32 {
+    // Multiple block expressions in one expression
+    let sum = {
+        let a = 1
+        a
+    } + {
+        let b = 2
+        b
+    } + {
+        let c = 3
+        c
+    }
+    sum
+}
+
+fn block_with_if_inside() -> i32 {
+    // Block containing an if expression
+    let result = {
+        let condition = 1
+        if condition == 1 {
+            100
+        } else {
+            200
+        }
+    }
+    result
+}
+
+fn main() {
+    // Test block as return expression
+    let r1 = block_as_return()
+    println_i32(r1)  // Expected: 30
+
+    // Test assigning block to variable
+    let r2 = assign_block_to_variable()
+    println_i32(r2)  // Expected: 35
+
+    // Test nested blocks
+    let r3 = nested_blocks()
+    println_i32(r3)  // Expected: 100 ((42 + 8) * 2)
+
+    // Test block in arithmetic
+    let r4 = block_in_arithmetic()
+    println_i32(r4)  // Expected: 20 (10 + 5*2)
+
+    // Test block in middle of function
+    let r5 = block_in_middle()
+    println_i32(r5)  // Expected: 999 then 300
+
+    // Test block as function argument
+    block_in_function_arg()  // Expected: 57
+
+    // Test multiple blocks in expression
+    let r6 = multiple_blocks_in_expression()
+    println_i32(r6)  // Expected: 6
+
+    // Test block with if inside
+    let r7 = block_with_if_inside()
+    println_i32(r7)  // Expected: 100
+}
