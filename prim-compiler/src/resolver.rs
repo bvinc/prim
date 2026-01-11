@@ -336,9 +336,7 @@ impl<'a> NameResolver<'a> {
             if let Some(ret) = &func.return_type {
                 self.resolve_type_use(ret, file.file_id, source, module_scope);
             }
-            for stmt in &func.body {
-                self.resolve_stmt(stmt, file.file_id, source, module_scope, local_scope);
-            }
+            self.resolve_block(&func.body, file.file_id, source, module_scope, local_scope);
         }
 
         for s in &file.ast.structs {
@@ -444,22 +442,6 @@ impl<'a> NameResolver<'a> {
             }
             Stmt::Expr(expr) => {
                 self.resolve_expr(expr, file_id, source, module_scope, local_scope);
-            }
-            Stmt::If {
-                condition,
-                then_body,
-                else_body,
-                ..
-            } => {
-                self.resolve_expr(condition, file_id, source, module_scope, local_scope);
-                for stmt in then_body {
-                    self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
-                }
-                if let Some(body) = else_body {
-                    for stmt in body {
-                        self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
-                    }
-                }
             }
             Stmt::Loop { body, .. } => {
                 for stmt in body {
@@ -615,10 +597,38 @@ impl<'a> NameResolver<'a> {
                     self.resolve_expr(elem, file_id, source, module_scope, local_scope);
                 }
             }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.resolve_expr(condition, file_id, source, module_scope, local_scope);
+                self.resolve_block(then_branch, file_id, source, module_scope, local_scope);
+                if let Some(else_block) = else_branch {
+                    self.resolve_block(else_block, file_id, source, module_scope, local_scope);
+                }
+            }
             Expr::IntLiteral { .. }
             | Expr::FloatLiteral { .. }
             | Expr::BoolLiteral { .. }
             | Expr::StringLiteral { .. } => {}
+        }
+    }
+
+    fn resolve_block(
+        &mut self,
+        block: &prim_parse::Block,
+        file_id: FileId,
+        source: &str,
+        module_scope: &HashMap<String, SymbolId>,
+        local_scope: &mut HashMap<String, LocalBinding>,
+    ) {
+        for stmt in &block.stmts {
+            self.resolve_stmt(stmt, file_id, source, module_scope, local_scope);
+        }
+        if let Some(trailing_expr) = &block.expr {
+            self.resolve_expr(trailing_expr, file_id, source, module_scope, local_scope);
         }
     }
 

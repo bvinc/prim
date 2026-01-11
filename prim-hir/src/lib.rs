@@ -110,6 +110,8 @@ pub struct HirField {
 #[derive(Clone, Debug)]
 pub struct HirBlock {
     pub stmts: Vec<HirStmt>,
+    /// Trailing expression (without semicolon) - the block's value.
+    pub expr: Option<Box<HirExpr>>,
 }
 
 #[derive(Clone, Debug)]
@@ -127,12 +129,6 @@ pub enum HirStmt {
         span: SpanId,
     },
     Expr(HirExpr),
-    If {
-        condition: HirExpr,
-        then_body: HirBlock,
-        else_body: Option<HirBlock>,
-        span: SpanId,
-    },
     Loop {
         body: HirBlock,
         span: SpanId,
@@ -209,6 +205,13 @@ pub enum HirExpr {
         ty: Type,
         span: SpanId,
     },
+    If {
+        condition: Box<HirExpr>,
+        then_branch: HirBlock,
+        else_branch: Option<HirBlock>,
+        ty: Type,
+        span: SpanId,
+    },
 }
 
 impl HirExpr {
@@ -224,7 +227,8 @@ impl HirExpr {
             | HirExpr::StructLit { ty, .. }
             | HirExpr::Field { ty, .. }
             | HirExpr::Deref { ty, .. }
-            | HirExpr::ArrayLit { ty, .. } => ty,
+            | HirExpr::ArrayLit { ty, .. }
+            | HirExpr::If { ty, .. } => ty,
         }
     }
 
@@ -240,7 +244,8 @@ impl HirExpr {
             | HirExpr::StructLit { span, .. }
             | HirExpr::Field { span, .. }
             | HirExpr::Deref { span, .. }
-            | HirExpr::ArrayLit { span, .. } => *span,
+            | HirExpr::ArrayLit { span, .. }
+            | HirExpr::If { span, .. } => *span,
         }
     }
 }

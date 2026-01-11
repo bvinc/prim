@@ -163,31 +163,34 @@ impl<'a> Checker<'a> {
 
         // Check return type
         if let Some(ret_ty) = &func.ret {
-            match func.body.stmts.last_mut() {
-                Some(HirStmt::Expr(expr)) => {
-                    // Propagate expected return type
-                    self.apply_expected(expr, ret_ty);
-                    let expr_ty = self.check_expr(expr, &mut locals)?;
+            // Check for trailing expression in the block
+            if let Some(expr) = &mut func.body.expr {
+                // Propagate expected return type
+                self.apply_expected(expr, ret_ty);
+                let expr_ty = self.check_expr(expr, &mut locals)?;
 
-                    // Unify and check
-                    match self.unify(&expr_ty, ret_ty) {
-                        Some(unified) => {
-                            self.apply_expected(expr, &unified);
-                        }
-                        None => {
-                            return Err(self.error(
-                                expr.span(),
-                                TypeCheckKind::TypeMismatch {
-                                    expected: ret_ty.clone(),
-                                    found: expr_ty,
-                                },
-                            ));
-                        }
+                // Unify and check
+                match self.unify(&expr_ty, ret_ty) {
+                    Some(unified) => {
+                        self.apply_expected(expr, &unified);
+                    }
+                    None => {
+                        return Err(self.error(
+                            expr.span(),
+                            TypeCheckKind::TypeMismatch {
+                                expected: ret_ty.clone(),
+                                found: expr_ty,
+                            },
+                        ));
                     }
                 }
-                _ => {
-                    return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
-                }
+            } else {
+                return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
+            }
+        } else {
+            // No return type - still check trailing expression if present
+            if let Some(expr) = &mut func.body.expr {
+                self.check_expr(expr, &mut locals)?;
             }
         }
 
@@ -273,37 +276,9 @@ impl<'a> Checker<'a> {
                 self.check_expr(expr, locals)?;
                 Ok(())
             }
-            HirStmt::If {
-                condition,
-                then_body,
-                else_body,
-                span,
-            } => {
-                let cond_ty = self.check_expr(condition, locals)?;
-                if !matches!(cond_ty, Type::Bool) {
-                    return Err(self.error(
-                        *span,
-                        TypeCheckKind::TypeMismatch {
-                            expected: Type::Bool,
-                            found: cond_ty,
-                        },
-                    ));
-                }
-                for stmt in &mut then_body.stmts {
-                    self.check_stmt(stmt, locals)?;
-                }
-                if let Some(else_block) = else_body {
-                    for stmt in &mut else_block.stmts {
-                        self.check_stmt(stmt, locals)?;
-                    }
-                }
-                Ok(())
-            }
             HirStmt::Loop { body, .. } => {
                 self.loop_depth += 1;
-                for stmt in &mut body.stmts {
-                    self.check_stmt(stmt, locals)?;
-                }
+                self.check_block(body, locals)?;
                 self.loop_depth -= 1;
                 Ok(())
             }
@@ -323,9 +298,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 self.loop_depth += 1;
-                for stmt in &mut body.stmts {
-                    self.check_stmt(stmt, locals)?;
-                }
+                self.check_block(body, locals)?;
                 self.loop_depth -= 1;
                 Ok(())
             }
@@ -336,6 +309,23 @@ impl<'a> Checker<'a> {
                     Ok(())
                 }
             }
+        }
+    }
+
+    /// Check a block (statements + optional trailing expression).
+    fn check_block(
+        &mut self,
+        block: &mut HirBlock,
+        locals: &mut HashMap<SymbolId, Type>,
+    ) -> Result<Option<Type>, TypeCheckError> {
+        for stmt in &mut block.stmts {
+            self.check_stmt(stmt, locals)?;
+        }
+        if let Some(expr) = &mut block.expr {
+            let ty = self.check_expr(expr, locals)?;
+            Ok(Some(ty))
+        } else {
+            Ok(None)
         }
     }
 
@@ -593,6 +583,64 @@ impl<'a> Checker<'a> {
                 *ty = arr.clone();
                 Ok(arr)
             }
+            HirExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ty,
+                span,
+            } => {
+                // Check condition is bool
+                let cond_ty = self.check_expr(condition, locals)?;
+                if !matches!(cond_ty, Type::Bool) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: Type::Bool,
+                            found: cond_ty,
+                        },
+                    ));
+                }
+
+                // Check then branch
+                let then_ty = self.check_block(then_branch, locals)?;
+
+                // Check else branch
+                let else_ty = if let Some(else_block) = else_branch {
+                    self.check_block(else_block, locals)?
+                } else {
+                    None
+                };
+
+                // Determine the if expression's type
+                let result_ty = match (then_ty, else_ty) {
+                    (Some(t), Some(e)) => {
+                        // Both branches have values - unify them
+                        match self.unify(&t, &e) {
+                            Some(unified) => unified,
+                            None => {
+                                return Err(self.error(
+                                    *span,
+                                    TypeCheckKind::TypeMismatch {
+                                        expected: t,
+                                        found: e,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    (Some(t), None) => {
+                        // Only then has value, else is missing - this is okay for statement context
+                        // but for expression context would be an error (caught at call site)
+                        t
+                    }
+                    (None, Some(e)) => e,
+                    (None, None) => Type::Undetermined,
+                };
+
+                *ty = result_ty.clone();
+                Ok(result_ty)
+            }
         }
     }
 
@@ -700,6 +748,9 @@ impl<'a> Checker<'a> {
         for stmt in &mut block.stmts {
             self.finalize_stmt(stmt);
         }
+        if let Some(expr) = &mut block.expr {
+            self.finalize_expr(expr);
+        }
     }
 
     fn finalize_stmt(&self, stmt: &mut HirStmt) {
@@ -715,18 +766,6 @@ impl<'a> Checker<'a> {
                 self.finalize_expr(value);
             }
             HirStmt::Expr(e) => self.finalize_expr(e),
-            HirStmt::If {
-                condition,
-                then_body,
-                else_body,
-                ..
-            } => {
-                self.finalize_expr(condition);
-                self.finalize_block(then_body);
-                if let Some(eb) = else_body {
-                    self.finalize_block(eb);
-                }
-            }
             HirStmt::Loop { body, .. } => {
                 self.finalize_block(body);
             }
@@ -784,6 +823,25 @@ impl<'a> Checker<'a> {
                 if let Type::Array(elem_ty) = ty {
                     if matches!(elem_ty.as_ref(), Type::IntVar | Type::FloatVar) {
                         *ty = Type::Array(Box::new(self.finalize_type(elem_ty)));
+                    }
+                }
+            }
+            HirExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ty,
+                ..
+            } => {
+                self.finalize_expr(condition);
+                self.finalize_block(then_branch);
+                if let Some(else_block) = else_branch {
+                    self.finalize_block(else_block);
+                }
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    // Try to get type from branches
+                    if let Some(then_expr) = &then_branch.expr {
+                        *ty = self.finalize_type(then_expr.ty());
                     }
                 }
             }

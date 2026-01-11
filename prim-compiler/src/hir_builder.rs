@@ -152,7 +152,10 @@ impl<'a> LoweringContext<'a> {
                         file: FileId(file.file_id.0),
                         params: Vec::new(),
                         ret: None,
-                        body: HirBlock { stmts: Vec::new() },
+                        body: HirBlock {
+                            stmts: Vec::new(),
+                            expr: None,
+                        },
                         span,
                         runtime_binding: f.runtime_binding.clone(),
                     });
@@ -221,13 +224,7 @@ impl<'a> LoweringContext<'a> {
                         .return_type
                         .as_ref()
                         .map(|t| self.lower_type(t, file.file_id));
-                    let body = HirBlock {
-                        stmts: f
-                            .body
-                            .iter()
-                            .map(|s| self.lower_stmt(s, module_id, file.file_id))
-                            .collect(),
-                    };
+                    let body = self.lower_block(&f.body, module_id, file.file_id);
                     let span = self.span_id(f.span, FileId(file.file_id.0));
                     if let Some(hir_func) = self.items.functions.get_mut(fid.0 as usize) {
                         hir_func.params = params;
@@ -309,34 +306,8 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*target, FileId(file_id.0)),
             },
             Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, module, file_id)),
-            Stmt::If {
-                condition,
-                then_body,
-                else_body,
-                span,
-            } => HirStmt::If {
-                condition: self.lower_expr(condition, module, file_id),
-                then_body: HirBlock {
-                    stmts: then_body
-                        .iter()
-                        .map(|s| self.lower_stmt(s, module, file_id))
-                        .collect(),
-                },
-                else_body: else_body.as_ref().map(|body| HirBlock {
-                    stmts: body
-                        .iter()
-                        .map(|s| self.lower_stmt(s, module, file_id))
-                        .collect(),
-                }),
-                span: self.span_id(*span, FileId(file_id.0)),
-            },
             Stmt::Loop { body, span } => HirStmt::Loop {
-                body: HirBlock {
-                    stmts: body
-                        .iter()
-                        .map(|s| self.lower_stmt(s, module, file_id))
-                        .collect(),
-                },
+                body: self.lower_stmt_list(body, module, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Stmt::While {
@@ -345,17 +316,48 @@ impl<'a> LoweringContext<'a> {
                 span,
             } => HirStmt::While {
                 condition: self.lower_expr(condition, module, file_id),
-                body: HirBlock {
-                    stmts: body
-                        .iter()
-                        .map(|s| self.lower_stmt(s, module, file_id))
-                        .collect(),
-                },
+                body: self.lower_stmt_list(body, module, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Stmt::Break { span } => HirStmt::Break {
                 span: self.span_id(*span, FileId(file_id.0)),
             },
+        }
+    }
+
+    /// Lower a Vec<Stmt> to HirBlock (function bodies, loop/while bodies without trailing expr).
+    fn lower_stmt_list(
+        &mut self,
+        stmts: &[Stmt],
+        module: ModuleId,
+        file_id: ProgFileId,
+    ) -> HirBlock {
+        HirBlock {
+            stmts: stmts
+                .iter()
+                .map(|s| self.lower_stmt(s, module, file_id))
+                .collect(),
+            expr: None,
+        }
+    }
+
+    /// Lower a Block (with optional trailing expression) to HirBlock.
+    fn lower_block(
+        &mut self,
+        block: &prim_parse::Block,
+        module: ModuleId,
+        file_id: ProgFileId,
+    ) -> HirBlock {
+        HirBlock {
+            stmts: block
+                .stmts
+                .iter()
+                .map(|s| self.lower_stmt(s, module, file_id))
+                .collect(),
+            expr: block
+                .expr
+                .as_ref()
+                .map(|e| Box::new(self.lower_expr(e, module, file_id))),
         }
     }
 
@@ -463,6 +465,21 @@ impl<'a> LoweringContext<'a> {
                     .iter()
                     .map(|e| self.lower_expr(e, module, file_id))
                     .collect(),
+                ty: self.lower_type(ty, file_id),
+                span: self.span_id(*span, FileId(file_id.0)),
+            },
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                span,
+                ty,
+            } => HirExpr::If {
+                condition: Box::new(self.lower_expr(condition, module, file_id)),
+                then_branch: self.lower_block(then_branch, module, file_id),
+                else_branch: else_branch
+                    .as_ref()
+                    .map(|b| self.lower_block(b, module, file_id)),
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
             },

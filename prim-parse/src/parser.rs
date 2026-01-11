@@ -1,6 +1,6 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Diagnostic, Expr, Function, ImportDecl, ImportSelector, Interner, NamePath,
+    BinaryOp, Block, Diagnostic, Expr, Function, ImportDecl, ImportSelector, Interner, NamePath,
     Parameter, ParseError, PointerMutability, Program, Severity, Span, Stmt, StructDefinition,
     StructField, StructFieldDefinition, Type,
 };
@@ -392,6 +392,7 @@ impl<'a> Parser<'a> {
                     ty: Type::Undetermined,
                 })
             }
+            Some(TokenKind::If) => self.parse_if_expression(),
             Some(TokenKind::At) => {
                 // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
                 Err(ParseError::TokenError(
@@ -550,7 +551,12 @@ impl<'a> Parser<'a> {
                     span: name_span,
                 });
             }
-            (Vec::new(), semicolon.span.end())
+            let empty_block = Block {
+                stmts: Vec::new(),
+                expr: None,
+                span: semicolon.span,
+            };
+            (empty_block, semicolon.span.end())
         } else {
             if runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
@@ -558,11 +564,9 @@ impl<'a> Parser<'a> {
                     span: name_span,
                 });
             }
-            self.consume(TokenKind::LeftBrace, "Expected '{' to start function body")?;
-            let body = self.parse_statement_list()?;
-            let right_brace =
-                self.consume(TokenKind::RightBrace, "Expected '}' to end function body")?;
-            (body, right_brace.span.end())
+            let body = self.parse_block()?;
+            let span_end = body.span.end();
+            (body, span_end)
         };
 
         let full_span = attrs.finalize_span(fn_start, span_end);
@@ -900,10 +904,68 @@ impl<'a> Parser<'a> {
         Ok(statements)
     }
 
+    /// Parse a block with statements and optional trailing expression.
+    /// A trailing expression (without semicolon) becomes the block's value.
+    fn parse_block(&mut self) -> Result<Block, ParseError> {
+        let left_brace = self.consume(TokenKind::LeftBrace, "Expected '{'")?;
+        let block_start = left_brace.span.start();
+
+        let mut stmts = Vec::new();
+        let mut trailing_expr: Option<Box<Expr>> = None;
+
+        while let Some(kind) = self.peek_kind() {
+            if kind == TokenKind::RightBrace {
+                break;
+            }
+
+            // Try to parse a statement
+            let stmt = self.parse_statement()?;
+            let stmt_end = self.previous().span.end();
+            let has_semicolon = matches!(self.peek_kind(), Some(TokenKind::Semicolon));
+
+            if has_semicolon {
+                self.advance();
+                stmts.push(stmt);
+            } else if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                // This is the last item in the block without a semicolon
+                // If it's an expression statement, it becomes the trailing expression
+                match stmt {
+                    Stmt::Expr(expr) => {
+                        trailing_expr = Some(Box::new(expr));
+                    }
+                    other => {
+                        // Non-expression statements at the end still need to be stored
+                        stmts.push(other);
+                    }
+                }
+            } else {
+                // No semicolon and not at closing brace - emit error
+                if let Some(next) = self.peek() {
+                    if self.is_same_line(stmt_end, next.span.start()) {
+                        self.emit(
+                            "statements on the same line should be separated by a semicolon",
+                            next.span,
+                            Severity::Error,
+                        );
+                    }
+                }
+                stmts.push(stmt);
+            }
+        }
+
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}'")?;
+        let block_end = right_brace.span.end();
+
+        Ok(Block {
+            stmts,
+            expr: trailing_expr,
+            span: Span::new(block_start, block_end),
+        })
+    }
+
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
         match self.peek_kind() {
             Some(TokenKind::Let) => self.parse_let_statement(),
-            Some(TokenKind::If) => self.parse_if_statement(),
             Some(TokenKind::Loop) => self.parse_loop_statement(),
             Some(TokenKind::While) => self.parse_while_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
@@ -1032,7 +1094,7 @@ impl<'a> Parser<'a> {
         Ok(Stmt::Break { span: token.span })
     }
 
-    fn parse_if_statement(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_if_expression(&mut self) -> Result<Expr, ParseError> {
         let if_start = {
             let token = self.consume(TokenKind::If, "Expected 'if'")?;
             token.span.start()
@@ -1041,31 +1103,36 @@ impl<'a> Parser<'a> {
         // Disallow struct literals in condition to avoid ambiguity with `if x { }`
         let condition = self.without_struct_literals(|p| p.parse_expression(Precedence::NONE))?;
 
-        self.consume(TokenKind::LeftBrace, "Expected '{' after if condition")?;
-        let then_body = self.parse_statement_list()?;
-        let mut end = self
-            .consume(TokenKind::RightBrace, "Expected '}' to end if body")?
-            .span
-            .end();
+        let then_branch = self.parse_block()?;
+        let mut end = then_branch.span.end();
 
-        let else_body = if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+        let else_branch = if matches!(self.peek_kind(), Some(TokenKind::Else)) {
             self.advance(); // consume 'else'
-            self.consume(TokenKind::LeftBrace, "Expected '{' after 'else'")?;
-            let body = self.parse_statement_list()?;
-            end = self
-                .consume(TokenKind::RightBrace, "Expected '}' to end else body")?
-                .span
-                .end();
-            Some(body)
+            // Check for `else if` - treat as `else { if ... }`
+            if matches!(self.peek_kind(), Some(TokenKind::If)) {
+                let nested_if = self.parse_if_expression()?;
+                let nested_span = nested_if.span();
+                end = nested_span.end();
+                Some(Block {
+                    stmts: Vec::new(),
+                    expr: Some(Box::new(nested_if)),
+                    span: nested_span,
+                })
+            } else {
+                let else_block = self.parse_block()?;
+                end = else_block.span.end();
+                Some(else_block)
+            }
         } else {
             None
         };
 
-        Ok(Stmt::If {
-            condition,
-            then_body,
-            else_body,
+        Ok(Expr::If {
+            condition: Box::new(condition),
+            then_branch,
+            else_branch,
             span: Span::new(if_start, end),
+            ty: Type::Undetermined,
         })
     }
 

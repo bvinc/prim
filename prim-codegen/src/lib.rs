@@ -1,4 +1,5 @@
 //! HIR-based Cranelift code generator (work in progress).
+use cranelift::codegen::ir::BlockArg;
 use cranelift::prelude::*;
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -241,37 +242,28 @@ impl CraneliftCodeGenerator {
             &self.struct_layouts,
         )?;
 
-        let mut last_val: Option<Vec<Value>> = None;
         let mut loop_exits: Vec<Block> = Vec::new();
-        for stmt in &func.body.stmts {
-            let flow = self.lower_stmt(
-                stmt,
-                program,
-                func.module,
-                &mut builder,
-                &mut locals,
-                &mut loop_exits,
-            )?;
-            match flow {
-                StmtFlow::Continue => {}
-                StmtFlow::Value(vs) => last_val = Some(vs),
-                StmtFlow::Terminated => break,
-            }
-        }
+        let (trailing_val, terminated) = self.lower_block(
+            &func.body,
+            program,
+            func.module,
+            &mut builder,
+            &mut locals,
+            &mut loop_exits,
+        )?;
 
-        let rets = if program.main == Some(func.name) {
-            vec![builder.ins().iconst(types::I32, 0)]
-        } else if let Some(ret_ty) = &func.ret {
-            let out = match last_val {
-                Some(vs) if !vs.is_empty() => vs,
-                _ => return Err(CodegenError::MissingReturnValue),
+        if !terminated {
+            let rets = if program.main == Some(func.name) {
+                vec![builder.ins().iconst(types::I32, 0)]
+            } else if let Some(ret_ty) = &func.ret {
+                let out = trailing_val.ok_or(CodegenError::MissingReturnValue)?;
+                validate_return_values(&builder, &out, ret_ty, &self.struct_layouts)?;
+                out
+            } else {
+                Vec::new()
             };
-            validate_return_values(&builder, &out, ret_ty, &self.struct_layouts)?;
-            out
-        } else {
-            Vec::new()
-        };
-        builder.ins().return_(&rets);
+            builder.ins().return_(&rets);
+        }
         builder.finalize();
 
         self.module.define_function(func_id, ctx)?;
@@ -300,8 +292,8 @@ impl CraneliftCodeGenerator {
                 Ok(StmtFlow::Continue)
             }
             prim_hir::HirStmt::Expr(expr) => {
-                let vals = self.lower_expr(expr, program, module_id, builder, locals)?;
-                Ok(StmtFlow::Value(vals))
+                let _vals = self.lower_expr(expr, program, module_id, builder, locals)?;
+                Ok(StmtFlow::Value)
             }
             prim_hir::HirStmt::Loop { body, .. } => {
                 let body_block = builder.create_block();
@@ -319,7 +311,7 @@ impl CraneliftCodeGenerator {
                             terminated = true;
                             break;
                         }
-                        StmtFlow::Continue | StmtFlow::Value(_) => {}
+                        StmtFlow::Continue | StmtFlow::Value => {}
                     }
                 }
                 loop_exits.pop();
@@ -359,7 +351,7 @@ impl CraneliftCodeGenerator {
                             terminated = true;
                             break;
                         }
-                        StmtFlow::Continue | StmtFlow::Value(_) => {}
+                        StmtFlow::Continue | StmtFlow::Value => {}
                     }
                 }
                 loop_exits.pop();
@@ -384,65 +376,41 @@ impl CraneliftCodeGenerator {
                 builder.ins().jump(exit, &[]);
                 Ok(StmtFlow::Terminated)
             }
-            prim_hir::HirStmt::If {
-                condition,
-                then_body,
-                else_body,
-                ..
-            } => {
-                let cond = self.lower_expr(condition, program, module_id, builder, locals)?;
-                let cond_val = cond[0];
+        }
+    }
 
-                let then_block = builder.create_block();
-                let merge_block = builder.create_block();
-                let else_block = if else_body.is_some() {
-                    builder.create_block()
-                } else {
-                    merge_block
-                };
-
-                builder
-                    .ins()
-                    .brif(cond_val, then_block, &[], else_block, &[]);
-
-                // Then block
-                builder.switch_to_block(then_block);
-                builder.seal_block(then_block);
-                let mut then_terminated = false;
-                for s in &then_body.stmts {
-                    let flow =
-                        self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
-                    if matches!(flow, StmtFlow::Terminated) {
-                        then_terminated = true;
-                        break;
-                    }
+    /// Lower a HirBlock, returning the trailing expression value if present.
+    fn lower_block(
+        &mut self,
+        block: &prim_hir::HirBlock,
+        program: &HirProgram,
+        module_id: prim_hir::ModuleId,
+        builder: &mut FunctionBuilder,
+        locals: &mut VarEnv,
+        loop_exits: &mut Vec<Block>,
+    ) -> Result<(Option<Vec<Value>>, bool), CodegenError> {
+        let mut terminated = false;
+        for stmt in &block.stmts {
+            let flow = self.lower_stmt(stmt, program, module_id, builder, locals, loop_exits)?;
+            match flow {
+                StmtFlow::Terminated => {
+                    terminated = true;
+                    break;
                 }
-                if !then_terminated {
-                    builder.ins().jump(merge_block, &[]);
-                }
-
-                // Else block (if present)
-                if let Some(else_block_body) = else_body {
-                    builder.switch_to_block(else_block);
-                    builder.seal_block(else_block);
-                    let mut else_terminated = false;
-                    for s in &else_block_body.stmts {
-                        let flow =
-                            self.lower_stmt(s, program, module_id, builder, locals, loop_exits)?;
-                        if matches!(flow, StmtFlow::Terminated) {
-                            else_terminated = true;
-                            break;
-                        }
-                    }
-                    if !else_terminated {
-                        builder.ins().jump(merge_block, &[]);
-                    }
-                }
-
-                builder.switch_to_block(merge_block);
-                builder.seal_block(merge_block);
-                Ok(StmtFlow::Continue)
+                StmtFlow::Continue | StmtFlow::Value => {}
             }
+        }
+
+        if terminated {
+            return Ok((None, true));
+        }
+
+        // Evaluate trailing expression if present
+        if let Some(expr) = &block.expr {
+            let vals = self.lower_expr(expr, program, module_id, builder, locals)?;
+            Ok((Some(vals), false))
+        } else {
+            Ok((None, false))
         }
     }
 
@@ -644,6 +612,120 @@ impl CraneliftCodeGenerator {
                     self.lower_expr(&elements[0], program, module_id, builder, locals)?
                 }
             }
+            prim_hir::HirExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ty,
+                ..
+            } => {
+                let cond = self.lower_expr(condition, program, module_id, builder, locals)?;
+                let cond_val = cond[0];
+
+                let then_block = builder.create_block();
+                let merge_block = builder.create_block();
+                let else_block = if else_branch.is_some() {
+                    builder.create_block()
+                } else {
+                    merge_block
+                };
+
+                builder
+                    .ins()
+                    .brif(cond_val, then_block, &[], else_block, &[]);
+
+                // Determine if we need phi values (if-expression with value)
+                let needs_value = !matches!(ty, prim_hir::Type::Undetermined)
+                    && (then_branch.expr.is_some()
+                        || else_branch.as_ref().is_some_and(|b| b.expr.is_some()));
+
+                // Then block
+                builder.switch_to_block(then_block);
+                builder.seal_block(then_block);
+
+                let mut loop_exits: Vec<Block> = Vec::new();
+                let (then_vals, then_terminated) = self.lower_block(
+                    then_branch,
+                    program,
+                    module_id,
+                    builder,
+                    locals,
+                    &mut loop_exits,
+                )?;
+
+                // Add block params for phi values BEFORE doing jumps
+                // We need to figure out the return types first
+                let param_types: Vec<cranelift::prelude::Type> = if needs_value {
+                    match ty {
+                        prim_hir::Type::Struct(id) => {
+                            let layout = self
+                                .struct_layouts
+                                .get(id)
+                                .ok_or(CodegenError::MissingStructLayout(*id))?;
+                            layout.order.iter().map(|f| layout.fields[f].ty).collect()
+                        }
+                        prim_hir::Type::Pointer { .. } => vec![self.pointer_type],
+                        _ => {
+                            let (lane, _) = scalar_lane(ty)?;
+                            vec![lane]
+                        }
+                    }
+                } else {
+                    vec![]
+                };
+
+                // Add block params for merge block
+                for param_ty in &param_types {
+                    builder.append_block_param(merge_block, *param_ty);
+                }
+
+                // Helper to emit jump with optional block args
+                let emit_branch_jump = |builder: &mut FunctionBuilder,
+                                        vals: &Option<Vec<Value>>,
+                                        needs_value: bool,
+                                        target: Block| {
+                    let args: Vec<BlockArg> = if needs_value {
+                        vals.as_ref()
+                            .map(|v| v.iter().map(|val| BlockArg::Value(*val)).collect())
+                            .unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
+                    builder.ins().jump(target, &args);
+                };
+
+                if !then_terminated {
+                    emit_branch_jump(builder, &then_vals, needs_value, merge_block);
+                }
+
+                // Else block (if present)
+                if let Some(else_body) = else_branch {
+                    builder.switch_to_block(else_block);
+                    builder.seal_block(else_block);
+
+                    let (else_vals, else_terminated) = self.lower_block(
+                        else_body,
+                        program,
+                        module_id,
+                        builder,
+                        locals,
+                        &mut loop_exits,
+                    )?;
+
+                    if !else_terminated {
+                        emit_branch_jump(builder, &else_vals, needs_value, merge_block);
+                    }
+                }
+
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
+
+                if needs_value && !param_types.is_empty() {
+                    builder.block_params(merge_block).to_vec()
+                } else {
+                    vec![]
+                }
+            }
         })
     }
 }
@@ -764,7 +846,7 @@ fn bind_params(
 
 enum StmtFlow {
     Continue,
-    Value(Vec<Value>),
+    Value,
     Terminated,
 }
 

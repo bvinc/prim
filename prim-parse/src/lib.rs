@@ -104,6 +104,13 @@ pub enum Expr {
         span: Span,
         ty: Type,
     },
+    If {
+        condition: Box<Expr>,
+        then_branch: Block,
+        else_branch: Option<Block>,
+        span: Span,
+        ty: Type,
+    },
 }
 
 impl Expr {
@@ -119,7 +126,8 @@ impl Expr {
             | Expr::StructLiteral { ty, .. }
             | Expr::FieldAccess { ty, .. }
             | Expr::Dereference { ty, .. }
-            | Expr::ArrayLiteral { ty, .. } => ty,
+            | Expr::ArrayLiteral { ty, .. }
+            | Expr::If { ty, .. } => ty,
         }
     }
 
@@ -134,7 +142,8 @@ impl Expr {
             | Expr::StructLiteral { name: span, .. }
             | Expr::FieldAccess { field: span, .. }
             | Expr::Dereference { span, .. }
-            | Expr::ArrayLiteral { span, .. } => *span,
+            | Expr::ArrayLiteral { span, .. }
+            | Expr::If { span, .. } => *span,
             Expr::FunctionCall { path, args, .. } => {
                 let first = *path.segments.first().expect("path must have segments");
                 let last = *path.segments.last().unwrap();
@@ -182,6 +191,15 @@ pub struct StructFieldDefinition {
     pub field_type: Type,
 }
 
+/// A block of statements with an optional trailing expression.
+/// The trailing expression (without semicolon) is the block's value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Block {
+    pub stmts: Vec<Stmt>,
+    pub expr: Option<Box<Expr>>, // trailing expression (no semicolon)
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
@@ -195,12 +213,6 @@ pub enum Stmt {
         value: Expr,
     },
     Expr(Expr),
-    If {
-        condition: Expr,
-        then_body: Vec<Stmt>,
-        else_body: Option<Vec<Stmt>>,
-        span: Span,
-    },
     Loop {
         body: Vec<Stmt>,
         span: Span,
@@ -220,7 +232,7 @@ pub struct Function {
     pub name: InternSymbol,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
-    pub body: Vec<Stmt>,
+    pub body: Block,
     pub runtime_binding: Option<String>,
     pub span: Span,
 }

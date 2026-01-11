@@ -33,8 +33,8 @@ fn test_parse_let_statement() {
     assert_eq!(program.functions.len(), 1);
     let main_func = &program.functions[0];
     assert_eq!(program.resolve(main_func.name), "main");
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
+    assert_eq!(main_func.body.stmts.len(), 1);
+    match &main_func.body.stmts[0] {
         Stmt::Let {
             name,
             mutable,
@@ -49,7 +49,7 @@ fn test_parse_let_statement() {
                 _ => panic!("Expected IntLiteral, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -58,8 +58,8 @@ fn test_parse_loop_with_break() {
     let source = "fn main() { loop { break } }";
     let program = parse_ok(source);
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
+    assert_eq!(main_func.body.stmts.len(), 1);
+    match &main_func.body.stmts[0] {
         Stmt::Loop { body, span } => {
             assert_eq!(body.len(), 1);
             assert_eq!(span.text(source), "loop { break }");
@@ -74,7 +74,7 @@ fn test_parse_nested_loops_preserve_spans() {
     let source = "fn main() {\n    loop {\n        loop {\n            break\n        }\n        break\n    }\n}";
     let program = parse_ok(source);
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Loop { body, .. } => {
             assert_eq!(body.len(), 2);
             match &body[0] {
@@ -95,7 +95,7 @@ fn test_parse_let_without_type() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let {
             name,
             mutable,
@@ -110,7 +110,7 @@ fn test_parse_let_without_type() {
                 _ => panic!("Expected IntLiteral, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -120,7 +120,7 @@ fn test_parse_arithmetic_expression() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -149,7 +149,7 @@ fn test_parse_arithmetic_expression() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -159,7 +159,7 @@ fn test_parse_arithmetic_expression_2() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -188,7 +188,7 @@ fn test_parse_arithmetic_expression_2() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -198,8 +198,9 @@ fn test_parse_println() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
-        Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+    // The function call is a trailing expression (no semicolon)
+    match main_func.body.expr.as_deref() {
+        Some(Expr::FunctionCall { path, args, .. }) => {
             assert_eq!(path.segments[0].text(source), "println");
             assert_eq!(args.len(), 1);
             match &args[0] {
@@ -209,7 +210,7 @@ fn test_parse_println() {
         }
         _ => panic!(
             "Expected println function call, got {:?}",
-            &main_func.body[0]
+            &main_func.body.expr
         ),
     }
 }
@@ -220,8 +221,9 @@ fn test_parse_println_with_expression() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
-        Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+    // The function call is a trailing expression (no semicolon)
+    match main_func.body.expr.as_deref() {
+        Some(Expr::FunctionCall { path, args, .. }) => {
             assert_eq!(path.segments[0].text(source), "println");
             assert_eq!(args.len(), 1);
             match &args[0] {
@@ -243,7 +245,7 @@ fn test_parse_println_with_expression() {
         }
         _ => panic!(
             "Expected println function call, got {:?}",
-            &main_func.body[0]
+            &main_func.body.expr
         ),
     }
 }
@@ -291,7 +293,7 @@ fn test_parse_parentheses_basic() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -322,7 +324,7 @@ fn test_parse_parentheses_basic() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -390,7 +392,7 @@ fn test_parse_parentheses_nested() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -443,7 +445,7 @@ fn test_parse_parentheses_nested() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -453,7 +455,7 @@ fn test_parse_parentheses_with_all_operators() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -496,7 +498,7 @@ fn test_parse_parentheses_with_all_operators() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -506,8 +508,9 @@ fn test_parse_parentheses_function_call_args() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
-        Stmt::Expr(Expr::FunctionCall { path, args, .. }) => {
+    // The function call is a trailing expression (no semicolon)
+    match main_func.body.expr.as_deref() {
+        Some(Expr::FunctionCall { path, args, .. }) => {
             assert_eq!(path.segments[0].text(source), "println");
             assert_eq!(args.len(), 1);
             // Argument should be (2 + 3) * 4
@@ -544,7 +547,7 @@ fn test_parse_parentheses_function_call_args() {
                 _ => panic!("Expected binary expression, got {:?}", &args[0]),
             }
         }
-        _ => panic!("Expected println call, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected println call, got {:?}", &main_func.body.expr),
     }
 }
 
@@ -614,7 +617,7 @@ fn test_parse_subtraction_with_identifiers() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -631,7 +634,7 @@ fn test_parse_subtraction_with_identifiers() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -641,7 +644,7 @@ fn test_parse_subtraction_precedence() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -671,7 +674,7 @@ fn test_parse_subtraction_precedence() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -681,7 +684,7 @@ fn test_parse_subtraction_chained() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -713,7 +716,7 @@ fn test_parse_subtraction_chained() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -723,7 +726,7 @@ fn test_parse_subtraction_with_parentheses() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -753,7 +756,7 @@ fn test_parse_subtraction_with_parentheses() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -763,7 +766,7 @@ fn test_parse_division_basic() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -780,7 +783,7 @@ fn test_parse_division_basic() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -790,7 +793,7 @@ fn test_parse_division_with_identifiers() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -809,7 +812,7 @@ fn test_parse_division_with_identifiers() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -819,7 +822,7 @@ fn test_parse_division_precedence_with_addition() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -851,7 +854,7 @@ fn test_parse_division_precedence_with_addition() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -861,7 +864,7 @@ fn test_parse_division_chained() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -893,7 +896,7 @@ fn test_parse_division_chained() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -903,7 +906,7 @@ fn test_parse_division_with_multiplication() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -933,7 +936,7 @@ fn test_parse_division_with_multiplication() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -943,7 +946,7 @@ fn test_parse_division_with_parentheses() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let { value, .. } => match value {
             Expr::Binary {
                 left, op, right, ..
@@ -975,7 +978,7 @@ fn test_parse_division_with_parentheses() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -1039,7 +1042,7 @@ fn main() {
         .expect("main function should exist");
 
     // Verify main has statements
-    assert!(!main_func.body.is_empty());
+    assert!(!main_func.body.stmts.is_empty());
 
     // Quick check that we have function calls in the AST
     let debug_str = format!("{:#?}", program);
@@ -1053,7 +1056,7 @@ fn main() {
         .expect("level1 function should exist");
 
     // Find the function call to level2 in level1
-    let has_level2_call = level1_func.body.iter().any(|stmt| match stmt {
+    let has_level2_call = level1_func.body.stmts.iter().any(|stmt| match stmt {
         Stmt::Let {
             value: Expr::FunctionCall { path, .. },
             ..
@@ -1097,7 +1100,7 @@ fn test_whitespace_ignored() {
     );
 
     // Test that the arithmetic expression is parsed correctly in both cases
-    if let Some(Stmt::Let { value, .. }) = messy_program.functions[0].body.first() {
+    if let Some(Stmt::Let { value, .. }) = messy_program.functions[0].body.stmts.first() {
         // Should be parsed as 2 + (3 * 4)
         if let Expr::Binary {
             left,
@@ -1156,13 +1159,14 @@ fn main() {
 
     // Check main function has struct literal and field access
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 2);
+    // The let statement is in stmts, the println is the trailing expression
+    assert_eq!(main_func.body.stmts.len(), 1);
 
     // Check struct literal in let statement
     if let Stmt::Let {
         value: Expr::StructLiteral { name, fields, .. },
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         assert_eq!(name.text(source), "Point");
         assert_eq!(fields.len(), 2);
@@ -1172,8 +1176,8 @@ fn main() {
         panic!("Expected struct literal in let statement");
     }
 
-    // Check field access in println
-    if let Stmt::Expr(Expr::FunctionCall { args, .. }) = &main_func.body[1] {
+    // Check field access in println (trailing expression)
+    if let Some(Expr::FunctionCall { args, .. }) = main_func.body.expr.as_deref() {
         if let Expr::FieldAccess { object, field, .. } = &args[0] {
             assert_eq!(field.text(source), "x");
             if let Expr::Identifier { span: id, .. } = object.as_ref() {
@@ -1198,7 +1202,7 @@ fn test_parse_field_access() {
     if let Stmt::Let {
         value: Expr::FieldAccess { object, field, .. },
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         assert_eq!(field.text(source), "x");
         if let Expr::Identifier { span: obj_name, .. } = object.as_ref() {
@@ -1220,7 +1224,7 @@ fn test_parse_struct_literal() {
     if let Stmt::Let {
         value: Expr::StructLiteral { name, fields, .. },
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         assert_eq!(name.text(source), "Point");
         assert_eq!(fields.len(), 2);
@@ -1254,7 +1258,7 @@ fn test_parse_struct_type_annotation() {
     if let Stmt::Let {
         type_annotation: Some(Type::Struct(name)),
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         assert_eq!(name.text(source), "Point");
     } else {
@@ -1276,7 +1280,7 @@ fn test_parse_pointer_types() {
                 pointee,
             }),
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         assert_eq!(*mutability, PointerMutability::Const);
         assert!(matches!(**pointee, Type::U8));
@@ -1296,7 +1300,7 @@ fn test_parse_pointer_types() {
                 pointee,
             }),
         ..
-    } = &main_func_mut.body[0]
+    } = &main_func_mut.body.stmts[0]
     {
         assert_eq!(*mutability, PointerMutability::Mutable);
         assert!(matches!(**pointee, Type::I32));
@@ -1314,7 +1318,7 @@ fn test_parse_dereference() {
     if let Stmt::Let {
         value: Expr::Dereference { operand, .. },
         ..
-    } = &main_func.body[0]
+    } = &main_func.body.stmts[0]
     {
         if let Expr::Identifier { span: name, .. } = &**operand {
             assert_eq!(name.text(source), "ptr");
@@ -1418,8 +1422,8 @@ fn test_parse_let_mut() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
+    assert_eq!(main_func.body.stmts.len(), 1);
+    match &main_func.body.stmts[0] {
         Stmt::Let {
             name,
             mutable,
@@ -1434,7 +1438,7 @@ fn test_parse_let_mut() {
                 _ => panic!("Expected IntLiteral, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -1444,7 +1448,7 @@ fn test_parse_let_mut_without_type() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    match &main_func.body[0] {
+    match &main_func.body.stmts[0] {
         Stmt::Let {
             name,
             mutable,
@@ -1455,7 +1459,7 @@ fn test_parse_let_mut_without_type() {
             assert!(*mutable);
             assert_eq!(type_annotation, &None);
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
     }
 }
 
@@ -1466,25 +1470,26 @@ fn test_if_condition_no_struct_literal_ambiguity() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
-        Stmt::If {
+    // The if is a trailing expression (no semicolon), so it ends up in body.expr
+    assert!(main_func.body.stmts.is_empty());
+    match main_func.body.expr.as_deref() {
+        Some(Expr::If {
             condition,
-            then_body,
-            else_body,
+            then_branch,
+            else_branch,
             ..
-        } => {
+        }) => {
             // Condition should be a simple identifier, not a struct literal
-            match condition {
+            match condition.as_ref() {
                 Expr::Identifier { span, .. } => {
                     assert_eq!(span.text(source), "x");
                 }
                 _ => panic!("Expected identifier in condition, got {:?}", condition),
             }
-            assert!(then_body.is_empty());
-            assert!(else_body.is_none());
+            assert!(then_branch.stmts.is_empty() && then_branch.expr.is_none());
+            assert!(else_branch.is_none());
         }
-        _ => panic!("Expected if statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected if expression, got {:?}", &main_func.body.expr),
     }
 }
 
@@ -1495,8 +1500,8 @@ fn test_while_condition_no_struct_literal_ambiguity() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
+    assert_eq!(main_func.body.stmts.len(), 1);
+    match &main_func.body.stmts[0] {
         Stmt::While {
             condition, body, ..
         } => {
@@ -1509,7 +1514,10 @@ fn test_while_condition_no_struct_literal_ambiguity() {
             }
             assert!(body.is_empty());
         }
-        _ => panic!("Expected while statement, got {:?}", &main_func.body[0]),
+        _ => panic!(
+            "Expected while statement, got {:?}",
+            &main_func.body.stmts[0]
+        ),
     }
 }
 
@@ -1520,8 +1528,8 @@ fn test_while_condition_with_comparison() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
+    assert_eq!(main_func.body.stmts.len(), 1);
+    match &main_func.body.stmts[0] {
         Stmt::While {
             condition, body, ..
         } => {
@@ -1546,7 +1554,10 @@ fn test_while_condition_with_comparison() {
             }
             assert!(body.is_empty());
         }
-        _ => panic!("Expected while statement, got {:?}", &main_func.body[0]),
+        _ => panic!(
+            "Expected while statement, got {:?}",
+            &main_func.body.stmts[0]
+        ),
     }
 }
 
@@ -1557,15 +1568,16 @@ fn test_if_condition_with_comparison() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    assert_eq!(main_func.body.len(), 1);
-    match &main_func.body[0] {
-        Stmt::If {
+    // The if is a trailing expression (no semicolon), so it ends up in body.expr
+    assert!(main_func.body.stmts.is_empty());
+    match main_func.body.expr.as_deref() {
+        Some(Expr::If {
             condition,
-            then_body,
-            else_body,
+            then_branch,
+            else_branch,
             ..
-        } => {
-            match condition {
+        }) => {
+            match condition.as_ref() {
                 Expr::Binary {
                     left, op, right, ..
                 } => {
@@ -1584,9 +1596,9 @@ fn test_if_condition_with_comparison() {
                     condition
                 ),
             }
-            assert!(then_body.is_empty());
-            assert!(else_body.is_none());
+            assert!(then_branch.stmts.is_empty() && then_branch.expr.is_none());
+            assert!(else_branch.is_none());
         }
-        _ => panic!("Expected if statement, got {:?}", &main_func.body[0]),
+        _ => panic!("Expected if expression, got {:?}", &main_func.body.expr),
     }
 }
