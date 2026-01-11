@@ -143,7 +143,11 @@ impl<'a> Parser<'a> {
                             span: self.current_span(),
                         });
                     }
-                    None => return Err(ParseError::UnexpectedEof),
+                    None => {
+                        return Err(ParseError::UnexpectedEof {
+                            span: self.current_span(),
+                        });
+                    }
                 }
             }
 
@@ -178,7 +182,9 @@ impl<'a> Parser<'a> {
                     impls.push(im);
                 }
                 _ => {
-                    return Err(ParseError::StatementsOutsideFunction);
+                    return Err(ParseError::StatementsOutsideFunction {
+                        span: self.current_span(),
+                    });
                 }
             }
         }
@@ -225,7 +231,9 @@ impl<'a> Parser<'a> {
     /// Parse a prefix expression (literals, identifiers, unary operators, grouping)
     fn parse_prefix(&mut self, allow_struct_literal: bool) -> Result<Expr, ParseError> {
         if self.is_at_end() {
-            return Err(ParseError::UnexpectedEof);
+            return Err(ParseError::UnexpectedEof {
+                span: self.current_span(),
+            });
         }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
@@ -394,7 +402,9 @@ impl<'a> Parser<'a> {
                 found: self.peek_kind().unwrap(),
                 span: self.current_span(),
             }),
-            None => Err(ParseError::UnexpectedEof),
+            None => Err(ParseError::UnexpectedEof {
+                span: self.current_span(),
+            }),
         }
     }
 
@@ -793,7 +803,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        let kind = self.peek_kind().ok_or(ParseError::UnexpectedEof)?;
+        let kind = self.peek_kind().ok_or(ParseError::UnexpectedEof {
+            span: self.current_span(),
+        })?;
 
         // Handle primitive types with a simple lookup
         if let Some(ty) = token_to_primitive_type(kind) {
@@ -833,7 +845,11 @@ impl<'a> Parser<'a> {
                             span: self.current_span(),
                         });
                     }
-                    None => return Err(ParseError::UnexpectedEof),
+                    None => {
+                        return Err(ParseError::UnexpectedEof {
+                            span: self.current_span(),
+                        });
+                    }
                 };
                 let pointee = Box::new(self.parse_type()?);
                 Ok(Type::Pointer {
@@ -1056,7 +1072,9 @@ impl<'a> Parser<'a> {
                 found: tok.kind,
                 span: tok.span,
             }),
-            None => Err(ParseError::UnexpectedEof),
+            None => Err(ParseError::UnexpectedEof {
+                span: self.current_span(),
+            }),
         }
     }
 

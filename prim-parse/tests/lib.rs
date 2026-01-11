@@ -280,7 +280,7 @@ fn test_parse_error_statements_outside_function() {
     let result = parse("let x = 42").0;
 
     match result {
-        Err(ParseError::StatementsOutsideFunction) => {}
+        Err(ParseError::StatementsOutsideFunction { .. }) => {}
         _ => panic!("Expected StatementsOutsideFunction error, got {:?}", result),
     }
 }

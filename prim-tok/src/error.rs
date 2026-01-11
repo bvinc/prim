@@ -11,17 +11,17 @@ pub enum TokenError {
 impl std::fmt::Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenError::UnexpectedCharacter { ch, span } => {
-                write!(f, "Unexpected character '{}' at {}", ch, span)
+            TokenError::UnexpectedCharacter { ch, .. } => {
+                write!(f, "unexpected character '{}'", ch)
             }
-            TokenError::UnterminatedString { span } => {
-                write!(f, "Unterminated string literal at {}", span)
+            TokenError::UnterminatedString { .. } => {
+                write!(f, "unterminated string literal")
             }
-            TokenError::InvalidNumber { text, span } => {
-                write!(f, "Invalid number '{}' at {}", text, span)
+            TokenError::InvalidNumber { text, .. } => {
+                write!(f, "invalid number '{}'", text)
             }
-            TokenError::InvalidOperatorSpacing { op, span } => {
-                write!(f, "Invalid spacing around operator '{}' at {}", op, span)
+            TokenError::InvalidOperatorSpacing { op, .. } => {
+                write!(f, "invalid spacing around operator '{}'", op)
             }
         }
     }

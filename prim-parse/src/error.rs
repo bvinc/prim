@@ -7,9 +7,13 @@ pub enum ParseError {
         found: TokenKind,
         span: Span,
     },
-    UnexpectedEof,
+    UnexpectedEof {
+        span: Span,
+    },
     TokenError(TokenError),
-    StatementsOutsideFunction,
+    StatementsOutsideFunction {
+        span: Span,
+    },
     InvalidAttributeUsage {
         message: String,
         span: Span,
@@ -36,36 +40,30 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseError::UnexpectedToken {
-                expected,
-                found,
-                span,
+                expected, found, ..
             } => {
-                write!(
-                    f,
-                    "Parse error at {}: expected {}, found {:?}",
-                    span, expected, found
-                )
+                write!(f, "expected {}, found {:?}", expected, found)
             }
-            ParseError::UnexpectedEof => {
-                write!(f, "Parse error: unexpected end of file")
+            ParseError::UnexpectedEof { .. } => {
+                write!(f, "unexpected end of file")
             }
             ParseError::TokenError(token_err) => {
-                write!(f, "Tokenizer {}", token_err)
+                write!(f, "{}", token_err)
             }
-            ParseError::StatementsOutsideFunction => {
-                write!(f, "Parse error: statements must be inside a function")
+            ParseError::StatementsOutsideFunction { .. } => {
+                write!(f, "statements must be inside a function")
             }
-            ParseError::InvalidAttributeUsage { message, span } => {
-                write!(f, "Parse error at {}: {}", span, message)
+            ParseError::InvalidAttributeUsage { message, .. } => {
+                write!(f, "{}", message)
             }
             ParseError::InvalidIntegerLiteral { literal, .. } => {
-                write!(f, "Invalid integer literal: {}", literal)
+                write!(f, "invalid integer literal: {}", literal)
             }
             ParseError::InvalidFloatLiteral { literal, .. } => {
-                write!(f, "Invalid float literal: {}", literal)
+                write!(f, "invalid float literal: {}", literal)
             }
             ParseError::HasErrors => {
-                write!(f, "Parse error: compilation failed due to previous errors")
+                write!(f, "compilation failed due to previous errors")
             }
         }
     }
@@ -76,13 +74,13 @@ impl std::error::Error for ParseError {}
 impl ParseError {
     pub fn span(&self) -> Option<Span> {
         match self {
-            ParseError::UnexpectedToken { span, .. } => Some(*span),
-            ParseError::UnexpectedEof => None,
+            ParseError::UnexpectedToken { span, .. }
+            | ParseError::UnexpectedEof { span }
+            | ParseError::StatementsOutsideFunction { span }
+            | ParseError::InvalidAttributeUsage { span, .. }
+            | ParseError::InvalidIntegerLiteral { span, .. }
+            | ParseError::InvalidFloatLiteral { span, .. } => Some(*span),
             ParseError::TokenError(token_err) => Some(token_err.span()),
-            ParseError::StatementsOutsideFunction => None,
-            ParseError::InvalidAttributeUsage { span, .. } => Some(*span),
-            ParseError::InvalidIntegerLiteral { span, .. } => Some(*span),
-            ParseError::InvalidFloatLiteral { span, .. } => Some(*span),
             ParseError::HasErrors => None,
         }
     }
