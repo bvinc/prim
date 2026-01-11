@@ -223,7 +223,10 @@ impl CraneliftCodeGenerator {
         builder_context: &mut FunctionBuilderContext,
     ) -> Result<(), CodegenError> {
         let sig = self.build_signature(func, program)?;
-        let func_id = *self.func_ids.get(&func.id).expect("missing function id");
+        let func_id = *self
+            .func_ids
+            .get(&func.id)
+            .ok_or(CodegenError::MissingFunction(func.id))?;
         ctx.func.signature = sig;
 
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_context);

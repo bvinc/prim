@@ -402,9 +402,9 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
-            Some(_) => Err(ParseError::UnexpectedToken {
+            Some(kind) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
-                found: self.peek_kind().unwrap(),
+                found: kind,
                 span: self.current_span(),
             }),
             None => Err(ParseError::UnexpectedEof {
@@ -846,10 +846,10 @@ impl<'a> Parser<'a> {
                         self.advance();
                         PointerMutability::Mutable
                     }
-                    Some(_) => {
+                    Some(kind) => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "'const' or 'mut' after '*'".to_string(),
-                            found: self.peek_kind().unwrap(),
+                            found: kind,
                             span: self.current_span(),
                         });
                     }
