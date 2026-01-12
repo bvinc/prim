@@ -179,16 +179,6 @@ impl<'a> NameResolver<'a> {
                 span: func.span,
             });
             scope.insert(name, sym);
-            for param in &func.parameters {
-                let _ = self.insert_symbol(SymbolInfo {
-                    id: SymbolId(0),
-                    name: ast.resolve(param.name).to_string(),
-                    kind: SymbolKind::Param,
-                    module: Some(module_id),
-                    file: file.file_id,
-                    span: param.name_span,
-                });
-            }
         }
 
         for tr in &ast.traits {
@@ -247,7 +237,7 @@ impl<'a> NameResolver<'a> {
             for file in &module.files {
                 let mut local_scope: HashMap<String, LocalBinding> = HashMap::new();
                 let effective_scope = self.scope_with_imports(&module_scope, &module.imports);
-                self.resolve_file_uses(file, &effective_scope, &mut local_scope);
+                self.resolve_file_uses(module.id, file, &effective_scope, &mut local_scope);
             }
         }
     }
@@ -294,6 +284,7 @@ impl<'a> NameResolver<'a> {
 
     fn resolve_file_uses(
         &mut self,
+        module_id: ModuleId,
         file: &ModuleFile,
         module_scope: &HashMap<String, SymbolId>,
         local_scope: &mut HashMap<String, LocalBinding>,
@@ -303,17 +294,22 @@ impl<'a> NameResolver<'a> {
         for func in &ast.functions {
             local_scope.clear();
             for param in &func.parameters {
-                if let Some(symbol) =
-                    self.find_symbol_at_span(file.file_id, param.name_span, SymbolKind::Param)
-                {
-                    local_scope.insert(
-                        ast.resolve(param.name).to_string(),
-                        LocalBinding {
-                            symbol,
-                            mutable: false,
-                        },
-                    );
-                }
+                let name_str = ast.resolve(param.name).to_string();
+                let symbol = self.insert_symbol(SymbolInfo {
+                    id: SymbolId(0),
+                    name: name_str.clone(),
+                    kind: SymbolKind::Param,
+                    module: Some(module_id),
+                    file: file.file_id,
+                    span: param.name_span,
+                });
+                local_scope.insert(
+                    name_str,
+                    LocalBinding {
+                        symbol,
+                        mutable: false,
+                    },
+                );
                 self.resolve_type_use(&param.type_annotation, file.file_id, ast, module_scope);
             }
             if let Some(ret) = &func.return_type {
@@ -647,14 +643,5 @@ impl<'a> NameResolver<'a> {
         let module_id = self.program.module_index.get(&key)?;
         let scope = self.module_scopes.get(module_id)?;
         scope.get(name).copied()
-    }
-
-    fn find_symbol_at_span(&self, file: FileId, span: Span, kind: SymbolKind) -> Option<SymbolId> {
-        self.program
-            .name_resolution
-            .symbols
-            .iter()
-            .find(|info| info.file == file && info.span == span && info.kind == kind)
-            .map(|info| info.id)
     }
 }
