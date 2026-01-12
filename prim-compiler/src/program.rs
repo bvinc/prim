@@ -82,7 +82,6 @@ pub(crate) enum SymbolKind {
     Function,
     Struct,
     Trait,
-    Impl,
     Param,
     Local,
 }

@@ -17,22 +17,7 @@ pub enum ResolveError {
         file: FileId,
         span: Span,
     },
-    UnknownSymbol {
-        name: String,
-        file: FileId,
-        span: Span,
-    },
-    UnknownFunction {
-        name: String,
-        file: FileId,
-        span: Span,
-    },
-    UnknownStruct {
-        name: String,
-        file: FileId,
-        span: Span,
-    },
-    UnknownType {
+    UnknownName {
         name: String,
         file: FileId,
         span: Span,
@@ -44,10 +29,7 @@ impl ResolveError {
         match self {
             ResolveError::DuplicateSymbol { span, .. }
             | ResolveError::AssignToImmutable { span, .. }
-            | ResolveError::UnknownSymbol { span, .. }
-            | ResolveError::UnknownFunction { span, .. }
-            | ResolveError::UnknownStruct { span, .. }
-            | ResolveError::UnknownType { span, .. } => *span,
+            | ResolveError::UnknownName { span, .. } => *span,
         }
     }
 }
@@ -55,16 +37,11 @@ impl ResolveError {
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolveError::DuplicateSymbol { name, .. } => {
-                write!(f, "Duplicate symbol '{}'", name)
-            }
+            ResolveError::DuplicateSymbol { name, .. } => write!(f, "Duplicate symbol '{}'", name),
             ResolveError::AssignToImmutable { name, .. } => {
                 write!(f, "Cannot assign to immutable variable '{}'", name)
             }
-            ResolveError::UnknownSymbol { name, .. } => write!(f, "Unknown symbol '{}'", name),
-            ResolveError::UnknownFunction { name, .. } => write!(f, "Unknown function '{}'", name),
-            ResolveError::UnknownStruct { name, .. } => write!(f, "Unknown struct '{}'", name),
-            ResolveError::UnknownType { name, .. } => write!(f, "Unknown type '{}'", name),
+            ResolveError::UnknownName { name, .. } => write!(f, "Unknown name '{}'", name),
         }
     }
 }
@@ -75,6 +52,46 @@ impl std::error::Error for ResolveError {}
 struct LocalBinding {
     symbol: SymbolId,
     mutable: bool,
+}
+
+/// Lexically scoped local variable bindings.
+/// Each block pushes a new scope; bindings in inner scopes shadow outer ones.
+struct LocalScope {
+    scopes: Vec<HashMap<String, LocalBinding>>,
+}
+
+impl LocalScope {
+    fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+        }
+    }
+
+    fn push(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn insert(&mut self, name: String, binding: LocalBinding) {
+        self.scopes.last_mut().unwrap().insert(name, binding);
+    }
+
+    fn get(&self, name: &str) -> Option<&LocalBinding> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(b) = scope.get(name) {
+                return Some(b);
+            }
+        }
+        None
+    }
+
+    fn clear(&mut self) {
+        self.scopes.clear();
+        self.scopes.push(HashMap::new());
+    }
 }
 
 pub fn resolve_names(program: &mut Program) -> Result<(), Vec<ResolveError>> {
@@ -105,21 +122,51 @@ impl<'a> NameResolver<'a> {
         }
     }
 
+    fn add_symbol(
+        &mut self,
+        name: String,
+        kind: SymbolKind,
+        module: Option<ModuleId>,
+        file: FileId,
+        span: Span,
+    ) -> SymbolId {
+        let id = SymbolId(self.next_symbol);
+        self.next_symbol += 1;
+        self.program.name_resolution.symbols.push(SymbolInfo {
+            id,
+            name,
+            kind,
+            module,
+            file,
+            span,
+        });
+        id
+    }
+
+    fn record_use(&mut self, file: FileId, span: Span, symbol: SymbolId) {
+        self.program
+            .name_resolution
+            .uses
+            .insert(NameRef { file, span }, symbol);
+    }
+
+    fn error_unknown(&mut self, name: String, file: FileId, span: Span) {
+        self.errors
+            .push(ResolveError::UnknownName { name, file, span });
+    }
+
     fn collect_symbols(&mut self) {
         let modules = self.program.modules.clone();
         for module in modules {
             let mut scope = HashMap::new();
-            // Use the first file for the module symbol span if available.
             let file_id = module.files.first().map(|f| f.file_id).unwrap_or(FileId(0));
-            let module_name = module.name.join(".");
-            let module_symbol = self.insert_symbol(SymbolInfo {
-                id: SymbolId(0),
-                name: module_name,
-                kind: SymbolKind::Module,
-                module: Some(module.id),
-                file: file_id,
-                span: Span::empty_at(0),
-            });
+            let module_symbol = self.add_symbol(
+                module.name.join("."),
+                SymbolKind::Module,
+                Some(module.id),
+                file_id,
+                Span::empty_at(0),
+            );
             scope.insert(
                 module.name.last().cloned().unwrap_or_default(),
                 module_symbol,
@@ -139,6 +186,7 @@ impl<'a> NameResolver<'a> {
         scope: &mut HashMap<String, SymbolId>,
     ) {
         let ast = &file.ast;
+
         for s in &ast.structs {
             let name = ast.resolve(s.name).to_string();
             if scope.contains_key(&name) {
@@ -149,14 +197,13 @@ impl<'a> NameResolver<'a> {
                 });
                 continue;
             }
-            let sym = self.insert_symbol(SymbolInfo {
-                id: SymbolId(0),
-                name: name.clone(),
-                kind: SymbolKind::Struct,
-                module: Some(module_id),
-                file: file.file_id,
-                span: s.span,
-            });
+            let sym = self.add_symbol(
+                name.clone(),
+                SymbolKind::Struct,
+                Some(module_id),
+                file.file_id,
+                s.span,
+            );
             scope.insert(name, sym);
         }
 
@@ -170,14 +217,13 @@ impl<'a> NameResolver<'a> {
                 });
                 continue;
             }
-            let sym = self.insert_symbol(SymbolInfo {
-                id: SymbolId(0),
-                name: name.clone(),
-                kind: SymbolKind::Function,
-                module: Some(module_id),
-                file: file.file_id,
-                span: func.span,
-            });
+            let sym = self.add_symbol(
+                name.clone(),
+                SymbolKind::Function,
+                Some(module_id),
+                file.file_id,
+                func.span,
+            );
             scope.insert(name, sym);
         }
 
@@ -191,39 +237,15 @@ impl<'a> NameResolver<'a> {
                 });
                 continue;
             }
-            let sym = self.insert_symbol(SymbolInfo {
-                id: SymbolId(0),
-                name: name.clone(),
-                kind: SymbolKind::Trait,
-                module: Some(module_id),
-                file: file.file_id,
-                span: tr.span,
-            });
+            let sym = self.add_symbol(
+                name.clone(),
+                SymbolKind::Trait,
+                Some(module_id),
+                file.file_id,
+                tr.span,
+            );
             scope.insert(name, sym);
         }
-
-        for im in &ast.impls {
-            let _ = self.insert_symbol(SymbolInfo {
-                id: SymbolId(0),
-                name: format!(
-                    "impl {} for {}",
-                    ast.resolve(im.trait_name),
-                    ast.resolve(im.struct_name)
-                ),
-                kind: SymbolKind::Impl,
-                module: Some(module_id),
-                file: file.file_id,
-                span: im.span,
-            });
-        }
-    }
-
-    fn insert_symbol(&mut self, mut info: SymbolInfo) -> SymbolId {
-        let id = SymbolId(self.next_symbol);
-        self.next_symbol += 1;
-        info.id = id;
-        self.program.name_resolution.symbols.push(info);
-        id
     }
 
     fn resolve_uses(&mut self) {
@@ -235,7 +257,7 @@ impl<'a> NameResolver<'a> {
                 .cloned()
                 .unwrap_or_default();
             for file in &module.files {
-                let mut local_scope: HashMap<String, LocalBinding> = HashMap::new();
+                let mut local_scope = LocalScope::new();
                 let effective_scope = self.scope_with_imports(&module_scope, &module.imports);
                 self.resolve_file_uses(module.id, file, &effective_scope, &mut local_scope);
             }
@@ -260,13 +282,11 @@ impl<'a> NameResolver<'a> {
 
             match coverage {
                 ImportCoverage::All => {
-                    // Import all top-level names unqualified (merged compilation unit behavior).
                     let skip = module.last().map(|s| s.as_str()).unwrap_or("");
                     for (name, sym) in import_scope {
-                        if name == skip {
-                            continue;
+                        if name != skip {
+                            scope.insert(name.clone(), *sym);
                         }
-                        scope.insert(name.clone(), *sym);
                     }
                 }
                 ImportCoverage::Symbols(names) => {
@@ -287,31 +307,20 @@ impl<'a> NameResolver<'a> {
         module_id: ModuleId,
         file: &ModuleFile,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, LocalBinding>,
+        local_scope: &mut LocalScope,
     ) {
         let ast = &file.ast;
 
         for func in &ast.functions {
             local_scope.clear();
-            for param in &func.parameters {
-                let name_str = ast.resolve(param.name).to_string();
-                let symbol = self.insert_symbol(SymbolInfo {
-                    id: SymbolId(0),
-                    name: name_str.clone(),
-                    kind: SymbolKind::Param,
-                    module: Some(module_id),
-                    file: file.file_id,
-                    span: param.name_span,
-                });
-                local_scope.insert(
-                    name_str,
-                    LocalBinding {
-                        symbol,
-                        mutable: false,
-                    },
-                );
-                self.resolve_type_use(&param.type_annotation, file.file_id, ast, module_scope);
-            }
+            self.add_params_to_scope(
+                &func.parameters,
+                module_id,
+                file.file_id,
+                ast,
+                module_scope,
+                local_scope,
+            );
             if let Some(ret) = &func.return_type {
                 self.resolve_type_use(ret, file.file_id, ast, module_scope);
             }
@@ -346,13 +355,51 @@ impl<'a> NameResolver<'a> {
                 module_scope,
             );
             for m in &im.methods {
-                for p in &m.parameters {
-                    self.resolve_type_use(&p.type_annotation, file.file_id, ast, module_scope);
-                }
+                local_scope.clear();
+                self.add_params_to_scope(
+                    &m.parameters,
+                    module_id,
+                    file.file_id,
+                    ast,
+                    module_scope,
+                    local_scope,
+                );
                 if let Some(ret) = &m.return_type {
                     self.resolve_type_use(ret, file.file_id, ast, module_scope);
                 }
+                for stmt in &m.body {
+                    self.resolve_stmt(stmt, file.file_id, ast, module_scope, local_scope);
+                }
             }
+        }
+    }
+
+    fn add_params_to_scope(
+        &mut self,
+        params: &[prim_parse::Parameter],
+        module_id: ModuleId,
+        file_id: FileId,
+        ast: &prim_parse::Program,
+        module_scope: &HashMap<String, SymbolId>,
+        local_scope: &mut LocalScope,
+    ) {
+        for param in params {
+            let name = ast.resolve(param.name).to_string();
+            let symbol = self.add_symbol(
+                name.clone(),
+                SymbolKind::Param,
+                Some(module_id),
+                file_id,
+                param.name_span,
+            );
+            local_scope.insert(
+                name,
+                LocalBinding {
+                    symbol,
+                    mutable: false,
+                },
+            );
+            self.resolve_type_use(&param.type_annotation, file_id, ast, module_scope);
         }
     }
 
@@ -362,7 +409,7 @@ impl<'a> NameResolver<'a> {
         file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, LocalBinding>,
+        local_scope: &mut LocalScope,
     ) {
         match stmt {
             Stmt::Let {
@@ -376,17 +423,14 @@ impl<'a> NameResolver<'a> {
                     self.resolve_type_use(ann, file_id, ast, module_scope);
                 }
                 self.resolve_expr(value, file_id, ast, module_scope, local_scope);
-                // Always create a fresh symbol for each `let` binding (locals are scope-based,
-                // not file-based; reusing by name breaks `def_lookup` and shadowing).
                 let name_str = ast.resolve(*name).to_string();
-                let symbol = self.insert_symbol(SymbolInfo {
-                    id: SymbolId(0),
-                    name: name_str.clone(),
-                    kind: SymbolKind::Local,
-                    module: None,
-                    file: file_id,
-                    span: *name_span,
-                });
+                let symbol = self.add_symbol(
+                    name_str.clone(),
+                    SymbolKind::Local,
+                    None,
+                    file_id,
+                    *name_span,
+                );
                 local_scope.insert(
                     name_str,
                     LocalBinding {
@@ -401,7 +445,6 @@ impl<'a> NameResolver<'a> {
                 value,
             } => {
                 self.resolve_expr(value, file_id, ast, module_scope, local_scope);
-                // Look up the target in local scope - it must already be defined
                 let name = ast.resolve(*target);
                 if let Some(binding) = local_scope.get(name) {
                     if !binding.mutable {
@@ -411,21 +454,9 @@ impl<'a> NameResolver<'a> {
                             span: *target_span,
                         });
                     }
-                    // Record the use of the target symbol
-                    let key = NameRef {
-                        file: file_id,
-                        span: *target_span,
-                    };
-                    self.program
-                        .name_resolution
-                        .uses
-                        .insert(key, binding.symbol);
+                    self.record_use(file_id, *target_span, binding.symbol);
                 } else {
-                    self.errors.push(ResolveError::UnknownSymbol {
-                        name: name.to_string(),
-                        file: file_id,
-                        span: *target_span,
-                    });
+                    self.error_unknown(name.to_string(), file_id, *target_span);
                 }
             }
             Stmt::Expr(expr) => {
@@ -454,73 +485,19 @@ impl<'a> NameResolver<'a> {
         file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, LocalBinding>,
+        local_scope: &mut LocalScope,
     ) {
         match expr {
             Expr::Identifier { name, span, .. } => {
                 let name_str = ast.resolve(*name);
-                if let Some(sym) = local_scope
-                    .get(name_str)
-                    .map(|b| b.symbol)
-                    .or_else(|| module_scope.get(name_str).copied())
-                {
-                    let key = NameRef {
-                        file: file_id,
-                        span: *span,
-                    };
-                    self.program.name_resolution.uses.insert(key, sym);
+                if let Some(sym) = self.lookup_name(name_str, module_scope, local_scope) {
+                    self.record_use(file_id, *span, sym);
                 } else {
-                    self.errors.push(ResolveError::UnknownSymbol {
-                        name: name_str.to_string(),
-                        file: file_id,
-                        span: *span,
-                    });
+                    self.error_unknown(name_str.to_string(), file_id, *span);
                 }
             }
             Expr::FunctionCall { path, args, .. } => {
-                let target = path
-                    .segments
-                    .last()
-                    .map(|(sym, _span)| ast.resolve(*sym).to_string());
-                if let Some(name) = target {
-                    let sym = if path.segments.len() == 1 {
-                        local_scope
-                            .get(&name)
-                            .map(|b| b.symbol)
-                            .or_else(|| module_scope.get(&name).copied())
-                    } else {
-                        let module_name: Vec<String> = path
-                            .segments
-                            .iter()
-                            .take(path.segments.len() - 1)
-                            .map(|(s, _span)| ast.resolve(*s).to_string())
-                            .collect();
-                        self.resolve_module_symbol(&module_name, &name)
-                    };
-                    if let Some(sym) = sym {
-                        let key = NameRef {
-                            file: file_id,
-                            span: path.segments.last().unwrap().1,
-                        };
-                        self.program.name_resolution.uses.insert(key, sym);
-                    } else {
-                        let full_name = if path.segments.len() == 1 {
-                            name
-                        } else {
-                            let parts: Vec<String> = path
-                                .segments
-                                .iter()
-                                .map(|(s, _span)| ast.resolve(*s).to_string())
-                                .collect();
-                            parts.join(".")
-                        };
-                        self.errors.push(ResolveError::UnknownFunction {
-                            name: full_name,
-                            file: file_id,
-                            span: path.segments.last().unwrap().1,
-                        });
-                    }
-                }
+                self.resolve_path(path, file_id, ast, module_scope, local_scope);
                 for arg in args {
                     self.resolve_expr(arg, file_id, ast, module_scope, local_scope);
                 }
@@ -533,19 +510,10 @@ impl<'a> NameResolver<'a> {
             } => {
                 let struct_name = ast.resolve(*name);
                 if let Some(sym) = module_scope.get(struct_name) {
-                    let key = NameRef {
-                        file: file_id,
-                        span: *name_span,
-                    };
-                    self.program.name_resolution.uses.insert(key, *sym);
+                    self.record_use(file_id, *name_span, *sym);
                 } else {
-                    self.errors.push(ResolveError::UnknownStruct {
-                        name: struct_name.to_string(),
-                        file: file_id,
-                        span: *name_span,
-                    });
+                    self.error_unknown(struct_name.to_string(), file_id, *name_span);
                 }
-                // Field names are resolved during type checking.
                 for field in fields {
                     self.resolve_expr(&field.value, file_id, ast, module_scope, local_scope);
                 }
@@ -555,7 +523,6 @@ impl<'a> NameResolver<'a> {
                 self.resolve_expr(right, file_id, ast, module_scope, local_scope);
             }
             Expr::FieldAccess { object, .. } => {
-                // Field names are resolved during type checking.
                 self.resolve_expr(object, file_id, ast, module_scope, local_scope);
             }
             Expr::Dereference { operand, .. } => {
@@ -588,20 +555,76 @@ impl<'a> NameResolver<'a> {
         }
     }
 
+    fn lookup_name(
+        &self,
+        name: &str,
+        module_scope: &HashMap<String, SymbolId>,
+        local_scope: &LocalScope,
+    ) -> Option<SymbolId> {
+        local_scope
+            .get(name)
+            .map(|b| b.symbol)
+            .or_else(|| module_scope.get(name).copied())
+    }
+
+    fn resolve_path(
+        &mut self,
+        path: &prim_parse::NamePath,
+        file_id: FileId,
+        ast: &prim_parse::Program,
+        module_scope: &HashMap<String, SymbolId>,
+        local_scope: &LocalScope,
+    ) {
+        let (name_sym, name_span) = match path.segments.last() {
+            Some(seg) => seg,
+            None => return,
+        };
+        let name = ast.resolve(*name_sym).to_string();
+
+        let sym = if path.segments.len() == 1 {
+            self.lookup_name(&name, module_scope, local_scope)
+        } else {
+            let module_path: Vec<String> = path
+                .segments
+                .iter()
+                .take(path.segments.len() - 1)
+                .map(|(s, _)| ast.resolve(*s).to_string())
+                .collect();
+            self.resolve_module_symbol(&module_path, &name)
+        };
+
+        if let Some(sym) = sym {
+            self.record_use(file_id, *name_span, sym);
+        } else {
+            let full_name = if path.segments.len() == 1 {
+                name
+            } else {
+                path.segments
+                    .iter()
+                    .map(|(s, _)| ast.resolve(*s).to_string())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            };
+            self.error_unknown(full_name, file_id, *name_span);
+        }
+    }
+
     fn resolve_block(
         &mut self,
         block: &prim_parse::Block,
         file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &HashMap<String, SymbolId>,
-        local_scope: &mut HashMap<String, LocalBinding>,
+        local_scope: &mut LocalScope,
     ) {
+        local_scope.push();
         for stmt in &block.stmts {
             self.resolve_stmt(stmt, file_id, ast, module_scope, local_scope);
         }
         if let Some(trailing_expr) = &block.expr {
             self.resolve_expr(trailing_expr, file_id, ast, module_scope, local_scope);
         }
+        local_scope.pop();
     }
 
     fn resolve_type_use(
@@ -615,17 +638,9 @@ impl<'a> NameResolver<'a> {
             prim_parse::Type::Struct { name, span } => {
                 let name_str = ast.resolve(*name).to_string();
                 if let Some(sym) = module_scope.get(&name_str).copied() {
-                    let key = NameRef {
-                        file: file_id,
-                        span: *span,
-                    };
-                    self.program.name_resolution.uses.insert(key, sym);
+                    self.record_use(file_id, *span, sym);
                 } else {
-                    self.errors.push(ResolveError::UnknownType {
-                        name: name_str,
-                        file: file_id,
-                        span: *span,
-                    });
+                    self.error_unknown(name_str, file_id, *span);
                 }
             }
             prim_parse::Type::Array(inner) => {

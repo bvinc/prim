@@ -20,7 +20,6 @@ fn kind_tag(kind: &prim_hir::SymbolKind) -> &'static str {
         prim_hir::SymbolKind::Local => "local",
         prim_hir::SymbolKind::Field => "field",
         prim_hir::SymbolKind::Trait => "trait",
-        prim_hir::SymbolKind::Impl => "impl",
         prim_hir::SymbolKind::Unknown => "unknown",
     }
 }

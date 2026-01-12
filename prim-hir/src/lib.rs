@@ -291,7 +291,6 @@ pub enum SymbolKind {
     Local,
     Field,
     Trait,
-    Impl,
     Unknown,
 }
 

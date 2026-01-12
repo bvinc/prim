@@ -622,7 +622,6 @@ impl<'a> LoweringContext<'a> {
             ResSymbolKind::Param => SymbolKind::Param,
             ResSymbolKind::Local => SymbolKind::Local,
             ResSymbolKind::Trait => SymbolKind::Trait,
-            ResSymbolKind::Impl => SymbolKind::Impl,
             ResSymbolKind::Module => SymbolKind::Module,
         }
     }
