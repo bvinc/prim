@@ -379,6 +379,7 @@ name = "prim-hir"
 version = "0.1.0"
 dependencies = [
  "prim-tok",
+ "prim-util",
 ]
 
 [[package]]
@@ -386,7 +387,7 @@ name = "prim-parse"
 version = "0.1.0"
 dependencies = [
  "prim-tok",
- "string-interner",
+ "prim-util",
 ]
 
 [[package]]
@@ -396,6 +397,13 @@ version = "0.1.0"
 [[package]]
 name = "prim-tok"
 version = "0.1.0"
+
+[[package]]
+name = "prim-util"
+version = "0.1.0"
+dependencies = [
+ "string-interner",
+]
 
 [[package]]
 name = "proc-macro2"

@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+pub use prim_util::{InternSymbol, Interner};
+
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
 
@@ -32,6 +34,7 @@ pub struct HirProgram {
     pub modules: Vec<Module>,
     pub items: Items,
     pub symbols: SymbolTable,
+    pub interner: Interner,
     pub main: Option<SymbolId>,
     pub files: Vec<FileInfo>,
     pub spans: Vec<(FileId, Span)>,
@@ -102,7 +105,7 @@ pub struct HirParam {
 
 #[derive(Clone, Debug)]
 pub struct HirField {
-    pub name: SymbolId,
+    pub name: InternSymbol,
     pub ty: Type,
     pub span: SpanId,
 }
@@ -185,13 +188,13 @@ pub enum HirExpr {
     },
     StructLit {
         struct_id: StructId,
-        fields: Vec<(SymbolId, HirExpr)>,
+        fields: Vec<(InternSymbol, HirExpr)>,
         ty: Type,
         span: SpanId,
     },
     Field {
         base: Box<HirExpr>,
-        field: SymbolId,
+        field: InternSymbol,
         ty: Type,
         span: SpanId,
     },

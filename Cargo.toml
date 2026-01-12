@@ -2,7 +2,8 @@
 members = [
     "prim-cli",
     "prim-tok",
-    "prim-parse", 
+    "prim-util",
+    "prim-parse",
     "prim-codegen",
     "prim-rt", "prim-compiler", "prim-hir",
 ]

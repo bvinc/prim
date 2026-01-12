@@ -25,11 +25,11 @@ pub enum CodegenError {
     MissingStructLayout(prim_hir::StructId),
     MissingStructField {
         struct_id: prim_hir::StructId,
-        field: prim_hir::SymbolId,
+        field: prim_hir::InternSymbol,
     },
     MissingStructValue {
         struct_id: prim_hir::StructId,
-        field: prim_hir::SymbolId,
+        field: prim_hir::InternSymbol,
     },
     MissingFunction(prim_hir::FuncId),
     InvalidFieldAccess,

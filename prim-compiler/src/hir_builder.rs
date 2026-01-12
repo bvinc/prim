@@ -97,7 +97,6 @@ impl<'a> LoweringContext<'a> {
             });
 
             for file in &module.files {
-                let source = file.source.as_ref();
                 for s in &file.ast.structs {
                     let res_id = self
                         .def_lookup
@@ -113,7 +112,7 @@ impl<'a> LoweringContext<'a> {
                         && module.name.len() == 2
                         && module.name[0] == "std"
                         && module.name[1] == "string"
-                        && s.name.text(source) == "Str"
+                        && file.ast.resolve(s.name) == "Str"
                     {
                         self.stdlib_str_struct = Some(sid);
                     }
@@ -179,16 +178,11 @@ impl<'a> LoweringContext<'a> {
                         .fields
                         .iter()
                         .map(|f| {
-                            let res_id = self
-                                .def_lookup
-                                .get(&(file.file_id, f.name))
-                                .copied()
-                                .expect("missing field symbol");
-                            let sym_id = self.ensure_symbol(res_id, Some(module_id));
+                            // Use InternSymbol directly for field names
                             HirField {
-                                name: sym_id,
+                                name: f.name,
                                 ty: self.lower_type(&f.field_type, file.file_id),
-                                span: self.span_id(f.name, FileId(file.file_id.0)),
+                                span: self.span_id(f.name_span, FileId(file.file_id.0)),
                             }
                         })
                         .collect();
@@ -211,13 +205,13 @@ impl<'a> LoweringContext<'a> {
                             name: {
                                 let res_id = self
                                     .def_lookup
-                                    .get(&(file.file_id, p.name))
+                                    .get(&(file.file_id, p.name_span))
                                     .copied()
                                     .expect("missing param symbol");
                                 self.ensure_symbol(res_id, Some(module_id))
                             },
                             ty: self.lower_type(&p.type_annotation, file.file_id),
-                            span: self.span_id(p.name, FileId(file.file_id.0)),
+                            span: self.span_id(p.name_span, FileId(file.file_id.0)),
                         })
                         .collect();
                     let ret = f
@@ -246,10 +240,21 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn finish(self) -> HirProgram {
+        // Get the interner from the root module's first file.
+        // Note: For multi-file modules, all files should ideally share an interner,
+        // but for now we assume single-file modules or consistent interning.
+        let root_module = &self.program.modules[self.root_module.0 as usize];
+        let interner = root_module
+            .files
+            .first()
+            .map(|f| f.ast.interner.clone())
+            .expect("root module should have at least one file");
+
         HirProgram {
             modules: self.modules,
             items: self.items,
             symbols: self.symbols,
+            interner,
             main: self.main,
             files: self.files,
             spans: self.spans,
@@ -279,7 +284,8 @@ impl<'a> LoweringContext<'a> {
     fn lower_stmt(&mut self, stmt: &Stmt, module: ModuleId, file_id: ProgFileId) -> HirStmt {
         match stmt {
             Stmt::Let {
-                name,
+                name: _,
+                name_span,
                 mutable,
                 type_annotation,
                 value,
@@ -287,7 +293,7 @@ impl<'a> LoweringContext<'a> {
                 name: {
                     let res_id = self
                         .def_lookup
-                        .get(&(file_id, *name))
+                        .get(&(file_id, *name_span))
                         .copied()
                         .expect("missing local symbol");
                     self.ensure_symbol(res_id, Some(module))
@@ -298,12 +304,16 @@ impl<'a> LoweringContext<'a> {
                     file_id,
                 ),
                 value: self.lower_expr(value, module, file_id),
-                span: self.span_id(*name, FileId(file_id.0)),
+                span: self.span_id(*name_span, FileId(file_id.0)),
             },
-            Stmt::Assign { target, value } => HirStmt::Assign {
-                target: self.symbol_for_use(file_id, *target, Some(module)),
+            Stmt::Assign {
+                target: _,
+                target_span,
+                value,
+            } => HirStmt::Assign {
+                target: self.symbol_for_use(file_id, *target_span, Some(module)),
                 value: self.lower_expr(value, module, file_id),
-                span: self.span_id(*target, FileId(file_id.0)),
+                span: self.span_id(*target_span, FileId(file_id.0)),
             },
             Stmt::Expr(expr) => HirStmt::Expr(self.lower_expr(expr, module, file_id)),
             Stmt::Loop { body, span } => HirStmt::Loop {
@@ -386,7 +396,7 @@ impl<'a> LoweringContext<'a> {
                     .unwrap_or(prim_hir::Type::Undetermined),
                 span: self.span_id(*span, FileId(file_id.0)),
             },
-            Expr::Identifier { span, ty } => HirExpr::Ident {
+            Expr::Identifier { name: _, span, ty } => HirExpr::Ident {
                 symbol: self.symbol_for_use(file_id, *span, Some(module)),
                 ty: self.lower_type(ty, file_id),
                 span: self.span_id(*span, FileId(file_id.0)),
@@ -417,7 +427,7 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*span, FileId(file_id.0)),
             },
             Expr::FunctionCall { path, args, ty } => {
-                let call_span = *path.segments.last().expect("missing call span");
+                let (_call_sym, call_span) = *path.segments.last().expect("missing call span");
                 let res_id = self.res_use(file_id, call_span);
                 let fid = *self.func_ids.get(&res_id).expect("missing function id");
                 let _ = self.ensure_symbol(res_id, Some(module));
@@ -431,30 +441,37 @@ impl<'a> LoweringContext<'a> {
                     span: self.span_id(call_span, FileId(file_id.0)),
                 }
             }
-            Expr::StructLiteral { name, fields, ty } => {
-                let res_id = self.res_use(file_id, *name);
+            Expr::StructLiteral {
+                name: _,
+                name_span,
+                fields,
+                ty,
+            } => {
+                let res_id = self.res_use(file_id, *name_span);
                 let struct_id = *self.struct_ids.get(&res_id).expect("missing struct id");
                 let _ = self.ensure_symbol(res_id, Some(module));
                 HirExpr::StructLit {
                     struct_id,
+                    // Use InternSymbol directly for field names
                     fields: fields
                         .iter()
-                        .map(|f| {
-                            (
-                                self.symbol_for_use(file_id, f.name, Some(module)),
-                                self.lower_expr(&f.value, module, file_id),
-                            )
-                        })
+                        .map(|f| (f.name, self.lower_expr(&f.value, module, file_id)))
                         .collect(),
                     ty: self.lower_type(ty, file_id),
-                    span: self.span_id(*name, FileId(file_id.0)),
+                    span: self.span_id(*name_span, FileId(file_id.0)),
                 }
             }
-            Expr::FieldAccess { object, field, ty } => HirExpr::Field {
+            Expr::FieldAccess {
+                object,
+                field,
+                field_span,
+                ty,
+            } => HirExpr::Field {
                 base: Box::new(self.lower_expr(object, module, file_id)),
-                field: self.symbol_for_use(file_id, *field, Some(module)),
+                // Use InternSymbol directly for field name
+                field: *field,
                 ty: self.lower_type(ty, file_id),
-                span: self.span_id(*field, FileId(file_id.0)),
+                span: self.span_id(*field_span, FileId(file_id.0)),
             },
             Expr::Dereference { operand, span, ty } => HirExpr::Deref {
                 base: Box::new(self.lower_expr(operand, module, file_id)),
@@ -494,7 +511,7 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_type(&self, ty: &Type, file_id: ProgFileId) -> prim_hir::Type {
         match ty {
-            Type::Struct(span) => {
+            Type::Struct { name: _, span } => {
                 let res_id = self.res_use(file_id, *span);
                 let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
                 prim_hir::Type::Struct(sid)
@@ -604,7 +621,6 @@ impl<'a> LoweringContext<'a> {
             }
             ResSymbolKind::Param => SymbolKind::Param,
             ResSymbolKind::Local => SymbolKind::Local,
-            ResSymbolKind::Field => SymbolKind::Field,
             ResSymbolKind::Trait => SymbolKind::Trait,
             ResSymbolKind::Impl => SymbolKind::Impl,
             ResSymbolKind::Module => SymbolKind::Module,

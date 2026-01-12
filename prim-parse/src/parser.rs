@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Block, Diagnostic, Expr, Function, ImportDecl, ImportSelector, Interner, NamePath,
-    Parameter, ParseError, PointerMutability, Program, Severity, Span, Stmt, StructDefinition,
-    StructField, StructFieldDefinition, Type,
+    BinaryOp, Block, Diagnostic, Expr, Function, ImportDecl, ImportSelector, InternSymbol,
+    Interner, NamePath, Parameter, ParseError, PointerMutability, Program, Severity, Span, Stmt,
+    StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -24,7 +24,7 @@ pub struct Parser<'a> {
     tokens: Vec<Token>,
     current: usize,
     source: &'a str,
-    module_name: Option<Span>,
+    module_name: Option<(InternSymbol, Span)>,
     interner: Interner,
     diagnostics: Vec<Diagnostic>,
     /// Whether struct literals are allowed in the current expression context.
@@ -78,6 +78,12 @@ impl<'a> Parser<'a> {
         });
     }
 
+    /// Intern a name from a span.
+    fn intern(&mut self, span: Span) -> InternSymbol {
+        let text = span.text(self.source);
+        self.interner.get_or_intern(text)
+    }
+
     fn parse_internal(&mut self) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
@@ -90,7 +96,9 @@ impl<'a> Parser<'a> {
             self.advance(); // consume 'mod'
             let name_token =
                 self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
-            self.module_name = Some(name_token.span);
+            let name_span = name_token.span;
+            let name_sym = self.intern(name_span);
+            self.module_name = Some((name_sym, name_span));
             self.consume_optional_semicolon();
         }
 
@@ -99,9 +107,11 @@ impl<'a> Parser<'a> {
             self.advance(); // consume 'import'
             let head =
                 self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
-            let mut segments = vec![head.span];
+            let head_span = head.span;
+            let head_sym = self.intern(head_span);
+            let mut segments = vec![(head_sym, head_span)];
             let mut selector = ImportSelector::All;
-            let mut trailing_symbol: Option<Span> = None;
+            let mut trailing_symbol: Option<(InternSymbol, Span)> = None;
 
             loop {
                 if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
@@ -118,7 +128,8 @@ impl<'a> Parser<'a> {
                                 "Expected identifier inside import braces",
                             )?;
                             let name_span = name_tok.span;
-                            names.push(name_span);
+                            let name_sym = self.intern(name_span);
+                            names.push((name_sym, name_span));
                             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                                 self.advance();
                                 continue;
@@ -133,9 +144,10 @@ impl<'a> Parser<'a> {
                     Some(TokenKind::Identifier) => {
                         let seg_tok = self.advance();
                         let seg_span = seg_tok.span;
-                        segments.push(seg_span);
+                        let seg_sym = self.intern(seg_span);
+                        segments.push((seg_sym, seg_span));
                         trailing_symbol = if segments.len() >= 2 {
-                            Some(seg_span)
+                            Some((seg_sym, seg_span))
                         } else {
                             None
                         };
@@ -286,7 +298,8 @@ impl<'a> Parser<'a> {
             }
             Some(TokenKind::Identifier) => {
                 let token = self.advance();
-                let name = token.span;
+                let name_span = token.span;
+                let name_sym = self.intern(name_span);
 
                 // Check if this is a function call
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
@@ -294,7 +307,7 @@ impl<'a> Parser<'a> {
                     let args = self.parse_argument_list()?;
                     self.consume(TokenKind::RightParen, "Expected ')'")?;
                     Ok(Expr::FunctionCall {
-                        path: crate::NamePath::from_single(name),
+                        path: crate::NamePath::from_single(name_sym, name_span),
                         args,
                         ty: Type::Undetermined,
                     })
@@ -306,13 +319,15 @@ impl<'a> Parser<'a> {
                     let fields = self.parse_struct_literal_fields()?;
                     self.consume(TokenKind::RightBrace, "Expected '}'")?;
                     Ok(Expr::StructLiteral {
-                        name,
+                        name: name_sym,
+                        name_span,
                         fields,
                         ty: Type::Undetermined,
                     })
                 } else {
                     Ok(Expr::Identifier {
-                        span: name,
+                        name: name_sym,
+                        span: name_span,
                         ty: Type::Undetermined,
                     })
                 }
@@ -446,10 +461,15 @@ impl<'a> Parser<'a> {
             TokenKind::LeftParen => {
                 // Function call: identifier(args) or qualified: module.ident(args)
                 let path = match left {
-                    Expr::Identifier { span: name, .. } => vec![name],
-                    Expr::FieldAccess { object, field, .. } => {
-                        if let Expr::Identifier { span: module, .. } = *object {
-                            vec![module, field]
+                    Expr::Identifier { name, span, .. } => vec![(name, span)],
+                    Expr::FieldAccess {
+                        object,
+                        field,
+                        field_span,
+                        ..
+                    } => {
+                        if let Expr::Identifier { name, span, .. } = *object {
+                            vec![(name, span), (field, field_span)]
                         } else {
                             return Err(ParseError::UnexpectedToken {
                                 expected: "module name before '.'".to_string(),
@@ -479,9 +499,12 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let field_token =
                     self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
+                let field_span = field_token.span;
+                let field_sym = self.intern(field_span);
                 Ok(Expr::FieldAccess {
                     object: Box::new(left),
-                    field: field_token.span,
+                    field: field_sym,
+                    field_span,
                     ty: Type::Undetermined,
                 })
             }
@@ -521,12 +544,9 @@ impl<'a> Parser<'a> {
         let fn_start = fn_token.span.start();
 
         // Parse function name
-        let name_span = {
-            let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
-            name_token.span
-        };
-        let name_text = name_span.text(self.source);
-        let name = self.interner.get_or_intern(name_text);
+        let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         // Parse parameter list
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
@@ -581,6 +601,7 @@ impl<'a> Parser<'a> {
 
         Ok(Function {
             name,
+            name_span,
             parameters,
             return_type,
             body,
@@ -601,7 +622,8 @@ impl<'a> Parser<'a> {
 
         // Parse struct name
         let name_token = self.consume(TokenKind::Identifier, "Expected struct name")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
@@ -613,6 +635,7 @@ impl<'a> Parser<'a> {
 
         Ok(StructDefinition {
             name,
+            name_span,
             fields,
             repr_c,
             span: full_span,
@@ -623,19 +646,17 @@ impl<'a> Parser<'a> {
         let trait_token = self.consume(TokenKind::Trait, "Expected 'trait'")?;
         let span_start = trait_token.span.start();
         let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
         self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
 
         // Parse zero or more method signatures: fn name(params) [-> type] ;
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            let name_span = {
-                let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-                name_tok.span
-            };
-            let name_text = name_span.text(self.source);
-            let mname = self.interner.get_or_intern(name_text);
+            let mname_token = self.consume(TokenKind::Identifier, "Expected method name")?;
+            let mname_span = mname_token.span;
+            let mname = self.intern(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
@@ -651,6 +672,7 @@ impl<'a> Parser<'a> {
             )?;
             methods.push(crate::TraitMethod {
                 name: mname,
+                name_span: mname_span,
                 parameters,
                 return_type,
             });
@@ -659,6 +681,7 @@ impl<'a> Parser<'a> {
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
         Ok(crate::TraitDefinition {
             name,
+            name_span,
             methods,
             span: crate::Span::new(span_start, right_brace.span.end()),
         })
@@ -668,22 +691,21 @@ impl<'a> Parser<'a> {
         let impl_token = self.consume(TokenKind::Impl, "Expected 'impl'")?;
         let span_start = impl_token.span.start();
         let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
-        let trait_name = trait_tok.span;
+        let trait_name_span = trait_tok.span;
+        let trait_name = self.intern(trait_name_span);
         self.consume(TokenKind::For, "Expected 'for' in impl")?;
         let type_tok = self.consume(TokenKind::Identifier, "Expected type name after 'for'")?;
-        let struct_name = type_tok.span;
+        let struct_name_span = type_tok.span;
+        let struct_name = self.intern(struct_name_span);
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
 
         // Parse zero or more method bodies: fn name(params) [-> type] { statements }
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            let name_span = {
-                let name_tok = self.consume(TokenKind::Identifier, "Expected method name")?;
-                name_tok.span
-            };
-            let name_text = name_span.text(self.source);
-            let mname = self.interner.get_or_intern(name_text);
+            let mname_token = self.consume(TokenKind::Identifier, "Expected method name")?;
+            let mname_span = mname_token.span;
+            let mname = self.intern(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
@@ -698,6 +720,7 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::RightBrace, "Expected '}' to end method body")?;
             methods.push(crate::ImplMethod {
                 name: mname,
+                name_span: mname_span,
                 parameters,
                 return_type,
                 body,
@@ -707,7 +730,9 @@ impl<'a> Parser<'a> {
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
         Ok(crate::ImplDefinition {
             trait_name,
+            trait_name_span,
             struct_name,
+            struct_name_span,
             methods,
             span: crate::Span::new(span_start, right_brace.span.end()),
         })
@@ -741,12 +766,17 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_field_definition(&mut self) -> Result<StructFieldDefinition, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after field name")?;
         let field_type = self.parse_type()?;
 
-        Ok(StructFieldDefinition { name, field_type })
+        Ok(StructFieldDefinition {
+            name,
+            name_span,
+            field_type,
+        })
     }
 
     fn parse_struct_literal_fields(&mut self) -> Result<Vec<StructField>, ParseError> {
@@ -777,12 +807,17 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_literal_field(&mut self) -> Result<StructField, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         self.consume(TokenKind::Equals, "Expected '=' after field name")?;
         let value = self.parse_expression(Precedence::NONE)?;
 
-        Ok(StructField { name, value })
+        Ok(StructField {
+            name,
+            name_span,
+            value,
+        })
     }
 
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
@@ -807,13 +842,15 @@ impl<'a> Parser<'a> {
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let name_token = self.consume(TokenKind::Identifier, "Expected parameter name")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
         let type_annotation = self.parse_type()?;
 
         Ok(Parameter {
             name,
+            name_span,
             type_annotation,
         })
     }
@@ -841,7 +878,9 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Identifier => {
                 let token = self.advance();
-                Ok(Type::Struct(token.span))
+                let span = token.span;
+                let name = self.intern(span);
+                Ok(Type::Struct { name, span })
             }
             TokenKind::UnaryStar => {
                 self.advance(); // consume '*'
@@ -981,12 +1020,15 @@ impl<'a> Parser<'a> {
                 // Check if this is an assignment (identifier followed by '=')
                 // We need to look ahead to distinguish `x = value` from `x + y`
                 let saved_pos = self.current;
-                let ident_span = self.advance().span;
+                let ident_token = self.advance();
+                let ident_span = ident_token.span;
                 if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
+                    let ident_sym = self.intern(ident_span);
                     self.advance(); // consume '='
                     let value = self.parse_expression(Precedence::NONE)?;
                     Ok(Stmt::Assign {
-                        target: ident_span,
+                        target: ident_sym,
+                        target_span: ident_span,
                         value,
                     })
                 } else {
@@ -1042,7 +1084,8 @@ impl<'a> Parser<'a> {
         }
 
         let name_token = self.consume(TokenKind::Identifier, "identifier")?;
-        let name = name_token.span;
+        let name_span = name_token.span;
+        let name = self.intern(name_span);
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
@@ -1058,6 +1101,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::Let {
             name,
+            name_span,
             mutable,
             type_annotation,
             value,

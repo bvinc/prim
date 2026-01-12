@@ -66,7 +66,7 @@ pub(crate) fn string_literal_symbol(
 mod tests {
     use super::*;
     use prim_hir::{
-        FileId, FileInfo, HirProgram, Items, Module, ModuleId, SpanId, Symbol, SymbolId,
+        FileId, FileInfo, HirProgram, Interner, Items, Module, ModuleId, SpanId, Symbol, SymbolId,
         SymbolKind, SymbolTable,
     };
     use prim_tok::Span;
@@ -100,6 +100,7 @@ mod tests {
                 entries: vec![symbol],
                 by_name: HashMap::new(),
             },
+            interner: Interner::new(),
             main: None,
             files: vec![FileInfo {
                 id: FileId(0),

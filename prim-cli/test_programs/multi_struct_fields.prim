@@ -1,0 +1,27 @@
+// Test multiple structs with same field names
+import std.io.println_i32
+
+struct S1 { a: i32, b: i32 }
+struct S2 { a: i32, b: i32 }
+struct S3 { a: i32, b: i32 }
+
+fn use_s1() -> i32 {
+    let s = S1 { a = 1, b = 2 }
+    s.a + s.b
+}
+
+fn use_s2() -> i32 {
+    let s = S2 { a = 10, b = 20 }
+    s.a + s.b
+}
+
+fn use_s3() -> i32 {
+    let s = S3 { a = 100, b = 200 }
+    s.a + s.b
+}
+
+fn main() {
+    println_i32(use_s1())
+    println_i32(use_s2())
+    println_i32(use_s3())
+}

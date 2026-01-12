@@ -179,7 +179,7 @@ impl Loader {
         let module_name = ast
             .module_name
             .as_ref()
-            .map(|span| span.text(&source).to_string())
+            .map(|(sym, _span)| ast.resolve(*sym).to_string())
             .unwrap_or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -187,8 +187,12 @@ impl Loader {
                     .to_string()
             });
 
-        let planned =
-            plan_import_requests(&ast.imports, &source, &self.module_root, &self.std_root)?;
+        let planned = plan_import_requests(
+            &ast.imports,
+            &ast.interner,
+            &self.module_root,
+            &self.std_root,
+        )?;
         let mut imports = Vec::new();
         let mut import_index = HashMap::new();
         for ImportRequest { module, coverage } in planned {
@@ -262,7 +266,7 @@ impl Loader {
             let this_name = ast
                 .module_name
                 .as_ref()
-                .map(|span| span.text(&source).to_string())
+                .map(|(sym, _span)| ast.resolve(*sym).to_string())
                 .ok_or_else(|| {
                     LoadError::InvalidModule(format!(
                         "{}: missing 'mod <name>' declaration at top of file",
@@ -283,8 +287,12 @@ impl Loader {
                 }
             }
 
-            let planned =
-                plan_import_requests(&ast.imports, &source, &self.module_root, &self.std_root)?;
+            let planned = plan_import_requests(
+                &ast.imports,
+                &ast.interner,
+                &self.module_root,
+                &self.std_root,
+            )?;
             for ImportRequest { module, coverage } in planned {
                 merge_import_request(&mut imports, &mut import_index, module, coverage);
             }
@@ -432,7 +440,7 @@ impl Loader {
                 let this_name = program
                     .module_name
                     .as_ref()
-                    .map(|span| span.text(&source).to_string())
+                    .map(|(sym, _span)| program.resolve(*sym).to_string())
                     .ok_or_else(|| {
                         LoadError::InvalidModule(format!(
                             "{}: missing 'mod <name>' declaration at top of file",
@@ -455,7 +463,7 @@ impl Loader {
 
                 let planned = plan_import_requests(
                     &program.imports,
-                    &source,
+                    &program.interner,
                     &self.module_root,
                     &self.std_root,
                 )?;
@@ -530,20 +538,19 @@ fn module_origin(module_segments: &[String]) -> ModuleOrigin {
 fn collect_exports(files: &[ModuleFile]) -> ExportTable {
     let mut exports = ExportTable::default();
     for file in files {
-        let source = &file.source;
         for s in &file.ast.structs {
-            exports.structs.push(s.name.text(source).to_string());
+            exports.structs.push(file.ast.resolve(s.name).to_string());
         }
         for f in &file.ast.functions {
             let name = file.ast.resolve(f.name);
             exports.functions.push(name.to_string());
         }
         for t in &file.ast.traits {
-            exports.traits.push(t.name.text(source).to_string());
+            exports.traits.push(file.ast.resolve(t.name).to_string());
         }
         for im in &file.ast.impls {
-            let trait_name = im.trait_name.text(source);
-            let struct_name = im.struct_name.text(source);
+            let trait_name = file.ast.resolve(im.trait_name);
+            let struct_name = file.ast.resolve(im.struct_name);
             exports
                 .impls
                 .push(format!("impl {} for {}", trait_name, struct_name));
@@ -554,14 +561,14 @@ fn collect_exports(files: &[ModuleFile]) -> ExportTable {
 
 fn plan_import_requests(
     imports: &[ImportDecl],
-    source: &str,
+    interner: &prim_parse::Interner,
     module_root: &Path,
     std_root: &Path,
 ) -> Result<Vec<ImportRequest>, LoadError> {
     let mut acc = Vec::new();
     let mut index = HashMap::new();
     for decl in imports {
-        let (module, coverage) = convert_import_decl(decl, source, module_root, std_root)?;
+        let (module, coverage) = convert_import_decl(decl, interner, module_root, std_root)?;
         merge_import_request(&mut acc, &mut index, module, coverage);
     }
     Ok(acc)
@@ -569,11 +576,11 @@ fn plan_import_requests(
 
 fn convert_import_decl(
     decl: &ImportDecl,
-    source: &str,
+    interner: &prim_parse::Interner,
     module_root: &Path,
     std_root: &Path,
 ) -> Result<(Vec<String>, ImportCoverage), LoadError> {
-    let mut module_segments = decl.module_segments(source);
+    let mut module_segments = decl.module_segments(interner);
     if module_segments.is_empty() {
         return Err(LoadError::InvalidModule(
             "Import must specify at least one segment".into(),
@@ -585,7 +592,7 @@ fn convert_import_decl(
             if module_exists(module_root, std_root, &module_segments) {
                 return Ok((module_segments, ImportCoverage::All));
             }
-            if let Some(trailing) = &decl.trailing_symbol {
+            if let Some((trailing_sym, _span)) = &decl.trailing_symbol {
                 if module_segments.len() < 2 {
                     let module_display = module_segments.join(".");
                     let search_path = module_search_path(module_root, std_root, &module_segments);
@@ -595,7 +602,10 @@ fn convert_import_decl(
                         search_path.display()
                     )));
                 }
-                let symbol_name = trailing.text(source).to_string();
+                let symbol_name = interner
+                    .resolve(*trailing_sym)
+                    .expect("missing interned symbol")
+                    .to_string();
                 module_segments.pop();
                 if !module_exists(module_root, std_root, &module_segments) {
                     let module_display = module_segments.join(".");
@@ -628,7 +638,7 @@ fn convert_import_decl(
                 )));
             }
             let mut symbols = Vec::new();
-            if let Some(names) = decl.selector_names(source) {
+            if let Some(names) = decl.selector_names(interner) {
                 symbols.extend(names);
             }
             Ok((module_segments, ImportCoverage::Symbols(symbols)))

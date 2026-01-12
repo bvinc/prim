@@ -1,19 +1,14 @@
 use prim_tok::Tokenizer;
-use string_interner::StringInterner;
-use string_interner::backend::BufferBackend;
-use string_interner::symbol::SymbolU32;
 
 mod error;
 pub use error::{Diagnostic, ParseError, Severity};
 
 pub use prim_tok::Span;
+pub use prim_util::{InternSymbol, Interner};
 
 mod number;
 mod parser;
 use parser::Parser;
-
-type InternSymbol = SymbolU32;
-type Interner = StringInterner<BufferBackend<InternSymbol>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerMutability {
@@ -37,7 +32,10 @@ pub enum Type {
     F64,
     Bool,
     Array(Box<Type>),
-    Struct(Span), // struct name reference
+    Struct {
+        name: InternSymbol,
+        span: Span,
+    },
     Pointer {
         mutability: PointerMutability,
         pointee: Box<Type>,
@@ -68,6 +66,7 @@ pub enum Expr {
         ty: Type,
     },
     Identifier {
+        name: InternSymbol,
         span: Span,
         ty: Type,
     },
@@ -85,13 +84,15 @@ pub enum Expr {
         ty: Type,
     },
     StructLiteral {
-        name: Span,
+        name: InternSymbol,
+        name_span: Span,
         fields: Vec<StructField>,
         ty: Type,
     },
     FieldAccess {
         object: Box<Expr>,
-        field: Span,
+        field: InternSymbol,
+        field_span: Span,
         ty: Type,
     },
     Dereference {
@@ -144,15 +145,15 @@ impl Expr {
             | Expr::StringLiteral { span, .. }
             | Expr::Identifier { span, .. }
             | Expr::Binary { span, .. }
-            | Expr::StructLiteral { name: span, .. }
-            | Expr::FieldAccess { field: span, .. }
             | Expr::Dereference { span, .. }
             | Expr::ArrayLiteral { span, .. }
             | Expr::If { span, .. } => *span,
+            Expr::StructLiteral { name_span, .. } => *name_span,
+            Expr::FieldAccess { field_span, .. } => *field_span,
             Expr::Block { block, .. } => block.span,
             Expr::FunctionCall { path, args, .. } => {
-                let first = *path.segments.first().expect("path must have segments");
-                let last = *path.segments.last().unwrap();
+                let first = path.segments.first().expect("path must have segments").1;
+                let last = path.segments.last().unwrap().1;
                 let mut span = first.cover(last);
                 if let Some(last_arg) = args.last() {
                     span = span.cover(last_arg.span());
@@ -180,13 +181,15 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructField {
-    pub name: Span,
+    pub name: InternSymbol,
+    pub name_span: Span,
     pub value: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
-    pub name: Span,
+    pub name: InternSymbol,
+    pub name_span: Span,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
     pub span: Span,
@@ -194,7 +197,8 @@ pub struct StructDefinition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructFieldDefinition {
-    pub name: Span,
+    pub name: InternSymbol,
+    pub name_span: Span,
     pub field_type: Type,
 }
 
@@ -210,13 +214,15 @@ pub struct Block {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Let {
-        name: Span,
+        name: InternSymbol,
+        name_span: Span,
         mutable: bool,
         type_annotation: Option<Type>,
         value: Expr,
     },
     Assign {
-        target: Span,
+        target: InternSymbol,
+        target_span: Span,
         value: Expr,
     },
     Expr(Expr),
@@ -237,6 +243,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: InternSymbol,
+    pub name_span: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Block,
@@ -246,13 +253,14 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
-    pub name: Span,
+    pub name: InternSymbol,
+    pub name_span: Span,
     pub type_annotation: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct Program {
-    pub module_name: Option<Span>,
+    pub module_name: Option<(InternSymbol, Span)>,
     pub imports: Vec<ImportDecl>,
     pub structs: Vec<StructDefinition>,
     pub functions: Vec<Function>,
@@ -273,31 +281,43 @@ impl Program {
 pub struct ImportDecl {
     pub raw_path: NamePath,
     pub selector: ImportSelector,
-    pub trailing_symbol: Option<Span>,
+    pub trailing_symbol: Option<(InternSymbol, Span)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportSelector {
     All,
-    Named(Vec<Span>),
+    Named(Vec<(InternSymbol, Span)>),
 }
 
 impl ImportDecl {
-    pub fn module_segments<'a>(&'a self, source: &'a str) -> Vec<String> {
+    /// Get module path segments as strings (resolved from interner).
+    pub fn module_segments(&self, interner: &Interner) -> Vec<String> {
         self.raw_path
             .segments
             .iter()
-            .map(|s| s.text(source).to_string())
+            .map(|(sym, _span)| {
+                interner
+                    .resolve(*sym)
+                    .expect("missing interned symbol")
+                    .to_string()
+            })
             .collect()
     }
 
-    pub fn selector_names<'a>(&'a self, source: &'a str) -> Option<Vec<String>> {
+    /// Get selector names as strings (resolved from interner).
+    pub fn selector_names(&self, interner: &Interner) -> Option<Vec<String>> {
         match &self.selector {
             ImportSelector::All => None,
             ImportSelector::Named(names) => Some(
                 names
                     .iter()
-                    .map(|span| span.text(source).to_string())
+                    .map(|(sym, _span)| {
+                        interner
+                            .resolve(*sym)
+                            .expect("missing interned symbol")
+                            .to_string()
+                    })
                     .collect(),
             ),
         }
@@ -318,15 +338,18 @@ pub fn parse(input: &str) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDefinition {
-    pub name: Span,
+    pub name: InternSymbol,
+    pub name_span: Span,
     pub methods: Vec<TraitMethod>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDefinition {
-    pub trait_name: Span,
-    pub struct_name: Span,
+    pub trait_name: InternSymbol,
+    pub trait_name_span: Span,
+    pub struct_name: InternSymbol,
+    pub struct_name_span: Span,
     pub methods: Vec<ImplMethod>,
     pub span: Span,
 }
@@ -334,6 +357,7 @@ pub struct ImplDefinition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethod {
     pub name: InternSymbol,
+    pub name_span: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
 }
@@ -341,20 +365,22 @@ pub struct TraitMethod {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplMethod {
     pub name: InternSymbol,
+    pub name_span: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Vec<Stmt>,
 }
 
+/// A path of name segments (e.g., `module.submodule.function`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NamePath {
-    pub segments: Vec<Span>,
+    pub segments: Vec<(InternSymbol, Span)>,
 }
 
 impl NamePath {
-    pub fn from_single(seg: Span) -> Self {
+    pub fn from_single(name: InternSymbol, span: Span) -> Self {
         Self {
-            segments: vec![seg],
+            segments: vec![(name, span)],
         }
     }
 }

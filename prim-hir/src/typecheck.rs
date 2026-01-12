@@ -1,6 +1,6 @@
 use crate::{
-    BinaryOp, FileId, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, SpanId,
-    StructId, SymbolId, Type,
+    BinaryOp, FileId, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, InternSymbol,
+    SpanId, StructId, SymbolId, Type,
 };
 use prim_tok::Span;
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ pub enum TypeCheckKind {
     UnknownStruct(StructId),
     UnknownField {
         struct_id: StructId,
-        field: SymbolId,
+        field: InternSymbol,
     },
     TypeMismatch {
         expected: Type,
@@ -102,7 +102,7 @@ pub fn type_check(program: &mut HirProgram) -> Result<(), TypeCheckError> {
 struct Checker<'a> {
     program: &'a mut HirProgram,
     func_sigs: HashMap<FuncId, (Vec<Type>, Option<Type>)>,
-    struct_fields: HashMap<StructId, HashMap<SymbolId, Type>>,
+    struct_fields: HashMap<StructId, HashMap<InternSymbol, Type>>,
     loop_depth: usize,
 }
 

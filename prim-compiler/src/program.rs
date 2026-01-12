@@ -85,7 +85,6 @@ pub(crate) enum SymbolKind {
     Impl,
     Param,
     Local,
-    Field,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

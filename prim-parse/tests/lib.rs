@@ -40,8 +40,9 @@ fn test_parse_let_statement() {
             mutable,
             type_annotation,
             value,
+            ..
         } => {
-            assert_eq!(name.text(source), "x");
+            assert_eq!(program.resolve(*name), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &Some(Type::U32));
             match value {
@@ -101,8 +102,9 @@ fn test_parse_let_without_type() {
             mutable,
             type_annotation,
             value,
+            ..
         } => {
-            assert_eq!(name.text(source), "x");
+            assert_eq!(program.resolve(*name), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &None);
             match value {
@@ -201,7 +203,7 @@ fn test_parse_println() {
     // The function call is a trailing expression (no semicolon)
     match main_func.body.expr.as_deref() {
         Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(path.segments[0].text(source), "println");
+            assert_eq!(program.resolve(path.segments[0].0), "println");
             assert_eq!(args.len(), 1);
             match &args[0] {
                 Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
@@ -224,7 +226,7 @@ fn test_parse_println_with_expression() {
     // The function call is a trailing expression (no semicolon)
     match main_func.body.expr.as_deref() {
         Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(path.segments[0].text(source), "println");
+            assert_eq!(program.resolve(path.segments[0].0), "println");
             assert_eq!(args.len(), 1);
             match &args[0] {
                 Expr::Binary {
@@ -343,20 +345,20 @@ fn test_parse_trait_and_impl_syntax() {
         program
             .structs
             .iter()
-            .any(|s| s.name.text(source).trim() == "Point")
+            .any(|s| program.resolve(s.name).trim() == "Point")
     );
     assert!(
         program
             .traits
             .iter()
-            .any(|t| t.name.text(source).trim() == "Marker")
+            .any(|t| program.resolve(t.name).trim() == "Marker")
     );
     assert!(
         program
             .impls
             .iter()
-            .any(|im| im.trait_name.text(source).trim() == "Marker"
-                && im.struct_name.text(source).trim() == "Point")
+            .any(|im| program.resolve(im.trait_name).trim() == "Marker"
+                && program.resolve(im.struct_name).trim() == "Point")
     );
 }
 
@@ -372,7 +374,7 @@ fn test_parse_trait_with_method_and_impl_body() {
     let tr = program
         .traits
         .iter()
-        .find(|t| t.name.text(source).trim() == "Greeter")
+        .find(|t| program.resolve(t.name).trim() == "Greeter")
         .expect("trait Greeter present");
     assert_eq!(tr.methods.len(), 1);
     assert_eq!(program.resolve(tr.methods[0].name), "hello");
@@ -380,8 +382,8 @@ fn test_parse_trait_with_method_and_impl_body() {
         program
             .impls
             .iter()
-            .any(|im| im.trait_name.text(source).trim() == "Greeter"
-                && im.struct_name.text(source).trim() == "Point"
+            .any(|im| program.resolve(im.trait_name).trim() == "Greeter"
+                && program.resolve(im.struct_name).trim() == "Point"
                 && !im.methods.is_empty())
     );
 }
@@ -511,7 +513,7 @@ fn test_parse_parentheses_function_call_args() {
     // The function call is a trailing expression (no semicolon)
     match main_func.body.expr.as_deref() {
         Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(path.segments[0].text(source), "println");
+            assert_eq!(program.resolve(path.segments[0].0), "println");
             assert_eq!(args.len(), 1);
             // Argument should be (2 + 3) * 4
             match &args[0] {
@@ -1060,7 +1062,7 @@ fn main() {
         Stmt::Let {
             value: Expr::FunctionCall { path, .. },
             ..
-        } => path.segments.len() == 1 && path.segments[0].text(source) == "level2",
+        } => path.segments.len() == 1 && program.resolve(path.segments[0].0) == "level2",
         _ => false,
     });
     assert!(has_level2_call, "level1 should call level2");
@@ -1146,15 +1148,15 @@ fn main() {
 
     // Check struct definition
     let point_struct = &program.structs[0];
-    assert_eq!(point_struct.name.text(source), "Point");
+    assert_eq!(program.resolve(point_struct.name), "Point");
     assert_eq!(point_struct.fields.len(), 2);
 
     // Check first field
-    assert_eq!(point_struct.fields[0].name.text(source), "x");
+    assert_eq!(program.resolve(point_struct.fields[0].name), "x");
     assert_eq!(point_struct.fields[0].field_type, Type::I32);
 
     // Check second field
-    assert_eq!(point_struct.fields[1].name.text(source), "y");
+    assert_eq!(program.resolve(point_struct.fields[1].name), "y");
     assert_eq!(point_struct.fields[1].field_type, Type::I32);
 
     // Check main function has struct literal and field access
@@ -1168,10 +1170,10 @@ fn main() {
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(name.text(source), "Point");
+        assert_eq!(program.resolve(*name), "Point");
         assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].name.text(source), "x");
-        assert_eq!(fields[1].name.text(source), "y");
+        assert_eq!(program.resolve(fields[0].name), "x");
+        assert_eq!(program.resolve(fields[1].name), "y");
     } else {
         panic!("Expected struct literal in let statement");
     }
@@ -1179,9 +1181,9 @@ fn main() {
     // Check field access in println (trailing expression)
     if let Some(Expr::FunctionCall { args, .. }) = main_func.body.expr.as_deref() {
         if let Expr::FieldAccess { object, field, .. } = &args[0] {
-            assert_eq!(field.text(source), "x");
-            if let Expr::Identifier { span: id, .. } = object.as_ref() {
-                assert_eq!(id.text(source), "p");
+            assert_eq!(program.resolve(*field), "x");
+            if let Expr::Identifier { name: id, .. } = object.as_ref() {
+                assert_eq!(program.resolve(*id), "p");
             } else {
                 panic!("Expected identifier in field access");
             }
@@ -1204,9 +1206,9 @@ fn test_parse_field_access() {
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(field.text(source), "x");
-        if let Expr::Identifier { span: obj_name, .. } = object.as_ref() {
-            assert_eq!(obj_name.text(source), "point");
+        assert_eq!(program.resolve(*field), "x");
+        if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
+            assert_eq!(program.resolve(*obj_name), "point");
         } else {
             panic!("Expected identifier in field access object");
         }
@@ -1226,11 +1228,11 @@ fn test_parse_struct_literal() {
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(name.text(source), "Point");
+        assert_eq!(program.resolve(*name), "Point");
         assert_eq!(fields.len(), 2);
 
         // Check first field
-        assert_eq!(fields[0].name.text(source), "x");
+        assert_eq!(program.resolve(fields[0].name), "x");
         if let Expr::IntLiteral { span: val, .. } = &fields[0].value {
             assert_eq!(val.text(source), "10");
         } else {
@@ -1238,7 +1240,7 @@ fn test_parse_struct_literal() {
         }
 
         // Check second field
-        assert_eq!(fields[1].name.text(source), "y");
+        assert_eq!(program.resolve(fields[1].name), "y");
         if let Expr::IntLiteral { span: val, .. } = &fields[1].value {
             assert_eq!(val.text(source), "20");
         } else {
@@ -1256,11 +1258,11 @@ fn test_parse_struct_type_annotation() {
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
-        type_annotation: Some(Type::Struct(name)),
+        type_annotation: Some(Type::Struct { name, .. }),
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(name.text(source), "Point");
+        assert_eq!(program.resolve(*name), "Point");
     } else {
         panic!("Expected struct type annotation");
     }
@@ -1320,8 +1322,8 @@ fn test_parse_dereference() {
         ..
     } = &main_func.body.stmts[0]
     {
-        if let Expr::Identifier { span: name, .. } = &**operand {
-            assert_eq!(name.text(source), "ptr");
+        if let Expr::Identifier { name, .. } = &**operand {
+            assert_eq!(program.resolve(*name), "ptr");
         } else {
             panic!("Expected identifier in dereference operand");
         }
@@ -1338,7 +1340,7 @@ fn test_import_decl_variants() {
 
     let module_import = &program.imports[0];
     assert_eq!(
-        module_import.module_segments(source),
+        module_import.module_segments(&program.interner),
         vec!["foo".to_string(), "bar".to_string()]
     );
     assert!(matches!(module_import.selector, ImportSelector::All));
@@ -1346,13 +1348,13 @@ fn test_import_decl_variants() {
         module_import
             .trailing_symbol
             .as_ref()
-            .map(|s| s.text(source)),
+            .map(|(sym, _span)| program.resolve(*sym)),
         Some("bar")
     );
 
     let trailing_symbol_import = &program.imports[1];
     assert_eq!(
-        trailing_symbol_import.module_segments(source),
+        trailing_symbol_import.module_segments(&program.interner),
         vec!["foo".to_string(), "bar".to_string(), "Baz".to_string()]
     );
     assert!(matches!(
@@ -1363,18 +1365,21 @@ fn test_import_decl_variants() {
         trailing_symbol_import
             .trailing_symbol
             .as_ref()
-            .map(|s| s.text(source)),
+            .map(|(sym, _span)| program.resolve(*sym)),
         Some("Baz")
     );
 
     let brace_import = &program.imports[2];
     assert_eq!(
-        brace_import.module_segments(source),
+        brace_import.module_segments(&program.interner),
         vec!["foo".to_string(), "bar".to_string()]
     );
     match &brace_import.selector {
         ImportSelector::Named(names) => {
-            let texts: Vec<_> = names.iter().map(|n| n.text(source)).collect();
+            let texts: Vec<_> = names
+                .iter()
+                .map(|(sym, _span)| program.resolve(*sym))
+                .collect();
             assert_eq!(texts, vec!["Baz", "Quux"]);
         }
         _ => panic!("expected named selector"),
@@ -1429,8 +1434,9 @@ fn test_parse_let_mut() {
             mutable,
             type_annotation,
             value,
+            ..
         } => {
-            assert_eq!(name.text(source), "x");
+            assert_eq!(program.resolve(*name), "x");
             assert!(*mutable);
             assert_eq!(type_annotation, &Some(Type::I32));
             match value {
@@ -1455,7 +1461,7 @@ fn test_parse_let_mut_without_type() {
             type_annotation,
             ..
         } => {
-            assert_eq!(name.text(source), "counter");
+            assert_eq!(program.resolve(*name), "counter");
             assert!(*mutable);
             assert_eq!(type_annotation, &None);
         }

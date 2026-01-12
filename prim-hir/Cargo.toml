@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 prim-tok = { path = "../prim-tok" }
+prim-util = { path = "../prim-util" }
 
 [lints]
 workspace = true

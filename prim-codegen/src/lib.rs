@@ -87,7 +87,7 @@ struct StructLayout {
 #[derive(Clone, Debug)]
 struct FieldLayout {
     /// Field name for lookup.
-    name: prim_hir::SymbolId,
+    name: prim_hir::InternSymbol,
     /// Byte offset from struct start (used for pointer-based access).
     offset: u32,
     /// Field type.
@@ -109,7 +109,7 @@ enum FieldType {
 
 impl StructLayout {
     /// Find a field by name.
-    fn field(&self, name: prim_hir::SymbolId) -> Option<&FieldLayout> {
+    fn field(&self, name: prim_hir::InternSymbol) -> Option<&FieldLayout> {
         self.fields.iter().find(|f| f.name == name)
     }
 }
