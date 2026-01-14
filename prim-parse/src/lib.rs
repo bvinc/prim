@@ -32,10 +32,7 @@ pub enum Type {
     F64,
     Bool,
     Array(Box<Type>),
-    Struct {
-        name: InternSymbol,
-        span: Span,
-    },
+    Struct(InternSymbol),
     Pointer {
         mutability: PointerMutability,
         pointee: Box<Type>,

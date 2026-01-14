@@ -82,18 +82,10 @@ pub(crate) enum SymbolKind {
     Function,
     Struct,
     Trait,
-    Param,
-    Local,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SymbolId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct NameRef {
-    pub file: FileId,
-    pub span: Span,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SymbolInfo {
@@ -101,12 +93,14 @@ pub(crate) struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
     pub module: Option<ModuleId>,
+    #[allow(dead_code)] // Useful for diagnostics
     pub file: FileId,
+    #[allow(dead_code)] // Useful for diagnostics
     pub span: Span,
 }
 
+/// Top-level symbol definitions collected during scope resolution.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NameResolution {
     pub symbols: Vec<SymbolInfo>,
-    pub uses: HashMap<NameRef, SymbolId>,
 }

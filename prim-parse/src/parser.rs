@@ -877,10 +877,9 @@ impl<'a> Parser<'a> {
                 Ok(Type::Array(Box::new(elem_ty)))
             }
             TokenKind::Identifier => {
-                let token = self.advance();
-                let span = token.span;
+                let span = self.advance().span;
                 let name = self.intern(span);
-                Ok(Type::Struct { name, span })
+                Ok(Type::Struct(name))
             }
             TokenKind::UnaryStar => {
                 self.advance(); // consume '*'

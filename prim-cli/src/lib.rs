@@ -121,6 +121,11 @@ pub fn format_compile_error(path: &str, source: &str, err: CompileError) -> RunE
             .map(|e| format_with_span(path, source, Some(e.span()), e))
             .collect::<Vec<_>>()
             .join("\n"),
+        CompileError::Lowering(errors) => errors
+            .iter()
+            .map(|e| format_with_span(path, source, Some(e.span()), e))
+            .collect::<Vec<_>>()
+            .join("\n"),
     };
     RunError::CompilationError(msg)
 }

@@ -1258,7 +1258,7 @@ fn test_parse_struct_type_annotation() {
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
-        type_annotation: Some(Type::Struct { name, .. }),
+        type_annotation: Some(Type::Struct(name)),
         ..
     } = &main_func.body.stmts[0]
     {
