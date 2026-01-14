@@ -179,7 +179,7 @@ impl Loader {
         let module_name = ast
             .module_name
             .as_ref()
-            .map(|(sym, _span)| ast.resolve(*sym).to_string())
+            .map(|ident| ast.resolve(ident.sym).to_string())
             .unwrap_or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -266,7 +266,7 @@ impl Loader {
             let this_name = ast
                 .module_name
                 .as_ref()
-                .map(|(sym, _span)| ast.resolve(*sym).to_string())
+                .map(|ident| ast.resolve(ident.sym).to_string())
                 .ok_or_else(|| {
                     LoadError::InvalidModule(format!(
                         "{}: missing 'mod <name>' declaration at top of file",
@@ -440,7 +440,7 @@ impl Loader {
                 let this_name = program
                     .module_name
                     .as_ref()
-                    .map(|(sym, _span)| program.resolve(*sym).to_string())
+                    .map(|ident| program.resolve(ident.sym).to_string())
                     .ok_or_else(|| {
                         LoadError::InvalidModule(format!(
                             "{}: missing 'mod <name>' declaration at top of file",
@@ -539,18 +539,22 @@ fn collect_exports(files: &[ModuleFile]) -> ExportTable {
     let mut exports = ExportTable::default();
     for file in files {
         for s in &file.ast.structs {
-            exports.structs.push(file.ast.resolve(s.name).to_string());
+            exports
+                .structs
+                .push(file.ast.resolve(s.name.sym).to_string());
         }
         for f in &file.ast.functions {
-            let name = file.ast.resolve(f.name);
+            let name = file.ast.resolve(f.name.sym);
             exports.functions.push(name.to_string());
         }
         for t in &file.ast.traits {
-            exports.traits.push(file.ast.resolve(t.name).to_string());
+            exports
+                .traits
+                .push(file.ast.resolve(t.name.sym).to_string());
         }
         for im in &file.ast.impls {
-            let trait_name = file.ast.resolve(im.trait_name);
-            let struct_name = file.ast.resolve(im.struct_name);
+            let trait_name = file.ast.resolve(im.trait_name.sym);
+            let struct_name = file.ast.resolve(im.struct_name.sym);
             exports
                 .impls
                 .push(format!("impl {} for {}", trait_name, struct_name));
@@ -592,7 +596,7 @@ fn convert_import_decl(
             if module_exists(module_root, std_root, &module_segments) {
                 return Ok((module_segments, ImportCoverage::All));
             }
-            if let Some((trailing_sym, _span)) = &decl.trailing_symbol {
+            if let Some(trailing_ident) = &decl.trailing_symbol {
                 if module_segments.len() < 2 {
                     let module_display = module_segments.join(".");
                     let search_path = module_search_path(module_root, std_root, &module_segments);
@@ -603,7 +607,7 @@ fn convert_import_decl(
                     )));
                 }
                 let symbol_name = interner
-                    .resolve(*trailing_sym)
+                    .resolve(trailing_ident.sym)
                     .expect("missing interned symbol")
                     .to_string();
                 module_segments.pop();

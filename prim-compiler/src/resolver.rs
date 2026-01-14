@@ -141,7 +141,7 @@ impl<'a> ScopeCollector<'a> {
         let ast = &file.ast;
 
         for s in &ast.structs {
-            let name = ast.resolve(s.name).to_string();
+            let name = ast.resolve(s.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,
@@ -161,7 +161,7 @@ impl<'a> ScopeCollector<'a> {
         }
 
         for func in &ast.functions {
-            let name = ast.resolve(func.name).to_string();
+            let name = ast.resolve(func.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,
@@ -181,7 +181,7 @@ impl<'a> ScopeCollector<'a> {
         }
 
         for tr in &ast.traits {
-            let name = ast.resolve(tr.name).to_string();
+            let name = ast.resolve(tr.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,

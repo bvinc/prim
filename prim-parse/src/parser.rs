@@ -1,6 +1,6 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Block, Diagnostic, Expr, Function, ImportDecl, ImportSelector, InternSymbol,
+    BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, Ident, ImportDecl, ImportSelector,
     Interner, NamePath, Parameter, ParseError, PointerMutability, Program, Severity, Span, Stmt,
     StructDefinition, StructField, StructFieldDefinition, Type,
 };
@@ -24,7 +24,7 @@ pub struct Parser<'a> {
     tokens: Vec<Token>,
     current: usize,
     source: &'a str,
-    module_name: Option<(InternSymbol, Span)>,
+    module_name: Option<Ident>,
     interner: Interner,
     diagnostics: Vec<Diagnostic>,
     /// Whether struct literals are allowed in the current expression context.
@@ -78,10 +78,18 @@ impl<'a> Parser<'a> {
         });
     }
 
-    /// Intern a name from a span.
-    fn intern(&mut self, span: Span) -> InternSymbol {
+    /// Intern a string from a span, returning just the symbol.
+    fn intern(&mut self, span: Span) -> crate::InternSymbol {
         let text = span.text(self.source);
         self.interner.get_or_intern(text)
+    }
+
+    /// Create an identifier from a span.
+    fn ident(&mut self, span: Span) -> Ident {
+        Ident {
+            sym: self.intern(span),
+            span,
+        }
     }
 
     fn parse_internal(&mut self) -> Result<Program, ParseError> {
@@ -94,24 +102,23 @@ impl<'a> Parser<'a> {
         // Optional module header: mod <identifier>
         if matches!(self.peek_kind(), Some(TokenKind::Mod)) {
             self.advance(); // consume 'mod'
-            let name_token =
-                self.consume(TokenKind::Identifier, "Expected module name after 'mod'")?;
-            let name_span = name_token.span;
-            let name_sym = self.intern(name_span);
-            self.module_name = Some((name_sym, name_span));
+            let span = self
+                .consume(TokenKind::Identifier, "Expected module name after 'mod'")?
+                .span;
+            self.module_name = Some(self.ident(span));
             self.consume_optional_semicolon();
         }
 
         // Optional imports with optional selectors
         while matches!(self.peek_kind(), Some(TokenKind::Import)) {
             self.advance(); // consume 'import'
-            let head =
-                self.consume(TokenKind::Identifier, "Expected module name after 'import'")?;
-            let head_span = head.span;
-            let head_sym = self.intern(head_span);
-            let mut segments = vec![(head_sym, head_span)];
+            let head_span = self
+                .consume(TokenKind::Identifier, "Expected module name after 'import'")?
+                .span;
+            let head_ident = self.ident(head_span);
+            let mut segments = vec![head_ident];
             let mut selector = ImportSelector::All;
-            let mut trailing_symbol: Option<(InternSymbol, Span)> = None;
+            let mut trailing_symbol: Option<Ident> = None;
 
             loop {
                 if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
@@ -123,13 +130,13 @@ impl<'a> Parser<'a> {
                         self.advance(); // consume '{'
                         let mut names = Vec::new();
                         loop {
-                            let name_tok = self.consume(
-                                TokenKind::Identifier,
-                                "Expected identifier inside import braces",
-                            )?;
-                            let name_span = name_tok.span;
-                            let name_sym = self.intern(name_span);
-                            names.push((name_sym, name_span));
+                            let name_span = self
+                                .consume(
+                                    TokenKind::Identifier,
+                                    "Expected identifier inside import braces",
+                                )?
+                                .span;
+                            names.push(self.ident(name_span));
                             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                                 self.advance();
                                 continue;
@@ -142,12 +149,11 @@ impl<'a> Parser<'a> {
                         break;
                     }
                     Some(TokenKind::Identifier) => {
-                        let seg_tok = self.advance();
-                        let seg_span = seg_tok.span;
-                        let seg_sym = self.intern(seg_span);
-                        segments.push((seg_sym, seg_span));
+                        let seg_span = self.advance().span;
+                        let seg_ident = self.ident(seg_span);
+                        segments.push(seg_ident);
                         trailing_symbol = if segments.len() >= 2 {
-                            Some((seg_sym, seg_span))
+                            Some(seg_ident)
                         } else {
                             None
                         };
@@ -253,63 +259,67 @@ impl<'a> Parser<'a> {
         }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
-                let token_span = self.advance().span;
-                let literal_text = token_span.text(self.source).to_string();
-                let (value, ty) = parse_int_literal(&literal_text, token_span)?;
-                Ok(Expr::IntLiteral {
-                    span: token_span,
-                    value,
+                let span = self.advance().span;
+                let literal_text = span.text(self.source).to_string();
+                let (value, ty) = parse_int_literal(&literal_text, span)?;
+                Ok(Expr {
+                    span,
                     ty,
+                    kind: ExprKind::Int(value),
                 })
             }
             Some(TokenKind::StringLiteral) => {
-                let token_span = self.advance().span;
-                Ok(Expr::StringLiteral {
-                    span: token_span,
-                    value: Self::unescape_string_literal(token_span.text(self.source)),
+                let span = self.advance().span;
+                let value = Self::unescape_string_literal(span.text(self.source));
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::String(value),
                 })
             }
             Some(TokenKind::FloatLiteral) => {
-                let token_span = self.advance().span;
-                let literal_text = token_span.text(self.source).to_string();
-                let (value, ty) = parse_float_literal(&literal_text, token_span)?;
-                Ok(Expr::FloatLiteral {
-                    span: token_span,
-                    value,
+                let span = self.advance().span;
+                let literal_text = span.text(self.source).to_string();
+                let (value, ty) = parse_float_literal(&literal_text, span)?;
+                Ok(Expr {
+                    span,
                     ty,
+                    kind: ExprKind::Float(value),
                 })
             }
             Some(TokenKind::True) => {
-                let token = self.advance();
-                Ok(Expr::BoolLiteral {
-                    span: token.span,
-                    value: true,
+                let span = self.advance().span;
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Bool(true),
                 })
             }
             Some(TokenKind::False) => {
-                let token = self.advance();
-                Ok(Expr::BoolLiteral {
-                    span: token.span,
-                    value: false,
+                let span = self.advance().span;
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Bool(false),
                 })
             }
             Some(TokenKind::Identifier) => {
-                let token = self.advance();
-                let name_span = token.span;
-                let name_sym = self.intern(name_span);
+                let span = self.advance().span;
+                let ident = self.ident(span);
 
                 // Check if this is a function call
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
                     self.advance(); // consume '('
                     let args = self.parse_argument_list()?;
-                    self.consume(TokenKind::RightParen, "Expected ')'")?;
-                    Ok(Expr::FunctionCall {
-                        path: crate::NamePath::from_single(name_sym, name_span),
-                        args,
+                    let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
+                    let span = ident.span.cover(end_span.span);
+                    Ok(Expr {
+                        span,
                         ty: Type::Undetermined,
+                        kind: ExprKind::FunctionCall {
+                            path: NamePath::from_single(ident),
+                            args,
+                        },
                     })
                 } else if self.allow_struct_literal
                     && matches!(self.peek_kind(), Some(TokenKind::LeftBrace))
@@ -317,18 +327,21 @@ impl<'a> Parser<'a> {
                     // This is a struct literal
                     self.advance(); // consume '{'
                     let fields = self.parse_struct_literal_fields()?;
-                    self.consume(TokenKind::RightBrace, "Expected '}'")?;
-                    Ok(Expr::StructLiteral {
-                        name: name_sym,
-                        name_span,
-                        fields,
+                    let end_span = self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                    let span = ident.span.cover(end_span.span);
+                    Ok(Expr {
+                        span,
                         ty: Type::Undetermined,
+                        kind: ExprKind::StructLiteral {
+                            name: ident,
+                            fields,
+                        },
                     })
                 } else {
-                    Ok(Expr::Identifier {
-                        name: name_sym,
-                        span: name_span,
+                    Ok(Expr {
+                        span: ident.span,
                         ty: Type::Undetermined,
+                        kind: ExprKind::Ident(ident),
                     })
                 }
             }
@@ -357,63 +370,69 @@ impl<'a> Parser<'a> {
                     )?
                     .span;
                 let span = left_span.cover(right_span);
-                Ok(Expr::ArrayLiteral {
-                    elements,
+                Ok(Expr {
                     span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Array(elements),
                 })
             }
             Some(TokenKind::UnaryMinus) => {
                 let minus_span = self.advance().span; // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
-                let span = minus_span.cover(operand.span());
+                let span = minus_span.cover(operand.span);
                 // Represent unary minus as 0 - operand
-                Ok(Expr::Binary {
-                    left: Box::new(Expr::IntLiteral {
-                        span: minus_span,
-                        value: 0,
-                        ty: Type::Undetermined,
-                    }), // placeholder "0"
-                    op: BinaryOp::Subtract,
-                    right: Box::new(operand),
+                Ok(Expr {
                     span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Binary {
+                        left: Box::new(Expr {
+                            span: minus_span,
+                            ty: Type::Undetermined,
+                            kind: ExprKind::Int(0),
+                        }),
+                        op: BinaryOp::Subtract,
+                        right: Box::new(operand),
+                    },
                 })
             }
             Some(TokenKind::UnaryPlus) => {
                 let plus_span = self.advance().span; // consume '+'
                 let operand = self.parse_expression(Precedence::UNARY)?;
-                let span = plus_span.cover(operand.span());
+                let span = plus_span.cover(operand.span);
                 // Represent unary plus as 0 + operand
-                Ok(Expr::Binary {
-                    left: Box::new(Expr::IntLiteral {
-                        span: plus_span,
-                        value: 0,
-                        ty: Type::Undetermined,
-                    }), // placeholder "0"
-                    op: BinaryOp::Add,
-                    right: Box::new(operand),
+                Ok(Expr {
                     span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Binary {
+                        left: Box::new(Expr {
+                            span: plus_span,
+                            ty: Type::Undetermined,
+                            kind: ExprKind::Int(0),
+                        }),
+                        op: BinaryOp::Add,
+                        right: Box::new(operand),
+                    },
                 })
             }
             Some(TokenKind::UnaryStar) => {
                 let star_span = self.advance().span; // consume '*'
                 let operand = self.parse_expression(Precedence::UNARY)?;
-                let span = star_span.cover(operand.span());
-                Ok(Expr::Dereference {
-                    operand: Box::new(operand),
+                let span = star_span.cover(operand.span);
+                Ok(Expr {
                     span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Dereference(Box::new(operand)),
                 })
             }
             Some(TokenKind::If) => self.parse_if_expression(),
             Some(TokenKind::LeftBrace) => {
                 // Block expression: { stmts; expr }
                 let block = self.parse_block()?;
-                Ok(Expr::Block {
-                    block,
+                let span = block.span;
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::Block(block),
                 })
             }
             Some(TokenKind::At) => {
@@ -447,29 +466,26 @@ impl<'a> Parser<'a> {
             let precedence = get_precedence_for_token(kind);
             self.advance();
             let right = self.parse_expression(precedence)?;
-            let span = left.span().cover(right.span());
-            return Ok(Expr::Binary {
-                left: Box::new(left),
-                op: binary_op,
-                right: Box::new(right),
+            let span = left.span.cover(right.span);
+            return Ok(Expr {
                 span,
                 ty: Type::Undetermined,
+                kind: ExprKind::Binary {
+                    left: Box::new(left),
+                    op: binary_op,
+                    right: Box::new(right),
+                },
             });
         }
 
         match kind {
             TokenKind::LeftParen => {
                 // Function call: identifier(args) or qualified: module.ident(args)
-                let path = match left {
-                    Expr::Identifier { name, span, .. } => vec![(name, span)],
-                    Expr::FieldAccess {
-                        object,
-                        field,
-                        field_span,
-                        ..
-                    } => {
-                        if let Expr::Identifier { name, span, .. } = *object {
-                            vec![(name, span), (field, field_span)]
+                let (path, start_span) = match &left.kind {
+                    ExprKind::Ident(ident) => (vec![*ident], left.span),
+                    ExprKind::FieldAccess { object, field } => {
+                        if let ExprKind::Ident(obj_ident) = &object.kind {
+                            (vec![*obj_ident, *field], object.span)
                         } else {
                             return Err(ParseError::UnexpectedToken {
                                 expected: "module name before '.'".to_string(),
@@ -488,24 +504,31 @@ impl<'a> Parser<'a> {
                 };
                 self.advance();
                 let args = self.parse_argument_list()?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(Expr::FunctionCall {
-                    path: crate::NamePath { segments: path },
-                    args,
+                let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
+                let span = start_span.cover(end_span.span);
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::FunctionCall {
+                        path: NamePath { segments: path },
+                        args,
+                    },
                 })
             }
             TokenKind::Dot => {
                 self.advance();
-                let field_token =
-                    self.consume(TokenKind::Identifier, "Expected field name after '.'")?;
-                let field_span = field_token.span;
-                let field_sym = self.intern(field_span);
-                Ok(Expr::FieldAccess {
-                    object: Box::new(left),
-                    field: field_sym,
-                    field_span,
+                let field_span = self
+                    .consume(TokenKind::Identifier, "Expected field name after '.'")?
+                    .span;
+                let field = self.ident(field_span);
+                let span = left.span.cover(field.span);
+                Ok(Expr {
+                    span,
                     ty: Type::Undetermined,
+                    kind: ExprKind::FieldAccess {
+                        object: Box::new(left),
+                        field,
+                    },
                 })
             }
             _ => Ok(left),
@@ -540,13 +563,13 @@ impl<'a> Parser<'a> {
         let repr_c = attrs.repr_c;
 
         // Consume 'fn' keyword
-        let fn_token = self.consume(TokenKind::Fn, "Expected 'fn'")?;
-        let fn_start = fn_token.span.start();
+        let fn_start = self.consume(TokenKind::Fn, "Expected 'fn'")?.span.start();
 
         // Parse function name
-        let name_token = self.consume(TokenKind::Identifier, "Expected function name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected function name")?
+            .span;
+        let name = self.ident(name_span);
 
         // Parse parameter list
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
@@ -565,7 +588,7 @@ impl<'a> Parser<'a> {
         if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
                 message: "@repr is only valid on structs".to_string(),
-                span: name_span,
+                span: name.span,
             });
         }
 
@@ -576,7 +599,7 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "function declarations without body require @runtime attribute"
                         .to_string(),
-                    span: name_span,
+                    span: name.span,
                 });
             }
             let empty_block = Block {
@@ -589,7 +612,7 @@ impl<'a> Parser<'a> {
             if runtime.is_some() {
                 return Err(ParseError::InvalidAttributeUsage {
                     message: "@runtime functions must not have a body".to_string(),
-                    span: name_span,
+                    span: name.span,
                 });
             }
             let body = self.parse_block()?;
@@ -601,7 +624,6 @@ impl<'a> Parser<'a> {
 
         Ok(Function {
             name,
-            name_span,
             parameters,
             return_type,
             body,
@@ -617,13 +639,16 @@ impl<'a> Parser<'a> {
         let repr_c = attrs.repr_c;
 
         // Consume 'struct' keyword
-        let struct_token = self.consume(TokenKind::Struct, "Expected 'struct'")?;
-        let struct_start = struct_token.span.start();
+        let struct_start = self
+            .consume(TokenKind::Struct, "Expected 'struct'")?
+            .span
+            .start();
 
         // Parse struct name
-        let name_token = self.consume(TokenKind::Identifier, "Expected struct name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected struct name")?
+            .span;
+        let name = self.ident(name_span);
 
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
@@ -635,7 +660,6 @@ impl<'a> Parser<'a> {
 
         Ok(StructDefinition {
             name,
-            name_span,
             fields,
             repr_c,
             span: full_span,
@@ -643,20 +667,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_trait_definition(&mut self) -> Result<crate::TraitDefinition, ParseError> {
-        let trait_token = self.consume(TokenKind::Trait, "Expected 'trait'")?;
-        let span_start = trait_token.span.start();
-        let name_token = self.consume(TokenKind::Identifier, "Expected trait name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let span_start = self
+            .consume(TokenKind::Trait, "Expected 'trait'")?
+            .span
+            .start();
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected trait name")?
+            .span;
+        let name = self.ident(name_span);
         self.consume(TokenKind::LeftBrace, "Expected '{' to start trait body")?;
 
         // Parse zero or more method signatures: fn name(params) [-> type] ;
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            let mname_token = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname_span = mname_token.span;
-            let mname = self.intern(mname_span);
+            let mname_span = self
+                .consume(TokenKind::Identifier, "Expected method name")?
+                .span;
+            let mname = self.ident(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
@@ -672,7 +700,6 @@ impl<'a> Parser<'a> {
             )?;
             methods.push(crate::TraitMethod {
                 name: mname,
-                name_span: mname_span,
                 parameters,
                 return_type,
             });
@@ -681,31 +708,35 @@ impl<'a> Parser<'a> {
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end trait body")?;
         Ok(crate::TraitDefinition {
             name,
-            name_span,
             methods,
             span: crate::Span::new(span_start, right_brace.span.end()),
         })
     }
 
     fn parse_impl_definition(&mut self) -> Result<crate::ImplDefinition, ParseError> {
-        let impl_token = self.consume(TokenKind::Impl, "Expected 'impl'")?;
-        let span_start = impl_token.span.start();
-        let trait_tok = self.consume(TokenKind::Identifier, "Expected trait name after 'impl'")?;
-        let trait_name_span = trait_tok.span;
-        let trait_name = self.intern(trait_name_span);
+        let span_start = self
+            .consume(TokenKind::Impl, "Expected 'impl'")?
+            .span
+            .start();
+        let trait_name_span = self
+            .consume(TokenKind::Identifier, "Expected trait name after 'impl'")?
+            .span;
+        let trait_name = self.ident(trait_name_span);
         self.consume(TokenKind::For, "Expected 'for' in impl")?;
-        let type_tok = self.consume(TokenKind::Identifier, "Expected type name after 'for'")?;
-        let struct_name_span = type_tok.span;
-        let struct_name = self.intern(struct_name_span);
+        let struct_name_span = self
+            .consume(TokenKind::Identifier, "Expected type name after 'for'")?
+            .span;
+        let struct_name = self.ident(struct_name_span);
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
 
         // Parse zero or more method bodies: fn name(params) [-> type] { statements }
         let mut methods = Vec::new();
         while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
             self.advance();
-            let mname_token = self.consume(TokenKind::Identifier, "Expected method name")?;
-            let mname_span = mname_token.span;
-            let mname = self.intern(mname_span);
+            let mname_span = self
+                .consume(TokenKind::Identifier, "Expected method name")?
+                .span;
+            let mname = self.ident(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
@@ -720,7 +751,6 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::RightBrace, "Expected '}' to end method body")?;
             methods.push(crate::ImplMethod {
                 name: mname,
-                name_span: mname_span,
                 parameters,
                 return_type,
                 body,
@@ -730,9 +760,7 @@ impl<'a> Parser<'a> {
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
         Ok(crate::ImplDefinition {
             trait_name,
-            trait_name_span,
             struct_name,
-            struct_name_span,
             methods,
             span: crate::Span::new(span_start, right_brace.span.end()),
         })
@@ -765,18 +793,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_struct_field_definition(&mut self) -> Result<StructFieldDefinition, ParseError> {
-        let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected field name")?
+            .span;
+        let name = self.ident(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after field name")?;
         let field_type = self.parse_type()?;
 
-        Ok(StructFieldDefinition {
-            name,
-            name_span,
-            field_type,
-        })
+        Ok(StructFieldDefinition { name, field_type })
     }
 
     fn parse_struct_literal_fields(&mut self) -> Result<Vec<StructField>, ParseError> {
@@ -806,18 +831,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_struct_literal_field(&mut self) -> Result<StructField, ParseError> {
-        let name_token = self.consume(TokenKind::Identifier, "Expected field name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected field name")?
+            .span;
+        let name = self.ident(name_span);
 
         self.consume(TokenKind::Equals, "Expected '=' after field name")?;
         let value = self.parse_expression(Precedence::NONE)?;
 
-        Ok(StructField {
-            name,
-            name_span,
-            value,
-        })
+        Ok(StructField { name, value })
     }
 
     fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParseError> {
@@ -841,16 +863,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
-        let name_token = self.consume(TokenKind::Identifier, "Expected parameter name")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected parameter name")?
+            .span;
+        let name = self.ident(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
         let type_annotation = self.parse_type()?;
 
         Ok(Parameter {
             name,
-            name_span,
             type_annotation,
         })
     }
@@ -1022,14 +1044,10 @@ impl<'a> Parser<'a> {
                 let ident_token = self.advance();
                 let ident_span = ident_token.span;
                 if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
-                    let ident_sym = self.intern(ident_span);
+                    let target = self.ident(ident_span);
                     self.advance(); // consume '='
                     let value = self.parse_expression(Precedence::NONE)?;
-                    Ok(Stmt::Assign {
-                        target: ident_sym,
-                        target_span: ident_span,
-                        value,
-                    })
+                    Ok(Stmt::Assign { target, value })
                 } else {
                     // Not an assignment, backtrack and parse as expression
                     self.current = saved_pos;
@@ -1082,9 +1100,8 @@ impl<'a> Parser<'a> {
             self.advance();
         }
 
-        let name_token = self.consume(TokenKind::Identifier, "identifier")?;
-        let name_span = name_token.span;
-        let name = self.intern(name_span);
+        let name_span = self.consume(TokenKind::Identifier, "identifier")?.span;
+        let name = self.ident(name_span);
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
@@ -1100,7 +1117,6 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::Let {
             name,
-            name_span,
             mutable,
             type_annotation,
             value,
@@ -1162,7 +1178,7 @@ impl<'a> Parser<'a> {
             // Check for `else if` - treat as `else { if ... }`
             if matches!(self.peek_kind(), Some(TokenKind::If)) {
                 let nested_if = self.parse_if_expression()?;
-                let nested_span = nested_if.span();
+                let nested_span = nested_if.span;
                 end = nested_span.end();
                 Some(Block {
                     stmts: Vec::new(),
@@ -1178,12 +1194,14 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Expr::If {
-            condition: Box::new(condition),
-            then_branch,
-            else_branch,
+        Ok(Expr {
             span: Span::new(if_start, end),
             ty: Type::Undetermined,
+            kind: ExprKind::If {
+                condition: Box::new(condition),
+                then_branch,
+                else_branch,
+            },
         })
     }
 
@@ -1406,13 +1424,14 @@ mod tests {
     #[test]
     fn test_precedence_mul_binds_tighter() {
         // 2 + 3 * 4 should parse as 2 + (3 * 4)
-        let Expr::Binary { op, right, .. } = parse_expr("2 + 3 * 4") else {
+        let expr = parse_expr("2 + 3 * 4");
+        let ExprKind::Binary { op, right, .. } = &expr.kind else {
             panic!("expected binary");
         };
         assert!(matches!(op, BinaryOp::Add));
         assert!(matches!(
-            *right,
-            Expr::Binary {
+            right.kind,
+            ExprKind::Binary {
                 op: BinaryOp::Multiply,
                 ..
             }
@@ -1422,13 +1441,14 @@ mod tests {
     #[test]
     fn test_left_associativity() {
         // 1 + 2 + 3 should parse as (1 + 2) + 3
-        let Expr::Binary { left, op, .. } = parse_expr("1 + 2 + 3") else {
+        let expr = parse_expr("1 + 2 + 3");
+        let ExprKind::Binary { left, op, .. } = &expr.kind else {
             panic!("expected binary");
         };
         assert!(matches!(op, BinaryOp::Add));
         assert!(matches!(
-            *left,
-            Expr::Binary {
+            left.kind,
+            ExprKind::Binary {
                 op: BinaryOp::Add,
                 ..
             }

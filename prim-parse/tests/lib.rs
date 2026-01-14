@@ -1,5 +1,5 @@
 use prim_parse::{
-    BinaryOp, Expr, ImportSelector, ParseError, PointerMutability, Stmt, Type, parse,
+    BinaryOp, ExprKind, ImportSelector, ParseError, PointerMutability, Stmt, Type, parse,
 };
 use prim_tok::TokenKind;
 
@@ -32,7 +32,7 @@ fn test_parse_let_statement() {
 
     assert_eq!(program.functions.len(), 1);
     let main_func = &program.functions[0];
-    assert_eq!(program.resolve(main_func.name), "main");
+    assert_eq!(program.resolve(main_func.name.sym), "main");
     assert_eq!(main_func.body.stmts.len(), 1);
     match &main_func.body.stmts[0] {
         Stmt::Let {
@@ -42,12 +42,12 @@ fn test_parse_let_statement() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(*name), "x");
+            assert_eq!(program.resolve(name.sym), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &Some(Type::U32));
-            match value {
-                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
-                _ => panic!("Expected IntLiteral, got {:?}", value),
+            match &value.kind {
+                ExprKind::Int(_) => assert_eq!(value.span.text(source), "42"),
+                _ => panic!("Expected Int, got {:?}", value),
             }
         }
         _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
@@ -104,12 +104,12 @@ fn test_parse_let_without_type() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(*name), "x");
+            assert_eq!(program.resolve(name.sym), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &None);
-            match value {
-                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
-                _ => panic!("Expected IntLiteral, got {:?}", value),
+            match &value.kind {
+                ExprKind::Int(_) => assert_eq!(value.span.text(source), "42"),
+                _ => panic!("Expected Int, got {:?}", value),
             }
         }
         _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
@@ -123,27 +123,23 @@ fn test_parse_arithmetic_expression() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Add);
-                match left.as_ref() {
-                    Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
-                    _ => panic!("Expected Identifier, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
+                    _ => panic!("Expected Ident, got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Multiply);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Int(_) => assert_eq!(left.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "2"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression, got {:?}", right),
@@ -162,27 +158,23 @@ fn test_parse_arithmetic_expression_2() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Add);
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "2"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Multiply);
-                        match left.as_ref() {
-                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
-                            _ => panic!("Expected Identifier, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
+                            _ => panic!("Expected Ident, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression, got {:?}", left),
@@ -201,13 +193,14 @@ fn test_parse_println() {
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
-    match main_func.body.expr.as_deref() {
-        Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(program.resolve(path.segments[0].0), "println");
+    let expr = main_func.body.expr.as_deref().unwrap();
+    match &expr.kind {
+        ExprKind::FunctionCall { path, args } => {
+            assert_eq!(program.resolve(path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
-            match &args[0] {
-                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
-                _ => panic!("Expected IntLiteral, got {:?}", &args[0]),
+            match &args[0].kind {
+                ExprKind::Int(_) => assert_eq!(args[0].span.text(source), "42"),
+                _ => panic!("Expected Int, got {:?}", &args[0]),
             }
         }
         _ => panic!(
@@ -224,22 +217,21 @@ fn test_parse_println_with_expression() {
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
-    match main_func.body.expr.as_deref() {
-        Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(program.resolve(path.segments[0].0), "println");
+    let expr = main_func.body.expr.as_deref().unwrap();
+    match &expr.kind {
+        ExprKind::FunctionCall { path, args } => {
+            assert_eq!(program.resolve(path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
-            match &args[0] {
-                Expr::Binary {
-                    left, op, right, ..
-                } => {
+            match &args[0].kind {
+                ExprKind::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Add);
-                    match left.as_ref() {
-                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
-                        _ => panic!("Expected Identifier, got {:?}", left),
+                    match &left.kind {
+                        ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
+                        _ => panic!("Expected Ident, got {:?}", left),
                     }
-                    match right.as_ref() {
-                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    match &right.kind {
+                        ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                        _ => panic!("Expected Int, got {:?}", right),
                     }
                 }
                 _ => panic!("Expected binary expression, got {:?}", &args[0]),
@@ -296,32 +288,28 @@ fn test_parse_parentheses_basic() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Multiply);
                 // Left side should be the parenthesized expression (2 + 3)
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Add);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Int(_) => assert_eq!(left.span.text(source), "2"),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "3"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (2 + 3), got {:?}", left),
                 }
                 // Right side should be 4
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "4"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -345,20 +333,20 @@ fn test_parse_trait_and_impl_syntax() {
         program
             .structs
             .iter()
-            .any(|s| program.resolve(s.name).trim() == "Point")
+            .any(|s| program.resolve(s.name.sym).trim() == "Point")
     );
     assert!(
         program
             .traits
             .iter()
-            .any(|t| program.resolve(t.name).trim() == "Marker")
+            .any(|t| program.resolve(t.name.sym).trim() == "Marker")
     );
     assert!(
         program
             .impls
             .iter()
-            .any(|im| program.resolve(im.trait_name).trim() == "Marker"
-                && program.resolve(im.struct_name).trim() == "Point")
+            .any(|im| program.resolve(im.trait_name.sym).trim() == "Marker"
+                && program.resolve(im.struct_name.sym).trim() == "Point")
     );
 }
 
@@ -374,16 +362,16 @@ fn test_parse_trait_with_method_and_impl_body() {
     let tr = program
         .traits
         .iter()
-        .find(|t| program.resolve(t.name).trim() == "Greeter")
+        .find(|t| program.resolve(t.name.sym).trim() == "Greeter")
         .expect("trait Greeter present");
     assert_eq!(tr.methods.len(), 1);
-    assert_eq!(program.resolve(tr.methods[0].name), "hello");
+    assert_eq!(program.resolve(tr.methods[0].name.sym), "hello");
     assert!(
         program
             .impls
             .iter()
-            .any(|im| program.resolve(im.trait_name).trim() == "Greeter"
-                && program.resolve(im.struct_name).trim() == "Point"
+            .any(|im| program.resolve(im.trait_name.sym).trim() == "Greeter"
+                && program.resolve(im.struct_name.sym).trim() == "Point"
                 && !im.methods.is_empty())
     );
 }
@@ -395,43 +383,37 @@ fn test_parse_parentheses_nested() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Add);
                 // Left side should be ((2 + 3) * 4)
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Multiply);
                         // Inner left should be (2 + 3)
-                        match left.as_ref() {
-                            Expr::Binary {
-                                left, op, right, ..
-                            } => {
+                        match &left.kind {
+                            ExprKind::Binary { left, op, right } => {
                                 assert_eq!(op, &BinaryOp::Add);
-                                match left.as_ref() {
-                                    Expr::IntLiteral { span, .. } => {
-                                        assert_eq!(span.text(source), "2")
+                                match &left.kind {
+                                    ExprKind::Int(_) => {
+                                        assert_eq!(left.span.text(source), "2")
                                     }
-                                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                                    _ => panic!("Expected Int, got {:?}", left),
                                 }
-                                match right.as_ref() {
-                                    Expr::IntLiteral { span, .. } => {
-                                        assert_eq!(span.text(source), "3")
+                                match &right.kind {
+                                    ExprKind::Int(_) => {
+                                        assert_eq!(right.span.text(source), "3")
                                     }
-                                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                                    _ => panic!("Expected Int, got {:?}", right),
                                 }
                             }
                             _ => {
                                 panic!("Expected binary expression for (2 + 3), got {:?}", left)
                             }
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "4"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!(
@@ -440,9 +422,9 @@ fn test_parse_parentheses_nested() {
                     ),
                 }
                 // Right side should be 5
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -458,41 +440,35 @@ fn test_parse_parentheses_with_all_operators() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Multiply);
                 // Left side: (x + y)
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Add);
-                        match left.as_ref() {
-                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
-                            _ => panic!("Expected Identifier, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
+                            _ => panic!("Expected Ident, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
-                            _ => panic!("Expected Identifier, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Ident(_) => assert_eq!(right.span.text(source), "y"),
+                            _ => panic!("Expected Ident, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (x + y), got {:?}", left),
                 }
                 // Right side: (a - b)
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Subtract);
-                        match left.as_ref() {
-                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "a"),
-                            _ => panic!("Expected Identifier, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Ident(_) => assert_eq!(left.span.text(source), "a"),
+                            _ => panic!("Expected Ident, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::Identifier { span, .. } => assert_eq!(span.text(source), "b"),
-                            _ => panic!("Expected Identifier, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Ident(_) => assert_eq!(right.span.text(source), "b"),
+                            _ => panic!("Expected Ident, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (a - b), got {:?}", right),
@@ -511,45 +487,46 @@ fn test_parse_parentheses_function_call_args() {
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
-    match main_func.body.expr.as_deref() {
-        Some(Expr::FunctionCall { path, args, .. }) => {
-            assert_eq!(program.resolve(path.segments[0].0), "println");
+    let expr = main_func
+        .body
+        .expr
+        .as_deref()
+        .expect("Expected println call");
+    match &expr.kind {
+        ExprKind::FunctionCall { path, args } => {
+            assert_eq!(program.resolve(path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             // Argument should be (2 + 3) * 4
-            match &args[0] {
-                Expr::Binary {
-                    left, op, right, ..
-                } => {
+            match &args[0].kind {
+                ExprKind::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Multiply);
-                    match left.as_ref() {
-                        Expr::Binary {
-                            left, op, right, ..
-                        } => {
+                    match &left.kind {
+                        ExprKind::Binary { left, op, right } => {
                             assert_eq!(op, &BinaryOp::Add);
-                            match left.as_ref() {
-                                Expr::IntLiteral { span, .. } => {
-                                    assert_eq!(span.text(source), "2")
+                            match &left.kind {
+                                ExprKind::Int(_) => {
+                                    assert_eq!(left.span.text(source), "2")
                                 }
-                                _ => panic!("Expected IntLiteral, got {:?}", left),
+                                _ => panic!("Expected Int, got {:?}", left),
                             }
-                            match right.as_ref() {
-                                Expr::IntLiteral { span, .. } => {
-                                    assert_eq!(span.text(source), "3")
+                            match &right.kind {
+                                ExprKind::Int(_) => {
+                                    assert_eq!(right.span.text(source), "3")
                                 }
-                                _ => panic!("Expected IntLiteral, got {:?}", right),
+                                _ => panic!("Expected Int, got {:?}", right),
                             }
                         }
                         _ => panic!("Expected binary expression for (2 + 3), got {:?}", left),
                     }
-                    match right.as_ref() {
-                        Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
-                        _ => panic!("Expected IntLiteral, got {:?}", right),
+                    match &right.kind {
+                        ExprKind::Int(_) => assert_eq!(right.span.text(source), "4"),
+                        _ => panic!("Expected Int, got {:?}", right),
                     }
                 }
                 _ => panic!("Expected binary expression, got {:?}", &args[0]),
             }
         }
-        _ => panic!("Expected println call, got {:?}", &main_func.body.expr),
+        _ => panic!("Expected FunctionCall, got {:?}", &main_func.body.expr),
     }
 }
 
@@ -610,7 +587,7 @@ fn test_parse_subtraction_basic() {
     let debug_str = format!("{:#?}", program);
 
     assert!(debug_str.contains("Subtract"));
-    assert!(debug_str.contains("IntLiteral"));
+    assert!(debug_str.contains("Int("));
 }
 
 #[test]
@@ -620,18 +597,16 @@ fn test_parse_subtraction_with_identifiers() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Subtract);
-                match left.as_ref() {
-                    Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
-                    _ => panic!("Expected Identifier, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
+                    _ => panic!("Expected Ident, got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
-                    _ => panic!("Expected Identifier, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Ident(_) => assert_eq!(right.span.text(source), "y"),
+                    _ => panic!("Expected Ident, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -647,28 +622,24 @@ fn test_parse_subtraction_precedence() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Subtract);
-                match left.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "10"),
-                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Int(_) => assert_eq!(left.span.text(source), "10"),
+                    _ => panic!("Expected Int, got {:?}", left),
                 }
                 // Right side should be 3 * 2 (multiplication has higher precedence)
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Multiply);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Int(_) => assert_eq!(left.span.text(source), "3"),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "2"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for 3 * 2, got {:?}", right),
@@ -687,33 +658,29 @@ fn test_parse_subtraction_chained() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Subtract);
                 // Left side should be (20 - 5) due to left associativity
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Subtract);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => {
-                                assert_eq!(span.text(source), "20")
+                        match &left.kind {
+                            ExprKind::Int(_) => {
+                                assert_eq!(left.span.text(source), "20")
                             }
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (20 - 5), got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "3"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -729,28 +696,24 @@ fn test_parse_subtraction_with_parentheses() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Subtract);
-                match left.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "20"),
-                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Int(_) => assert_eq!(left.span.text(source), "20"),
+                    _ => panic!("Expected Int, got {:?}", left),
                 }
                 // Right side should be (5 + 3)
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Add);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Int(_) => assert_eq!(left.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "3"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (5 + 3), got {:?}", right),
@@ -769,18 +732,16 @@ fn test_parse_division_basic() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Divide);
-                match left.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "20"),
-                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Int(_) => assert_eq!(left.span.text(source), "20"),
+                    _ => panic!("Expected Int, got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "4"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -796,20 +757,18 @@ fn test_parse_division_with_identifiers() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Divide);
-                match left.as_ref() {
-                    Expr::Identifier { span, .. } => assert_eq!(span.text(source), "numerator"),
-                    _ => panic!("Expected Identifier, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Ident(_) => assert_eq!(left.span.text(source), "numerator"),
+                    _ => panic!("Expected Ident, got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::Identifier { span, .. } => {
-                        assert_eq!(span.text(source), "denominator")
+                match &right.kind {
+                    ExprKind::Ident(_) => {
+                        assert_eq!(right.span.text(source), "denominator")
                     }
-                    _ => panic!("Expected Identifier, got {:?}", right),
+                    _ => panic!("Expected Ident, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -825,30 +784,26 @@ fn test_parse_division_precedence_with_addition() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Add);
-                match left.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "10"),
-                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Int(_) => assert_eq!(left.span.text(source), "10"),
+                    _ => panic!("Expected Int, got {:?}", left),
                 }
                 // Right side should be 20 / 4 (division has higher precedence)
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Divide);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => {
-                                assert_eq!(span.text(source), "20")
+                        match &left.kind {
+                            ExprKind::Int(_) => {
+                                assert_eq!(left.span.text(source), "20")
                             }
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "4"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "4"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for 20 / 4, got {:?}", right),
@@ -867,33 +822,29 @@ fn test_parse_division_chained() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Divide);
                 // Left side should be (100 / 5) due to left associativity
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Divide);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => {
-                                assert_eq!(span.text(source), "100")
+                        match &left.kind {
+                            ExprKind::Int(_) => {
+                                assert_eq!(left.span.text(source), "100")
                             }
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (100 / 5), got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "2"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "2"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -909,31 +860,27 @@ fn test_parse_division_with_multiplication() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Divide);
                 // Left side should be (8 * 6) due to left associativity
-                match left.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &left.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Multiply);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "8"),
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                        match &left.kind {
+                            ExprKind::Int(_) => assert_eq!(left.span.text(source), "8"),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "6"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "6"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (8 * 6), got {:?}", left),
                 }
-                match right.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "3"),
-                    _ => panic!("Expected IntLiteral, got {:?}", right),
+                match &right.kind {
+                    ExprKind::Int(_) => assert_eq!(right.span.text(source), "3"),
+                    _ => panic!("Expected Int, got {:?}", right),
                 }
             }
             _ => panic!("Expected binary expression, got {:?}", value),
@@ -949,30 +896,26 @@ fn test_parse_division_with_parentheses() {
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::Binary {
-                left, op, right, ..
-            } => {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Binary { left, op, right } => {
                 assert_eq!(op, &BinaryOp::Divide);
-                match left.as_ref() {
-                    Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "100"),
-                    _ => panic!("Expected IntLiteral, got {:?}", left),
+                match &left.kind {
+                    ExprKind::Int(_) => assert_eq!(left.span.text(source), "100"),
+                    _ => panic!("Expected Int, got {:?}", left),
                 }
                 // Right side should be (10 + 5)
-                match right.as_ref() {
-                    Expr::Binary {
-                        left, op, right, ..
-                    } => {
+                match &right.kind {
+                    ExprKind::Binary { left, op, right } => {
                         assert_eq!(op, &BinaryOp::Add);
-                        match left.as_ref() {
-                            Expr::IntLiteral { span, .. } => {
-                                assert_eq!(span.text(source), "10")
+                        match &left.kind {
+                            ExprKind::Int(_) => {
+                                assert_eq!(left.span.text(source), "10")
                             }
-                            _ => panic!("Expected IntLiteral, got {:?}", left),
+                            _ => panic!("Expected Int, got {:?}", left),
                         }
-                        match right.as_ref() {
-                            Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "5"),
-                            _ => panic!("Expected IntLiteral, got {:?}", right),
+                        match &right.kind {
+                            ExprKind::Int(_) => assert_eq!(right.span.text(source), "5"),
+                            _ => panic!("Expected Int, got {:?}", right),
                         }
                     }
                     _ => panic!("Expected binary expression for (10 + 5), got {:?}", right),
@@ -1028,7 +971,7 @@ fn main() {
     let function_names: Vec<&str> = program
         .functions
         .iter()
-        .map(|f| program.resolve(f.name))
+        .map(|f| program.resolve(f.name.sym))
         .collect();
     assert!(function_names.contains(&"level4"));
     assert!(function_names.contains(&"level3"));
@@ -1040,7 +983,7 @@ fn main() {
     let main_func = program
         .functions
         .iter()
-        .find(|f| program.resolve(f.name) == "main")
+        .find(|f| program.resolve(f.name.sym) == "main")
         .expect("main function should exist");
 
     // Verify main has statements
@@ -1054,15 +997,15 @@ fn main() {
     let level1_func = program
         .functions
         .iter()
-        .find(|f| program.resolve(f.name) == "level1")
+        .find(|f| program.resolve(f.name.sym) == "level1")
         .expect("level1 function should exist");
 
     // Find the function call to level2 in level1
     let has_level2_call = level1_func.body.stmts.iter().any(|stmt| match stmt {
-        Stmt::Let {
-            value: Expr::FunctionCall { path, .. },
-            ..
-        } => path.segments.len() == 1 && program.resolve(path.segments[0].0) == "level2",
+        Stmt::Let { value, .. } => matches!(
+            &value.kind,
+            ExprKind::FunctionCall { path, .. } if path.segments.len() == 1 && program.resolve(path.segments[0].sym) == "level2"
+        ),
         _ => false,
     });
     assert!(has_level2_call, "level1 should call level2");
@@ -1077,7 +1020,7 @@ fn test_both_parsers_produce_same_result() {
 
     // Basic structure check
     assert_eq!(program.functions.len(), 1);
-    assert_eq!(program.resolve(program.functions[0].name), "main");
+    assert_eq!(program.resolve(program.functions[0].name.sym), "main");
 }
 
 #[test]
@@ -1093,28 +1036,27 @@ fn test_whitespace_ignored() {
     assert_eq!(messy_program.functions.len(), clean_program.functions.len());
     assert_eq!(messy_program.functions.len(), 1);
     assert_eq!(
-        messy_program.resolve(messy_program.functions[0].name),
+        messy_program.resolve(messy_program.functions[0].name.sym),
         "main"
     );
     assert_eq!(
-        clean_program.resolve(clean_program.functions[0].name),
+        clean_program.resolve(clean_program.functions[0].name.sym),
         "main"
     );
 
     // Test that the arithmetic expression is parsed correctly in both cases
     if let Some(Stmt::Let { value, .. }) = messy_program.functions[0].body.stmts.first() {
         // Should be parsed as 2 + (3 * 4)
-        if let Expr::Binary {
+        if let ExprKind::Binary {
             left,
             op: BinaryOp::Add,
             right,
-            ..
-        } = value
+        } = &value.kind
         {
-            assert!(matches!(**left, Expr::IntLiteral { .. }));
+            assert!(matches!(left.kind, ExprKind::Int(_)));
             assert!(matches!(
-                &**right,
-                Expr::Binary {
+                &right.kind,
+                ExprKind::Binary {
                     op: BinaryOp::Multiply,
                     ..
                 }
@@ -1148,15 +1090,15 @@ fn main() {
 
     // Check struct definition
     let point_struct = &program.structs[0];
-    assert_eq!(program.resolve(point_struct.name), "Point");
+    assert_eq!(program.resolve(point_struct.name.sym), "Point");
     assert_eq!(point_struct.fields.len(), 2);
 
     // Check first field
-    assert_eq!(program.resolve(point_struct.fields[0].name), "x");
+    assert_eq!(program.resolve(point_struct.fields[0].name.sym), "x");
     assert_eq!(point_struct.fields[0].field_type, Type::I32);
 
     // Check second field
-    assert_eq!(program.resolve(point_struct.fields[1].name), "y");
+    assert_eq!(program.resolve(point_struct.fields[1].name.sym), "y");
     assert_eq!(point_struct.fields[1].field_type, Type::I32);
 
     // Check main function has struct literal and field access
@@ -1165,30 +1107,34 @@ fn main() {
     assert_eq!(main_func.body.stmts.len(), 1);
 
     // Check struct literal in let statement
-    if let Stmt::Let {
-        value: Expr::StructLiteral { name, fields, .. },
-        ..
-    } = &main_func.body.stmts[0]
-    {
-        assert_eq!(program.resolve(*name), "Point");
-        assert_eq!(fields.len(), 2);
-        assert_eq!(program.resolve(fields[0].name), "x");
-        assert_eq!(program.resolve(fields[1].name), "y");
+    if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
+        if let ExprKind::StructLiteral { name, fields } = &value.kind {
+            assert_eq!(program.resolve(name.sym), "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(program.resolve(fields[0].name.sym), "x");
+            assert_eq!(program.resolve(fields[1].name.sym), "y");
+        } else {
+            panic!("Expected struct literal in let statement");
+        }
     } else {
-        panic!("Expected struct literal in let statement");
+        panic!("Expected let statement");
     }
 
     // Check field access in println (trailing expression)
-    if let Some(Expr::FunctionCall { args, .. }) = main_func.body.expr.as_deref() {
-        if let Expr::FieldAccess { object, field, .. } = &args[0] {
-            assert_eq!(program.resolve(*field), "x");
-            if let Expr::Identifier { name: id, .. } = object.as_ref() {
-                assert_eq!(program.resolve(*id), "p");
+    if let Some(expr) = main_func.body.expr.as_deref() {
+        if let ExprKind::FunctionCall { args, .. } = &expr.kind {
+            if let ExprKind::FieldAccess { object, field } = &args[0].kind {
+                assert_eq!(program.resolve(field.sym), "x");
+                if let ExprKind::Ident(id) = &object.kind {
+                    assert_eq!(program.resolve(id.sym), "p");
+                } else {
+                    panic!("Expected identifier in field access");
+                }
             } else {
-                panic!("Expected identifier in field access");
+                panic!("Expected field access in println");
             }
         } else {
-            panic!("Expected field access in println");
+            panic!("Expected function call");
         }
     } else {
         panic!("Expected println call");
@@ -1201,19 +1147,19 @@ fn test_parse_field_access() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    if let Stmt::Let {
-        value: Expr::FieldAccess { object, field, .. },
-        ..
-    } = &main_func.body.stmts[0]
-    {
-        assert_eq!(program.resolve(*field), "x");
-        if let Expr::Identifier { name: obj_name, .. } = object.as_ref() {
-            assert_eq!(program.resolve(*obj_name), "point");
+    if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
+        if let ExprKind::FieldAccess { object, field } = &value.kind {
+            assert_eq!(program.resolve(field.sym), "x");
+            if let ExprKind::Ident(obj_name) = &object.kind {
+                assert_eq!(program.resolve(obj_name.sym), "point");
+            } else {
+                panic!("Expected identifier in field access object");
+            }
         } else {
-            panic!("Expected identifier in field access object");
+            panic!("Expected field access expression");
         }
     } else {
-        panic!("Expected field access expression");
+        panic!("Expected let statement");
     }
 }
 
@@ -1223,31 +1169,31 @@ fn test_parse_struct_literal() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    if let Stmt::Let {
-        value: Expr::StructLiteral { name, fields, .. },
-        ..
-    } = &main_func.body.stmts[0]
-    {
-        assert_eq!(program.resolve(*name), "Point");
-        assert_eq!(fields.len(), 2);
+    if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
+        if let ExprKind::StructLiteral { name, fields } = &value.kind {
+            assert_eq!(program.resolve(name.sym), "Point");
+            assert_eq!(fields.len(), 2);
 
-        // Check first field
-        assert_eq!(program.resolve(fields[0].name), "x");
-        if let Expr::IntLiteral { span: val, .. } = &fields[0].value {
-            assert_eq!(val.text(source), "10");
-        } else {
-            panic!("Expected integer literal for x field");
-        }
+            // Check first field
+            assert_eq!(program.resolve(fields[0].name.sym), "x");
+            if let ExprKind::Int(_) = &fields[0].value.kind {
+                assert_eq!(fields[0].value.span.text(source), "10");
+            } else {
+                panic!("Expected integer literal for x field");
+            }
 
-        // Check second field
-        assert_eq!(program.resolve(fields[1].name), "y");
-        if let Expr::IntLiteral { span: val, .. } = &fields[1].value {
-            assert_eq!(val.text(source), "20");
+            // Check second field
+            assert_eq!(program.resolve(fields[1].name.sym), "y");
+            if let ExprKind::Int(_) = &fields[1].value.kind {
+                assert_eq!(fields[1].value.span.text(source), "20");
+            } else {
+                panic!("Expected integer literal for y field");
+            }
         } else {
-            panic!("Expected integer literal for y field");
+            panic!("Expected struct literal");
         }
     } else {
-        panic!("Expected struct literal");
+        panic!("Expected let statement");
     }
 }
 
@@ -1317,15 +1263,15 @@ fn test_parse_dereference() {
     let program = parse_ok(source);
 
     let main_func = &program.functions[0];
-    if let Stmt::Let {
-        value: Expr::Dereference { operand, .. },
-        ..
-    } = &main_func.body.stmts[0]
-    {
-        if let Expr::Identifier { name, .. } = &**operand {
-            assert_eq!(program.resolve(*name), "ptr");
+    if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
+        if let ExprKind::Dereference(operand) = &value.kind {
+            if let ExprKind::Ident(name) = &operand.kind {
+                assert_eq!(program.resolve(name.sym), "ptr");
+            } else {
+                panic!("Expected identifier in dereference operand");
+            }
         } else {
-            panic!("Expected identifier in dereference operand");
+            panic!("Expected dereference expression");
         }
     } else {
         panic!("Expected let statement with dereference expression");
@@ -1348,7 +1294,7 @@ fn test_import_decl_variants() {
         module_import
             .trailing_symbol
             .as_ref()
-            .map(|(sym, _span)| program.resolve(*sym)),
+            .map(|ident| program.resolve(ident.sym)),
         Some("bar")
     );
 
@@ -1365,7 +1311,7 @@ fn test_import_decl_variants() {
         trailing_symbol_import
             .trailing_symbol
             .as_ref()
-            .map(|(sym, _span)| program.resolve(*sym)),
+            .map(|ident| program.resolve(ident.sym)),
         Some("Baz")
     );
 
@@ -1378,7 +1324,7 @@ fn test_import_decl_variants() {
         ImportSelector::Named(names) => {
             let texts: Vec<_> = names
                 .iter()
-                .map(|(sym, _span)| program.resolve(*sym))
+                .map(|ident| program.resolve(ident.sym))
                 .collect();
             assert_eq!(texts, vec!["Baz", "Quux"]);
         }
@@ -1436,12 +1382,12 @@ fn test_parse_let_mut() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(*name), "x");
+            assert_eq!(program.resolve(name.sym), "x");
             assert!(*mutable);
             assert_eq!(type_annotation, &Some(Type::I32));
-            match value {
-                Expr::IntLiteral { span, .. } => assert_eq!(span.text(source), "42"),
-                _ => panic!("Expected IntLiteral, got {:?}", value),
+            match &value.kind {
+                ExprKind::Int(_) => assert_eq!(value.span.text(source), "42"),
+                _ => panic!("Expected Int, got {:?}", value),
             }
         }
         _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
@@ -1461,7 +1407,7 @@ fn test_parse_let_mut_without_type() {
             type_annotation,
             ..
         } => {
-            assert_eq!(program.resolve(*name), "counter");
+            assert_eq!(program.resolve(name.sym), "counter");
             assert!(*mutable);
             assert_eq!(type_annotation, &None);
         }
@@ -1478,17 +1424,21 @@ fn test_if_condition_no_struct_literal_ambiguity() {
     let main_func = &program.functions[0];
     // The if is a trailing expression (no semicolon), so it ends up in body.expr
     assert!(main_func.body.stmts.is_empty());
-    match main_func.body.expr.as_deref() {
-        Some(Expr::If {
+    let expr = main_func
+        .body
+        .expr
+        .as_deref()
+        .expect("Expected if expression");
+    match &expr.kind {
+        ExprKind::If {
             condition,
             then_branch,
             else_branch,
-            ..
-        }) => {
+        } => {
             // Condition should be a simple identifier, not a struct literal
-            match condition.as_ref() {
-                Expr::Identifier { span, .. } => {
-                    assert_eq!(span.text(source), "x");
+            match &condition.kind {
+                ExprKind::Ident(_) => {
+                    assert_eq!(condition.span.text(source), "x");
                 }
                 _ => panic!("Expected identifier in condition, got {:?}", condition),
             }
@@ -1512,9 +1462,9 @@ fn test_while_condition_no_struct_literal_ambiguity() {
             condition, body, ..
         } => {
             // Condition should be a simple identifier, not a struct literal
-            match condition {
-                Expr::Identifier { span, .. } => {
-                    assert_eq!(span.text(source), "x");
+            match &condition.kind {
+                ExprKind::Ident(_) => {
+                    assert_eq!(condition.span.text(source), "x");
                 }
                 _ => panic!("Expected identifier in condition, got {:?}", condition),
             }
@@ -1539,17 +1489,15 @@ fn test_while_condition_with_comparison() {
         Stmt::While {
             condition, body, ..
         } => {
-            match condition {
-                Expr::Binary {
-                    left, op, right, ..
-                } => {
+            match &condition.kind {
+                ExprKind::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Less);
-                    match left.as_ref() {
-                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
+                    match &left.kind {
+                        ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
                         _ => panic!("Expected identifier for left, got {:?}", left),
                     }
-                    match right.as_ref() {
-                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
+                    match &right.kind {
+                        ExprKind::Ident(_) => assert_eq!(right.span.text(source), "y"),
                         _ => panic!("Expected identifier for right, got {:?}", right),
                     }
                 }
@@ -1576,24 +1524,26 @@ fn test_if_condition_with_comparison() {
     let main_func = &program.functions[0];
     // The if is a trailing expression (no semicolon), so it ends up in body.expr
     assert!(main_func.body.stmts.is_empty());
-    match main_func.body.expr.as_deref() {
-        Some(Expr::If {
+    let expr = main_func
+        .body
+        .expr
+        .as_deref()
+        .expect("Expected if expression");
+    match &expr.kind {
+        ExprKind::If {
             condition,
             then_branch,
             else_branch,
-            ..
-        }) => {
-            match condition.as_ref() {
-                Expr::Binary {
-                    left, op, right, ..
-                } => {
+        } => {
+            match &condition.kind {
+                ExprKind::Binary { left, op, right } => {
                     assert_eq!(op, &BinaryOp::Less);
-                    match left.as_ref() {
-                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "x"),
+                    match &left.kind {
+                        ExprKind::Ident(_) => assert_eq!(left.span.text(source), "x"),
                         _ => panic!("Expected identifier for left, got {:?}", left),
                     }
-                    match right.as_ref() {
-                        Expr::Identifier { span, .. } => assert_eq!(span.text(source), "y"),
+                    match &right.kind {
+                        ExprKind::Ident(_) => assert_eq!(right.span.text(source), "y"),
                         _ => panic!("Expected identifier for right, got {:?}", right),
                     }
                 }
