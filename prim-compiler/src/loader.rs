@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// A fully loaded program.
 pub struct LoadedProgram {
@@ -155,20 +154,10 @@ impl Loader {
         }
     }
 
-    fn alloc_file(
-        &mut self,
-        path: PathBuf,
-        source: Arc<str>,
-        ast: prim_parse::Program,
-    ) -> ModuleFile {
+    fn alloc_file(&mut self, path: PathBuf, ast: prim_parse::Program) -> ModuleFile {
         let file_id = FileId(self.next_file_id);
         self.next_file_id += 1;
-        ModuleFile {
-            file_id,
-            path,
-            source,
-            ast,
-        }
+        ModuleFile { file_id, path, ast }
     }
 
     fn load_single_file(&mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
@@ -207,8 +196,7 @@ impl Loader {
             );
         }
 
-        let module_files =
-            vec![self.alloc_file(path.to_path_buf(), Arc::from(source.clone()), ast.clone())];
+        let module_files = vec![self.alloc_file(path.to_path_buf(), ast.clone())];
 
         let exports = collect_exports(&module_files);
         let module_id = ModuleId(self.program.modules.len() as u32);
@@ -297,7 +285,7 @@ impl Loader {
                 merge_import_request(&mut imports, &mut import_index, module, coverage);
             }
 
-            module_files.push(self.alloc_file(file.clone(), Arc::from(source.clone()), ast));
+            module_files.push(self.alloc_file(file.clone(), ast));
         }
 
         let module_name = module_name.unwrap();
@@ -471,11 +459,7 @@ impl Loader {
                     merge_import_request(&mut imports, &mut import_index, module, coverage);
                 }
 
-                module_files.push(self.alloc_file(
-                    file.clone(),
-                    Arc::from(source.clone()),
-                    program,
-                ));
+                module_files.push(self.alloc_file(file.clone(), program));
             }
 
             if self.options.include_prelude {

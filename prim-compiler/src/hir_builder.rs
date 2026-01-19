@@ -134,7 +134,6 @@ impl<'a> LoweringContext<'a> {
                 *slot = Some(FileInfo {
                     id,
                     path: file.path.clone(),
-                    source: file.source.to_string(),
                 });
             }
         }

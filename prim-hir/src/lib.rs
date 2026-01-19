@@ -264,7 +264,6 @@ impl HirExpr {
 pub struct FileInfo {
     pub id: FileId,
     pub path: PathBuf,
-    pub source: String,
 }
 
 #[derive(Clone, Debug)]

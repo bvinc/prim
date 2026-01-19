@@ -2,7 +2,6 @@ use prim_parse as ast;
 use prim_parse::Span;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ModuleId(pub u32);
@@ -43,7 +42,6 @@ pub(crate) struct Module {
 pub(crate) struct ModuleFile {
     pub file_id: FileId,
     pub path: PathBuf,
-    pub source: Arc<str>,
     pub ast: ast::Program,
 }
 

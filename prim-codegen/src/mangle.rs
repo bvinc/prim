@@ -110,7 +110,6 @@ mod tests {
             files: vec![FileInfo {
                 id: FileId(0),
                 path: PathBuf::from("dummy.prim"),
-                source: String::new(),
             }],
             spans: vec![(FileId(0), Span::new(0, 0))],
         }
