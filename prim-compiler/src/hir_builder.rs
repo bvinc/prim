@@ -100,6 +100,7 @@ impl LocalScope {
 struct LoweringContext<'a> {
     program: &'a Program,
     module_scopes: &'a ModuleScopes,
+    interner: Interner,
     spans: Vec<(FileId, Span)>,
     files: Vec<FileInfo>,
     symbols: SymbolTable,
@@ -139,9 +140,17 @@ impl<'a> LoweringContext<'a> {
         }
         let files: Vec<FileInfo> = files.into_iter().flatten().collect();
 
+        let root_module = &program.modules[program.root.0 as usize];
+        let interner = root_module
+            .files
+            .first()
+            .map(|f| f.ast.interner.clone())
+            .expect("root module should have at least one file");
+
         Self {
             program,
             module_scopes,
+            interner,
             spans: Vec::new(),
             files,
             symbols: SymbolTable {
@@ -271,14 +280,9 @@ impl<'a> LoweringContext<'a> {
                         .parameters
                         .iter()
                         .map(|p| {
-                            let param_name = ast.resolve(p.name.sym).to_string();
-                            let sym = self.insert_symbol(
-                                module_id,
-                                param_name.clone(),
-                                SymbolKind::Param,
-                            );
+                            let sym = self.insert_symbol(module_id, p.name.sym, SymbolKind::Param);
                             self.local_scope.insert(
-                                param_name,
+                                ast.resolve(p.name.sym).to_string(),
                                 LocalBinding {
                                     symbol: sym,
                                     mutable: false,
@@ -318,18 +322,11 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn finish(self) -> HirProgram {
-        let root_module = &self.program.modules[self.root_module.0 as usize];
-        let interner = root_module
-            .files
-            .first()
-            .map(|f| f.ast.interner.clone())
-            .expect("root module should have at least one file");
-
         HirProgram {
             modules: self.modules,
             items: self.items,
             symbols: self.symbols,
-            interner,
+            interner: self.interner,
             main: self.main,
             files: self.files,
             spans: self.spans,
@@ -343,14 +340,19 @@ impl<'a> LoweringContext<'a> {
             .expect("missing top-level symbol")
     }
 
-    fn insert_symbol(&mut self, module: ModuleId, name: String, kind: SymbolKind) -> SymbolId {
+    fn insert_symbol(
+        &mut self,
+        module: ModuleId,
+        name: InternSymbol,
+        kind: SymbolKind,
+    ) -> SymbolId {
         let id = SymbolId(self.symbols.entries.len() as u32);
         match kind {
             SymbolKind::Function(_)
             | SymbolKind::Struct(_)
             | SymbolKind::Global(_)
             | SymbolKind::Module => {
-                self.symbols.by_name.insert((module, name.clone()), id);
+                self.symbols.by_name.insert((module, name), id);
             }
             _ => {}
         }
@@ -379,10 +381,9 @@ impl<'a> LoweringContext<'a> {
                 value,
             } => {
                 let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
-                let var_name = ast.resolve(name.sym).to_string();
-                let sym = self.insert_symbol(module, var_name.clone(), SymbolKind::Local);
+                let sym = self.insert_symbol(module, name.sym, SymbolKind::Local);
                 self.local_scope.insert(
-                    var_name,
+                    ast.resolve(name.sym).to_string(),
                     LocalBinding {
                         symbol: sym,
                         mutable: *mutable,
@@ -752,7 +753,8 @@ impl<'a> LoweringContext<'a> {
             .or(module_hint)
             .expect("missing module for symbol");
         let kind = self.convert_kind(info.kind, res_id);
-        let sym = self.insert_symbol(module, info.name.clone(), kind);
+        let name_sym = self.interner.get_or_intern(&info.name);
+        let sym = self.insert_symbol(module, name_sym, kind);
         self.symbol_map.insert(res_id, sym);
         sym
     }

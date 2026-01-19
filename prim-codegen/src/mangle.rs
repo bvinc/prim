@@ -33,7 +33,11 @@ pub(crate) fn symbol_name(sym: prim_hir::SymbolId, program: &HirProgram) -> Stri
             }
         }
         push_tag(&mut name, "K", kind_tag(&entry.kind));
-        push_len_segment(&mut name, "N", &entry.name);
+        let entry_name = program
+            .interner
+            .resolve(entry.name)
+            .expect("missing symbol name");
+        push_len_segment(&mut name, "N", entry_name);
         return name;
     }
     format!("sym_{}", sym.0)
@@ -79,6 +83,8 @@ mod tests {
     ) -> HirProgram {
         let module_id = ModuleId(0);
         let symbol_id = SymbolId(0);
+        let mut interner = Interner::new();
+        let name_sym = interner.get_or_intern(symbol_name);
         let module = Module {
             id: module_id,
             name: module_name.into_iter().map(|s| s.to_string()).collect(),
@@ -89,7 +95,7 @@ mod tests {
         let symbol = Symbol {
             id: symbol_id,
             module: module_id,
-            name: symbol_name.to_string(),
+            name: name_sym,
             kind,
         };
         HirProgram {
@@ -99,7 +105,7 @@ mod tests {
                 entries: vec![symbol],
                 by_name: HashMap::new(),
             },
-            interner: Interner::new(),
+            interner,
             main: None,
             files: vec![FileInfo {
                 id: FileId(0),

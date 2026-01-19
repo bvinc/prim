@@ -270,14 +270,14 @@ pub struct FileInfo {
 #[derive(Clone, Debug)]
 pub struct SymbolTable {
     pub entries: Vec<Symbol>,
-    pub by_name: HashMap<(ModuleId, String), SymbolId>,
+    pub by_name: HashMap<(ModuleId, InternSymbol), SymbolId>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Symbol {
     pub id: SymbolId,
     pub module: ModuleId,
-    pub name: String,
+    pub name: InternSymbol,
     pub kind: SymbolKind,
 }
 
