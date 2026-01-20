@@ -34,6 +34,12 @@ impl LoweringError {
             LoweringError::AssignToImmutable { span, .. } => *span,
         }
     }
+
+    pub fn file(&self) -> ProgFileId {
+        match self {
+            LoweringError::AssignToImmutable { file, .. } => *file,
+        }
+    }
 }
 
 /// Lower a loaded [`Program`] into [`HirProgram`].

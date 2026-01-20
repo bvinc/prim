@@ -6,7 +6,36 @@ mod resolver;
 pub use hir_builder::LoweringError;
 pub use loader::{LoadError, LoadOptions, prim_root};
 pub use prim_hir::{HirProgram, TypeCheckError};
+pub use program::FileId;
 pub use resolver::ResolveError;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Maps file IDs to their paths for error reporting.
+#[derive(Debug, Default)]
+pub struct SourceMap {
+    files: HashMap<FileId, PathBuf>,
+}
+
+impl SourceMap {
+    /// Get the path for a file ID.
+    pub fn get_path(&self, id: FileId) -> Option<&Path> {
+        self.files.get(&id).map(|p| p.as_path())
+    }
+
+    /// Read the source content for a file ID.
+    pub fn read_source(&self, id: FileId) -> std::io::Result<String> {
+        match self.files.get(&id) {
+            Some(path) => std::fs::read_to_string(path),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Unknown file ID: {:?}", id),
+            )),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -42,16 +71,31 @@ impl std::fmt::Display for CompileError {
 impl std::error::Error for CompileError {}
 
 impl From<LoadError> for CompileError {
-    fn from(err: LoadError) -> Self {
-        CompileError::Load(err)
+    fn from(e: LoadError) -> Self {
+        CompileError::Load(e)
     }
 }
 
-impl From<TypeCheckError> for CompileError {
-    fn from(err: TypeCheckError) -> Self {
-        CompileError::TypeCheck(err)
+impl From<Vec<ResolveError>> for CompileError {
+    fn from(e: Vec<ResolveError>) -> Self {
+        CompileError::Resolve(e)
     }
 }
+
+impl From<Vec<LoweringError>> for CompileError {
+    fn from(e: Vec<LoweringError>) -> Self {
+        CompileError::Lowering(e)
+    }
+}
+
+impl From<prim_hir::TypeCheckError> for CompileError {
+    fn from(e: prim_hir::TypeCheckError) -> Self {
+        CompileError::TypeCheck(e)
+    }
+}
+
+/// Result of compilation: source map for error reporting plus the compilation result.
+pub type CompileResult = (Arc<SourceMap>, Result<HirProgram, CompileError>);
 
 /// Compile a Prim source file to HIR.
 ///
@@ -60,17 +104,32 @@ impl From<TypeCheckError> for CompileError {
 /// 2. Collects top-level symbols into module scopes
 /// 3. Lowers the AST to HIR (resolving names inline)
 /// 4. Type checks the HIR
-pub fn compile(path: &str) -> Result<HirProgram, CompileError> {
-    compile_with_options(path, LoadOptions::default())
+///
+/// Returns the source map (for error reporting) and the compilation result.
+pub fn compile(path: &str, options: LoadOptions) -> CompileResult {
+    let mut loaded = match loader::load_program(path, options) {
+        Ok(l) => l,
+        Err(e) => return (Arc::new(SourceMap::default()), Err(e.into())),
+    };
+
+    let source_map = build_source_map(&loaded.program);
+
+    let result = (|| {
+        let module_scopes = resolver::collect_scopes(&mut loaded.program)?;
+        let mut hir = hir_builder::lower_to_hir(&loaded.program, &module_scopes)?;
+        prim_hir::type_check(&mut hir)?;
+        Ok(hir)
+    })();
+
+    (source_map, result)
 }
 
-/// Compile with custom load options.
-pub fn compile_with_options(path: &str, options: LoadOptions) -> Result<HirProgram, CompileError> {
-    let mut loaded = loader::load_program_with_options(path, options)?;
-    let module_scopes =
-        resolver::collect_scopes(&mut loaded.program).map_err(CompileError::Resolve)?;
-    let mut hir = hir_builder::lower_to_hir(&loaded.program, &module_scopes)
-        .map_err(CompileError::Lowering)?;
-    prim_hir::type_check(&mut hir)?;
-    Ok(hir)
+fn build_source_map(program: &program::Program) -> Arc<SourceMap> {
+    let mut files = HashMap::new();
+    for module in &program.modules {
+        for file in &module.files {
+            files.insert(file.file_id, file.path.clone());
+        }
+    }
+    Arc::new(SourceMap { files })
 }

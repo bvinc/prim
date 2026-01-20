@@ -4,11 +4,12 @@
 //! for use by both the CLI binary and tests.
 
 use prim_codegen::generate_object_code;
-use prim_compiler::{CompileError, HirProgram, LoadError, LoadOptions, compile_with_options};
+use prim_compiler::{CompileError, FileId, HirProgram, LoadError, LoadOptions, SourceMap, compile};
 use prim_tok::{Span, byte_offset_to_line_col};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 /// Output from running a compiled program.
 #[derive(Debug)]
@@ -102,32 +103,65 @@ pub fn compile_source_with_root(
     path: &str,
     prim_root: Option<&Path>,
 ) -> Result<HirProgram, RunError> {
-    let source = fs::read_to_string(path)?;
     let options = LoadOptions {
         prim_root: prim_root.map(Path::to_path_buf),
         ..Default::default()
     };
-    compile_with_options(path, options).map_err(|err| format_compile_error(path, &source, err))
+    let (source_map, result) = compile(path, options);
+    result.map_err(|err| format_compile_error(path, &source_map, err))
 }
 
 /// Format a compile error with source location information.
-pub fn format_compile_error(path: &str, source: &str, err: CompileError) -> RunError {
-    let msg = match err {
-        CompileError::Load(LoadError::Parse(e)) => format_with_span(path, source, e.span(), &e),
+pub fn format_compile_error(
+    fallback_path: &str,
+    source_map: &Arc<SourceMap>,
+    err: CompileError,
+) -> RunError {
+    let msg = match &err {
+        CompileError::Load(LoadError::Parse(e)) => {
+            // Parse errors don't have FileId, use fallback path
+            let source = std::fs::read_to_string(fallback_path).unwrap_or_default();
+            format_with_span(fallback_path, &source, e.span(), e)
+        }
         CompileError::Load(e) => e.to_string(),
-        CompileError::TypeCheck(e) => format_with_span(path, source, Some(e.span), &e),
+        CompileError::TypeCheck(e) => {
+            // Convert prim_hir::FileId to prim_compiler::FileId via inner u32
+            format_error_with_file(source_map, FileId(e.file.0), e.span, e, fallback_path)
+        }
         CompileError::Resolve(errors) => errors
             .iter()
-            .map(|e| format_with_span(path, source, Some(e.span()), e))
+            .map(|e| format_error_with_file(source_map, e.file(), e.span(), e, fallback_path))
             .collect::<Vec<_>>()
             .join("\n"),
         CompileError::Lowering(errors) => errors
             .iter()
-            .map(|e| format_with_span(path, source, Some(e.span()), e))
+            .map(|e| {
+                format_error_with_file(source_map, FileId(e.file().0), e.span(), e, fallback_path)
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     };
     RunError::CompilationError(msg)
+}
+
+fn format_error_with_file(
+    source_map: &SourceMap,
+    file_id: FileId,
+    span: Span,
+    msg: &impl std::fmt::Display,
+    fallback_path: &str,
+) -> String {
+    let (path, source) = match source_map.get_path(file_id) {
+        Some(p) => {
+            let source = source_map.read_source(file_id).unwrap_or_default();
+            (p.to_string_lossy().into_owned(), source)
+        }
+        None => {
+            let source = std::fs::read_to_string(fallback_path).unwrap_or_default();
+            (fallback_path.to_string(), source)
+        }
+    };
+    format_with_span(&path, &source, Some(span), msg)
 }
 
 fn format_with_span(

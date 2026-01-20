@@ -89,7 +89,7 @@ fn inject_prelude_imports(
     }
 }
 
-pub fn load_program_with_options(
+pub fn load_program(
     entry_path: impl AsRef<Path>,
     options: LoadOptions,
 ) -> Result<LoadedProgram, LoadError> {

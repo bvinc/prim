@@ -20,6 +20,12 @@ impl ResolveError {
             ResolveError::DuplicateSymbol { span, .. } => *span,
         }
     }
+
+    pub fn file(&self) -> FileId {
+        match self {
+            ResolveError::DuplicateSymbol { file, .. } => *file,
+        }
+    }
 }
 
 impl std::fmt::Display for ResolveError {
