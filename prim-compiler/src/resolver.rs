@@ -87,7 +87,6 @@ impl<'a> ScopeCollector<'a> {
         let id = SymbolId(self.next_symbol);
         self.next_symbol += 1;
         self.program.name_resolution.symbols.push(SymbolInfo {
-            id,
             name,
             kind,
             module,

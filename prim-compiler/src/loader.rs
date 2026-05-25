@@ -110,15 +110,13 @@ pub fn load_program(
         } else {
             entry_path.to_path_buf()
         };
-        let mut loader = Loader::new(module_root, std_root, options);
-        loader.load_directory(entry_path)
+        Loader::new(module_root, std_root, options).load_directory(entry_path)
     } else {
         let module_root = entry_path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let mut loader = Loader::new(module_root, std_root, options);
-        loader.load_single_file(entry_path)
+        Loader::new(module_root, std_root, options).load_single_file(entry_path)
     }
 }
 
@@ -160,7 +158,7 @@ impl Loader {
         ModuleFile { file_id, path, ast }
     }
 
-    fn load_single_file(&mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
+    fn load_single_file(mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
         let source = std::fs::read_to_string(path)?;
         let (ast, _diagnostics) = prim_parse::parse(&source);
         let ast = ast?;
@@ -221,11 +219,11 @@ impl Loader {
         self.validate_imports(&imports)?;
 
         Ok(LoadedProgram {
-            program: self.program.clone(),
+            program: self.program,
         })
     }
 
-    fn load_directory(&mut self, dir: &Path) -> Result<LoadedProgram, LoadError> {
+    fn load_directory(mut self, dir: &Path) -> Result<LoadedProgram, LoadError> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -288,7 +286,9 @@ impl Loader {
             module_files.push(self.alloc_file(file.clone(), ast));
         }
 
-        let module_name = module_name.unwrap();
+        let module_name = module_name.ok_or_else(|| {
+            LoadError::InvalidModule("No module name found in source files".to_string())
+        })?;
         if module_name != "main" {
             return Err(LoadError::InvalidModule(format!(
                 "Binary module must be named 'main', found '{}'",
@@ -328,7 +328,7 @@ impl Loader {
         self.validate_imports(&imports)?;
 
         Ok(LoadedProgram {
-            program: self.program.clone(),
+            program: self.program,
         })
     }
 

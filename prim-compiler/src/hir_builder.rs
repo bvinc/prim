@@ -14,6 +14,26 @@ pub enum LoweringError {
         file: ProgFileId,
         span: Span,
     },
+    UnknownName {
+        name: String,
+        file: ProgFileId,
+        span: Span,
+    },
+    UnknownFunction {
+        name: String,
+        file: ProgFileId,
+        span: Span,
+    },
+    UnknownStruct {
+        name: String,
+        file: ProgFileId,
+        span: Span,
+    },
+    UnknownModule {
+        path: String,
+        file: ProgFileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -21,6 +41,18 @@ impl std::fmt::Display for LoweringError {
         match self {
             LoweringError::AssignToImmutable { name, .. } => {
                 write!(f, "Cannot assign to immutable variable '{}'", name)
+            }
+            LoweringError::UnknownName { name, .. } => {
+                write!(f, "Unknown name '{}'", name)
+            }
+            LoweringError::UnknownFunction { name, .. } => {
+                write!(f, "Unknown function '{}'", name)
+            }
+            LoweringError::UnknownStruct { name, .. } => {
+                write!(f, "Unknown struct '{}'", name)
+            }
+            LoweringError::UnknownModule { path, .. } => {
+                write!(f, "Unknown module '{}'", path)
             }
         }
     }
@@ -31,13 +63,21 @@ impl std::error::Error for LoweringError {}
 impl LoweringError {
     pub fn span(&self) -> Span {
         match self {
-            LoweringError::AssignToImmutable { span, .. } => *span,
+            LoweringError::AssignToImmutable { span, .. }
+            | LoweringError::UnknownName { span, .. }
+            | LoweringError::UnknownFunction { span, .. }
+            | LoweringError::UnknownStruct { span, .. }
+            | LoweringError::UnknownModule { span, .. } => *span,
         }
     }
 
     pub fn file(&self) -> ProgFileId {
         match self {
-            LoweringError::AssignToImmutable { file, .. } => *file,
+            LoweringError::AssignToImmutable { file, .. }
+            | LoweringError::UnknownName { file, .. }
+            | LoweringError::UnknownFunction { file, .. }
+            | LoweringError::UnknownStruct { file, .. }
+            | LoweringError::UnknownModule { file, .. } => *file,
         }
     }
 }
@@ -408,21 +448,31 @@ impl<'a> LoweringContext<'a> {
             }
             Stmt::Assign { target, value } => {
                 let target_name = ast.resolve(target.sym);
-                let binding = self
-                    .local_scope
-                    .get(target_name)
-                    .expect("unknown variable in assignment");
-                if !binding.mutable {
-                    self.errors.push(LoweringError::AssignToImmutable {
-                        name: target_name.to_string(),
-                        file: file_id,
-                        span: target.span,
-                    });
-                }
-                HirStmt::Assign {
-                    target: binding.symbol,
-                    value: self.lower_expr(value, module, file_id, ast, module_scope),
-                    span: self.span_id(target.span, FileId(file_id.0)),
+                let binding = self.local_scope.get(target_name).copied();
+                match binding {
+                    Some(binding) => {
+                        if !binding.mutable {
+                            self.errors.push(LoweringError::AssignToImmutable {
+                                name: target_name.to_string(),
+                                file: file_id,
+                                span: target.span,
+                            });
+                        }
+                        HirStmt::Assign {
+                            target: binding.symbol,
+                            value: self.lower_expr(value, module, file_id, ast, module_scope),
+                            span: self.span_id(target.span, FileId(file_id.0)),
+                        }
+                    }
+                    None => {
+                        self.errors.push(LoweringError::UnknownName {
+                            name: target_name.to_string(),
+                            file: file_id,
+                            span: target.span,
+                        });
+                        let span = self.span_id(target.span, FileId(file_id.0));
+                        HirStmt::Expr(HirExpr::Error { span })
+                    }
                 }
             }
             Stmt::Expr(expr) => {
@@ -524,11 +574,13 @@ impl<'a> LoweringContext<'a> {
             },
             ExprKind::Ident(ident) => {
                 let name_str = ast.resolve(ident.sym);
-                let sym = self.resolve_name(name_str, module, module_scope);
-                HirExpr::Ident {
-                    symbol: sym,
-                    ty: self.lower_type(&expr.ty, ast, module_scope),
-                    span,
+                match self.resolve_name(name_str, module, file_id, ident.span, module_scope) {
+                    Some(sym) => HirExpr::Ident {
+                        symbol: sym,
+                        ty: self.lower_type(&expr.ty, ast, module_scope),
+                        span,
+                    },
+                    None => HirExpr::Error { span },
                 }
             }
             ExprKind::Binary { left, op, right } => HirExpr::Binary {
@@ -551,39 +603,51 @@ impl<'a> LoweringContext<'a> {
                 span,
             },
             ExprKind::FunctionCall { path, args } => {
-                let call_span = path.segments.last().expect("missing call span").span;
-                let res_id = self.resolve_function_path(path, ast, module_scope);
-                let fid = *self.func_ids.get(&res_id).expect("missing function id");
-                HirExpr::Call {
-                    func: fid,
-                    args: args
-                        .iter()
-                        .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
-                        .collect(),
-                    ty: self.lower_type(&expr.ty, ast, module_scope),
-                    span: self.span_id(call_span, FileId(file_id.0)),
+                let call_span = path.segments.last().expect("empty path").span;
+                let fid = self
+                    .resolve_function_path(path, file_id, ast, module_scope)
+                    .and_then(|id| self.func_ids.get(&id).copied());
+                match fid {
+                    Some(fid) => HirExpr::Call {
+                        func: fid,
+                        args: args
+                            .iter()
+                            .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                            .collect(),
+                        ty: self.lower_type(&expr.ty, ast, module_scope),
+                        span: self.span_id(call_span, FileId(file_id.0)),
+                    },
+                    None => HirExpr::Error { span },
                 }
             }
             ExprKind::StructLiteral { name, fields } => {
                 let struct_name = ast.resolve(name.sym);
-                let res_id = module_scope
+                let struct_id = module_scope
                     .get(struct_name)
-                    .copied()
-                    .expect("unknown struct");
-                let struct_id = *self.struct_ids.get(&res_id).expect("missing struct id");
-                HirExpr::StructLit {
-                    struct_id,
-                    fields: fields
-                        .iter()
-                        .map(|f| {
-                            (
-                                f.name.sym,
-                                self.lower_expr(&f.value, module, file_id, ast, module_scope),
-                            )
-                        })
-                        .collect(),
-                    ty: self.lower_type(&expr.ty, ast, module_scope),
-                    span,
+                    .and_then(|res_id| self.struct_ids.get(res_id).copied());
+                match struct_id {
+                    Some(struct_id) => HirExpr::StructLit {
+                        struct_id,
+                        fields: fields
+                            .iter()
+                            .map(|f| {
+                                (
+                                    f.name.sym,
+                                    self.lower_expr(&f.value, module, file_id, ast, module_scope),
+                                )
+                            })
+                            .collect(),
+                        ty: self.lower_type(&expr.ty, ast, module_scope),
+                        span,
+                    },
+                    None => {
+                        self.errors.push(LoweringError::UnknownStruct {
+                            name: struct_name.to_string(),
+                            file: file_id,
+                            span: name.span,
+                        });
+                        HirExpr::Error { span }
+                    }
                 }
             }
             ExprKind::FieldAccess { object, field } => HirExpr::Field {
@@ -630,31 +694,48 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         name: &str,
         module: ModuleId,
+        file: ProgFileId,
+        span: Span,
         module_scope: &ModuleScope,
-    ) -> SymbolId {
+    ) -> Option<SymbolId> {
         // Check local scope first
         if let Some(binding) = self.local_scope.get(name) {
-            return binding.symbol;
+            return Some(binding.symbol);
         }
         // Then check module scope
         if let Some(&res_id) = module_scope.get(name) {
-            return self.ensure_symbol(res_id, Some(module));
+            return Some(self.ensure_symbol(res_id, Some(module)));
         }
-        panic!("unknown name: {}", name)
+        self.errors.push(LoweringError::UnknownName {
+            name: name.to_string(),
+            file,
+            span,
+        });
+        None
     }
 
     fn resolve_function_path(
         &mut self,
         path: &prim_parse::NamePath,
+        file_id: ProgFileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
-    ) -> ResSymbolId {
+    ) -> Option<ResSymbolId> {
         let name_ident = path.segments.last().expect("empty path");
         let name = ast.resolve(name_ident.sym);
 
         if path.segments.len() == 1 {
             // Simple name - look up in module scope
-            *module_scope.get(name).expect("unknown function")
+            if let Some(&id) = module_scope.get(name) {
+                Some(id)
+            } else {
+                self.errors.push(LoweringError::UnknownFunction {
+                    name: name.to_string(),
+                    file: file_id,
+                    span: name_ident.span,
+                });
+                None
+            }
         } else {
             // Qualified path - look up in target module
             let module_path: Vec<String> = path
@@ -663,13 +744,30 @@ impl<'a> LoweringContext<'a> {
                 .take(path.segments.len() - 1)
                 .map(|ident| ast.resolve(ident.sym).to_string())
                 .collect();
-            let key = crate::program::ModuleKey::Name(module_path);
-            let target_module_id = self.program.module_index.get(&key).expect("unknown module");
+            let key = crate::program::ModuleKey::Name(module_path.clone());
+            let first_seg = &path.segments[0];
+            let Some(target_module_id) = self.program.module_index.get(&key) else {
+                self.errors.push(LoweringError::UnknownModule {
+                    path: module_path.join("::"),
+                    file: file_id,
+                    span: first_seg.span,
+                });
+                return None;
+            };
             let target_scope = self
                 .module_scopes
                 .get(target_module_id)
-                .expect("missing scope");
-            *target_scope.get(name).expect("unknown function in module")
+                .expect("missing scope for known module");
+            if let Some(&id) = target_scope.get(name) {
+                Some(id)
+            } else {
+                self.errors.push(LoweringError::UnknownFunction {
+                    name: name.to_string(),
+                    file: file_id,
+                    span: name_ident.span,
+                });
+                None
+            }
         }
     }
 
@@ -682,8 +780,14 @@ impl<'a> LoweringContext<'a> {
         match ty {
             Type::Struct(name) => {
                 let name_str = ast.resolve(*name);
-                let res_id = *module_scope.get(name_str).expect("unknown struct type");
-                let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
+                // The resolver validates all type names; this expect indicates a resolver bug.
+                let res_id = *module_scope.get(name_str).unwrap_or_else(|| {
+                    panic!("resolver should have caught unknown type '{name_str}'")
+                });
+                let sid = *self
+                    .struct_ids
+                    .get(&res_id)
+                    .unwrap_or_else(|| panic!("missing struct id for resolved type '{name_str}'"));
                 prim_hir::Type::Struct(sid)
             }
             Type::Array(inner) => {
@@ -747,11 +851,7 @@ impl<'a> LoweringContext<'a> {
         if let Some(sym) = self.symbol_map.get(&res_id) {
             return *sym;
         }
-        let info = self
-            .symbols_info
-            .iter()
-            .find(|i| i.id == res_id)
-            .expect("missing symbol info");
+        let info = &self.symbols_info[res_id.0 as usize];
         let module = info
             .module
             .map(|m| ModuleId(m.0))

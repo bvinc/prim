@@ -1024,6 +1024,9 @@ impl CraneliftCodeGenerator {
                     self.lower_block(block, program, module_id, builder, locals, &mut loop_exits)?;
                 vals.unwrap_or_default()
             }
+            prim_hir::HirExpr::Error { .. } => {
+                unreachable!("error nodes should not reach codegen")
+            }
         })
     }
 }

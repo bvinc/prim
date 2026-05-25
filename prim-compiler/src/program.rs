@@ -87,7 +87,6 @@ pub(crate) struct SymbolId(pub u32);
 
 #[derive(Clone, Debug)]
 pub(crate) struct SymbolInfo {
-    pub id: SymbolId,
     pub name: String,
     pub kind: SymbolKind,
     pub module: Option<ModuleId>,

@@ -220,6 +220,11 @@ pub enum HirExpr {
         ty: Type,
         span: SpanId,
     },
+    /// Placeholder for expressions that failed during lowering.
+    /// Errors are already recorded; this node prevents cascading failures.
+    Error {
+        span: SpanId,
+    },
 }
 
 impl HirExpr {
@@ -238,6 +243,7 @@ impl HirExpr {
             | HirExpr::ArrayLit { ty, .. }
             | HirExpr::If { ty, .. }
             | HirExpr::Block { ty, .. } => ty,
+            HirExpr::Error { .. } => &Type::Undetermined,
         }
     }
 
@@ -255,7 +261,8 @@ impl HirExpr {
             | HirExpr::Deref { span, .. }
             | HirExpr::ArrayLit { span, .. }
             | HirExpr::If { span, .. }
-            | HirExpr::Block { span, .. } => *span,
+            | HirExpr::Block { span, .. }
+            | HirExpr::Error { span } => *span,
         }
     }
 }

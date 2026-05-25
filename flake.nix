@@ -22,8 +22,10 @@
 
           pre-commit
 
-          # debugging
+          # debugging & profiling
           gdb
+          linuxPackages.perf
+          flamegraph
         ];
       in {
         default = pkgsFor.${system}.pkgs.mkShell {

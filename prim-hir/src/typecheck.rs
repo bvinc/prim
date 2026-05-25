@@ -652,6 +652,7 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
+            HirExpr::Error { .. } => Ok(Type::Undetermined),
         }
     }
 

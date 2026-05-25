@@ -25,22 +25,19 @@ fn kind_tag(kind: &prim_hir::SymbolKind) -> &'static str {
 }
 
 pub(crate) fn symbol_name(sym: prim_hir::SymbolId, program: &HirProgram) -> String {
-    if let Some(entry) = program.symbols.entries.iter().find(|e| e.id == sym) {
-        let mut name = String::from("prim");
-        if let Some(module) = program.modules.iter().find(|m| m.id == entry.module) {
-            for seg in &module.name {
-                push_len_segment(&mut name, "M", seg);
-            }
-        }
-        push_tag(&mut name, "K", kind_tag(&entry.kind));
-        let entry_name = program
-            .interner
-            .resolve(entry.name)
-            .expect("missing symbol name");
-        push_len_segment(&mut name, "N", entry_name);
-        return name;
+    let entry = &program.symbols.entries[sym.0 as usize];
+    let mut name = String::from("prim");
+    let module = &program.modules[entry.module.0 as usize];
+    for seg in &module.name {
+        push_len_segment(&mut name, "M", seg);
     }
-    format!("sym_{}", sym.0)
+    push_tag(&mut name, "K", kind_tag(&entry.kind));
+    let entry_name = program
+        .interner
+        .resolve(entry.name)
+        .expect("missing symbol name");
+    push_len_segment(&mut name, "N", entry_name);
+    name
 }
 
 pub(crate) fn string_literal_symbol(
