@@ -347,7 +347,6 @@ dependencies = [
  "indexmap",
  "prim-codegen",
  "prim-compiler",
- "prim-hir",
  "prim-parse",
  "prim-rt",
  "prim-tok",
@@ -362,21 +361,12 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
- "prim-hir",
+ "prim-compiler",
  "prim-tok",
 ]
 
 [[package]]
 name = "prim-compiler"
-version = "0.1.0"
-dependencies = [
- "prim-hir",
- "prim-parse",
- "prim-tok",
-]
-
-[[package]]
-name = "prim-hir"
 version = "0.1.0"
 dependencies = [
  "prim-parse",

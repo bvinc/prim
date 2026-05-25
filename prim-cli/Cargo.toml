@@ -16,7 +16,6 @@ prim-tok = { path = "../prim-tok" }
 prim-parse = { path = "../prim-parse" }
 prim-codegen = { path = "../prim-codegen" }
 prim-compiler = { path = "../prim-compiler" }
-prim-hir = { path = "../prim-hir" }
 tempfile = "3.8"
 indexmap = "2.2"
 

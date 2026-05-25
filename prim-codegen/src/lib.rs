@@ -4,7 +4,8 @@ use cranelift::prelude::*;
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use mangle::{string_literal_symbol, symbol_name};
-use prim_hir::HirProgram;
+use prim_compiler::hir;
+use prim_compiler::hir::HirProgram;
 use std::collections::{HashMap, HashSet};
 
 pub mod error;
@@ -14,20 +15,20 @@ pub use error::CodegenError;
 struct CraneliftCodeGenerator {
     module: ObjectModule,
     pointer_type: cranelift::prelude::Type,
-    struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
-    func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
-    func_params: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
+    struct_layouts: HashMap<hir::StructId, StructLayout>,
+    func_ids: HashMap<hir::FuncId, cranelift_module::FuncId>,
+    func_params: HashMap<hir::FuncId, Vec<cranelift::prelude::Type>>,
     /// Functions backed by a runtime binding (C ABI, flattened structs).
-    runtime_funcs: HashSet<prim_hir::FuncId>,
+    runtime_funcs: HashSet<hir::FuncId>,
 }
 
 fn expected_return_lanes(
-    ty: &prim_hir::Type,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: types::Type,
 ) -> Result<Vec<cranelift::prelude::Type>, CodegenError> {
     match ty {
-        prim_hir::Type::Struct(id) => {
+        hir::Type::Struct(id) => {
             let layout = layouts
                 .get(id)
                 .ok_or(CodegenError::MissingStructLayout(*id))?;
@@ -51,8 +52,8 @@ fn expected_return_lanes(
 fn validate_return_values(
     builder: &FunctionBuilder,
     vals: &[Value],
-    ty: &prim_hir::Type,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: types::Type,
 ) -> Result<(), CodegenError> {
     let expected = expected_return_lanes(ty, layouts, pointer_type)?;
@@ -89,7 +90,7 @@ struct StructLayout {
 #[derive(Clone, Debug)]
 struct FieldLayout {
     /// Field name for lookup.
-    name: prim_hir::InternSymbol,
+    name: hir::InternSymbol,
     /// Byte offset from struct start (used for pointer-based access).
     offset: u32,
     /// Field type.
@@ -104,14 +105,14 @@ enum FieldType {
     /// Pointer to any type
     Pointer,
     /// Nested struct
-    Struct(prim_hir::StructId),
+    Struct(hir::StructId),
     /// Fixed-size array [T; N]
     Array { elem: Box<FieldType>, len: u32 },
 }
 
 impl StructLayout {
     /// Find a field by name.
-    fn field(&self, name: prim_hir::InternSymbol) -> Option<&FieldLayout> {
+    fn field(&self, name: hir::InternSymbol) -> Option<&FieldLayout> {
         self.fields.iter().find(|f| f.name == name)
     }
 }
@@ -127,7 +128,7 @@ impl FieldType {
     }
 
     /// Compute the byte size of this type.
-    fn size(&self, pointer_size: u32, layouts: &HashMap<prim_hir::StructId, StructLayout>) -> u32 {
+    fn size(&self, pointer_size: u32, layouts: &HashMap<hir::StructId, StructLayout>) -> u32 {
         match self {
             FieldType::Scalar(ty) => ty.bytes(),
             FieldType::Pointer => pointer_size,
@@ -137,7 +138,7 @@ impl FieldType {
     }
 
     /// Compute the alignment of this type.
-    fn align(&self, pointer_size: u32, layouts: &HashMap<prim_hir::StructId, StructLayout>) -> u32 {
+    fn align(&self, pointer_size: u32, layouts: &HashMap<hir::StructId, StructLayout>) -> u32 {
         match self {
             FieldType::Scalar(ty) => ty.bytes(),
             FieldType::Pointer => pointer_size,
@@ -262,7 +263,7 @@ impl CraneliftCodeGenerator {
 
     fn build_signature(
         &self,
-        func: &prim_hir::HirFunction,
+        func: &hir::HirFunction,
         program: &HirProgram,
     ) -> Result<Signature, CodegenError> {
         let mut sig = self.module.make_signature();
@@ -311,7 +312,7 @@ impl CraneliftCodeGenerator {
 
     fn generate_function(
         &mut self,
-        func: &prim_hir::HirFunction,
+        func: &hir::HirFunction,
         program: &HirProgram,
         ctx: &mut codegen::Context,
         builder_context: &mut FunctionBuilderContext,
@@ -395,7 +396,7 @@ impl CraneliftCodeGenerator {
         &self,
         builder: &mut FunctionBuilder,
         dst_ptr: Value,
-        ty: &prim_hir::Type,
+        ty: &hir::Type,
         values: &[Value],
     ) -> Result<(), CodegenError> {
         let struct_id = ty.as_struct().ok_or(CodegenError::InvalidFieldAccess)?;
@@ -447,29 +448,29 @@ impl CraneliftCodeGenerator {
 
     fn lower_stmt(
         &mut self,
-        stmt: &prim_hir::HirStmt,
+        stmt: &hir::HirStmt,
         program: &HirProgram,
-        module_id: prim_hir::ModuleId,
+        module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
         loop_exits: &mut Vec<Block>,
     ) -> Result<StmtFlow, CodegenError> {
         match stmt {
-            prim_hir::HirStmt::Let { name, value, .. } => {
+            hir::HirStmt::Let { name, value, .. } => {
                 let vals = self.lower_expr(value, program, module_id, builder, locals)?;
                 locals.declare_local(builder, *name, vals);
                 Ok(StmtFlow::Continue)
             }
-            prim_hir::HirStmt::Assign { target, value, .. } => {
+            hir::HirStmt::Assign { target, value, .. } => {
                 let vals = self.lower_expr(value, program, module_id, builder, locals)?;
                 locals.assign_local(builder, *target, vals)?;
                 Ok(StmtFlow::Continue)
             }
-            prim_hir::HirStmt::Expr(expr) => {
+            hir::HirStmt::Expr(expr) => {
                 let _vals = self.lower_expr(expr, program, module_id, builder, locals)?;
                 Ok(StmtFlow::Value)
             }
-            prim_hir::HirStmt::Loop { body, .. } => {
+            hir::HirStmt::Loop { body, .. } => {
                 let body_block = builder.create_block();
                 let exit = builder.create_block();
                 builder.ins().jump(body_block, &[]);
@@ -498,7 +499,7 @@ impl CraneliftCodeGenerator {
                 builder.seal_block(exit);
                 Ok(StmtFlow::Continue)
             }
-            prim_hir::HirStmt::While {
+            hir::HirStmt::While {
                 condition, body, ..
             } => {
                 let header_block = builder.create_block();
@@ -542,7 +543,7 @@ impl CraneliftCodeGenerator {
                 builder.seal_block(exit);
                 Ok(StmtFlow::Continue)
             }
-            prim_hir::HirStmt::Break { .. } => {
+            hir::HirStmt::Break { .. } => {
                 let exit = loop_exits
                     .last()
                     .copied()
@@ -556,9 +557,9 @@ impl CraneliftCodeGenerator {
     /// Lower a HirBlock, returning the trailing expression value if present.
     fn lower_block(
         &mut self,
-        block: &prim_hir::HirBlock,
+        block: &hir::HirBlock,
         program: &HirProgram,
-        module_id: prim_hir::ModuleId,
+        module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
         loop_exits: &mut Vec<Block>,
@@ -590,30 +591,30 @@ impl CraneliftCodeGenerator {
 
     fn lower_expr(
         &mut self,
-        expr: &prim_hir::HirExpr,
+        expr: &hir::HirExpr,
         program: &HirProgram,
-        module_id: prim_hir::ModuleId,
+        module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
     ) -> Result<Vec<Value>, CodegenError> {
         Ok(match expr {
-            prim_hir::HirExpr::Int { value, ty, .. } => {
+            hir::HirExpr::Int { value, ty, .. } => {
                 let (lane, _) = scalar_lane(ty)?;
                 vec![builder.ins().iconst(lane, *value)]
             }
-            prim_hir::HirExpr::Float { value, ty, .. } => {
-                let v = if matches!(ty, prim_hir::Type::F32) {
+            hir::HirExpr::Float { value, ty, .. } => {
+                let v = if matches!(ty, hir::Type::F32) {
                     builder.ins().f32const(Ieee32::with_float(*value as f32))
                 } else {
                     builder.ins().f64const(Ieee64::with_float(*value))
                 };
                 vec![v]
             }
-            prim_hir::HirExpr::Bool { value, .. } => {
+            hir::HirExpr::Bool { value, .. } => {
                 let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
                 vec![v]
             }
-            prim_hir::HirExpr::Str { value, ty, span } => {
+            hir::HirExpr::Str { value, ty, span } => {
                 let (data_ptr, len) = make_string_data(
                     builder,
                     &mut self.module,
@@ -625,7 +626,7 @@ impl CraneliftCodeGenerator {
 
                 // String literals have type Str (a struct with data and len fields)
                 // Allocate a stack slot and store the (data, len) pair
-                if let prim_hir::Type::Struct(struct_id) = ty {
+                if let hir::Type::Struct(struct_id) = ty {
                     let layout = self
                         .struct_layouts
                         .get(struct_id)
@@ -657,32 +658,32 @@ impl CraneliftCodeGenerator {
                     vec![data_ptr, len]
                 }
             }
-            prim_hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
-            prim_hir::HirExpr::Binary {
+            hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
+            hir::HirExpr::Binary {
                 op, left, right, ..
             } => {
                 let l = self.lower_expr(left, program, module_id, builder, locals)?;
                 let r = self.lower_expr(right, program, module_id, builder, locals)?;
                 let (l, r) = (l[0], r[0]);
                 let res = match op {
-                    prim_hir::BinaryOp::Add => builder.ins().iadd(l, r),
-                    prim_hir::BinaryOp::Subtract => builder.ins().isub(l, r),
-                    prim_hir::BinaryOp::Multiply => builder.ins().imul(l, r),
-                    prim_hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
-                    prim_hir::BinaryOp::Modulo => builder.ins().srem(l, r),
-                    prim_hir::BinaryOp::Equals
-                    | prim_hir::BinaryOp::NotEquals
-                    | prim_hir::BinaryOp::Greater
-                    | prim_hir::BinaryOp::GreaterEquals
-                    | prim_hir::BinaryOp::Less
-                    | prim_hir::BinaryOp::LessEquals => {
+                    hir::BinaryOp::Add => builder.ins().iadd(l, r),
+                    hir::BinaryOp::Subtract => builder.ins().isub(l, r),
+                    hir::BinaryOp::Multiply => builder.ins().imul(l, r),
+                    hir::BinaryOp::Divide => builder.ins().sdiv(l, r),
+                    hir::BinaryOp::Modulo => builder.ins().srem(l, r),
+                    hir::BinaryOp::Equals
+                    | hir::BinaryOp::NotEquals
+                    | hir::BinaryOp::Greater
+                    | hir::BinaryOp::GreaterEquals
+                    | hir::BinaryOp::Less
+                    | hir::BinaryOp::LessEquals => {
                         let cc = match op {
-                            prim_hir::BinaryOp::Equals => IntCC::Equal,
-                            prim_hir::BinaryOp::NotEquals => IntCC::NotEqual,
-                            prim_hir::BinaryOp::Greater => IntCC::SignedGreaterThan,
-                            prim_hir::BinaryOp::GreaterEquals => IntCC::SignedGreaterThanOrEqual,
-                            prim_hir::BinaryOp::Less => IntCC::SignedLessThan,
-                            prim_hir::BinaryOp::LessEquals => IntCC::SignedLessThanOrEqual,
+                            hir::BinaryOp::Equals => IntCC::Equal,
+                            hir::BinaryOp::NotEquals => IntCC::NotEqual,
+                            hir::BinaryOp::Greater => IntCC::SignedGreaterThan,
+                            hir::BinaryOp::GreaterEquals => IntCC::SignedGreaterThanOrEqual,
+                            hir::BinaryOp::Less => IntCC::SignedLessThan,
+                            hir::BinaryOp::LessEquals => IntCC::SignedLessThanOrEqual,
                             _ => unreachable!(),
                         };
                         let cmp = builder.ins().icmp(cc, l, r);
@@ -693,7 +694,7 @@ impl CraneliftCodeGenerator {
                 };
                 vec![res]
             }
-            prim_hir::HirExpr::Call { func, args, ty, .. } => {
+            hir::HirExpr::Call { func, args, ty, .. } => {
                 let target = *self
                     .func_ids
                     .get(func)
@@ -740,7 +741,7 @@ impl CraneliftCodeGenerator {
 
                     // For runtime calls, flatten struct arguments
                     if is_runtime_call {
-                        if let Some(prim_hir::Type::Struct(struct_id)) = arg_types.get(i) {
+                        if let Some(hir::Type::Struct(struct_id)) = arg_types.get(i) {
                             // vals[0] is a pointer to the struct; load each field
                             let layout = self
                                 .struct_layouts
@@ -797,7 +798,7 @@ impl CraneliftCodeGenerator {
                     builder.inst_results(call).to_vec()
                 }
             }
-            prim_hir::HirExpr::StructLit {
+            hir::HirExpr::StructLit {
                 struct_id, fields, ..
             } => {
                 let layout = self
@@ -851,7 +852,7 @@ impl CraneliftCodeGenerator {
 
                 vec![struct_ptr]
             }
-            prim_hir::HirExpr::Field {
+            hir::HirExpr::Field {
                 base, field, ty, ..
             } => {
                 let base_vals = self.lower_expr(base, program, module_id, builder, locals)?;
@@ -877,7 +878,7 @@ impl CraneliftCodeGenerator {
                     .iadd_imm(struct_ptr, field_layout.offset as i64);
 
                 match ty {
-                    prim_hir::Type::Struct(_) => {
+                    hir::Type::Struct(_) => {
                         // For nested struct, return pointer to the embedded data
                         vec![field_ptr]
                     }
@@ -892,14 +893,14 @@ impl CraneliftCodeGenerator {
                     }
                 }
             }
-            prim_hir::HirExpr::Deref { base, .. } => {
+            hir::HirExpr::Deref { base, .. } => {
                 let ptr = self.lower_expr(base, program, module_id, builder, locals)?[0];
                 let pointee = match base.ty() {
-                    prim_hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
+                    hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
                     _ => return Err(CodegenError::InvalidDereference),
                 };
                 let lane = match pointee {
-                    prim_hir::Type::Pointer { .. } => self.module.isa().pointer_type(),
+                    hir::Type::Pointer { .. } => self.module.isa().pointer_type(),
                     _ => {
                         let (scalar, _) = scalar_lane(pointee)?;
                         scalar
@@ -908,7 +909,7 @@ impl CraneliftCodeGenerator {
                 let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
                 vec![loaded]
             }
-            prim_hir::HirExpr::ArrayLit { elements, .. } => {
+            hir::HirExpr::ArrayLit { elements, .. } => {
                 if elements.is_empty() {
                     vec![builder.ins().iconst(types::I64, 0)]
                 } else {
@@ -916,7 +917,7 @@ impl CraneliftCodeGenerator {
                     self.lower_expr(&elements[0], program, module_id, builder, locals)?
                 }
             }
-            prim_hir::HirExpr::If {
+            hir::HirExpr::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -939,7 +940,7 @@ impl CraneliftCodeGenerator {
                     .brif(cond_val, then_block, &[], else_block, &[]);
 
                 // Determine if we need phi values (if-expression with value)
-                let needs_value = !matches!(ty, prim_hir::Type::Undetermined)
+                let needs_value = !matches!(ty, hir::Type::Undetermined)
                     && (then_branch.expr.is_some()
                         || else_branch.as_ref().is_some_and(|b| b.expr.is_some()));
 
@@ -962,8 +963,8 @@ impl CraneliftCodeGenerator {
                 let param_types: Vec<cranelift::prelude::Type> = if needs_value {
                     match ty {
                         // Structs are pointer-based: phi value is a pointer
-                        prim_hir::Type::Struct(_) => vec![self.pointer_type],
-                        prim_hir::Type::Pointer { .. } => vec![self.pointer_type],
+                        hir::Type::Struct(_) => vec![self.pointer_type],
+                        hir::Type::Pointer { .. } => vec![self.pointer_type],
                         _ => {
                             let (lane, _) = scalar_lane(ty)?;
                             vec![lane]
@@ -1025,21 +1026,21 @@ impl CraneliftCodeGenerator {
                     vec![]
                 }
             }
-            prim_hir::HirExpr::Block { block, .. } => {
+            hir::HirExpr::Block { block, .. } => {
                 let mut loop_exits: Vec<Block> = Vec::new();
                 let (vals, _terminated) =
                     self.lower_block(block, program, module_id, builder, locals, &mut loop_exits)?;
                 vals.unwrap_or_default()
             }
-            prim_hir::HirExpr::Error { .. } => {
+            hir::HirExpr::Error { .. } => {
                 unreachable!("error nodes should not reach codegen")
             }
         })
     }
 }
 
-fn scalar_lane(ty: &prim_hir::Type) -> Result<(cranelift::prelude::Type, u32), CodegenError> {
-    use prim_hir::Type::*;
+fn scalar_lane(ty: &hir::Type) -> Result<(cranelift::prelude::Type, u32), CodegenError> {
+    use hir::Type::*;
     let lane = match ty {
         Bool | I8 | U8 => types::I8,
         I16 | U16 => types::I16,
@@ -1058,15 +1059,15 @@ fn scalar_lane(ty: &prim_hir::Type) -> Result<(cranelift::prelude::Type, u32), C
 
 fn append_abi_params(
     sig: &mut Signature,
-    ty: &prim_hir::Type,
-    _layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    _layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
         // Structs are passed as pointers
-        prim_hir::Type::Struct(_) => sig.params.push(AbiParam::new(pointer_type)),
-        prim_hir::Type::Pointer { .. } => sig.params.push(AbiParam::new(pointer_type)),
-        prim_hir::Type::Array(_) => sig.params.push(AbiParam::new(pointer_type)),
+        hir::Type::Struct(_) => sig.params.push(AbiParam::new(pointer_type)),
+        hir::Type::Pointer { .. } => sig.params.push(AbiParam::new(pointer_type)),
+        hir::Type::Array(_) => sig.params.push(AbiParam::new(pointer_type)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             sig.params.push(AbiParam::new(lane));
@@ -1077,20 +1078,20 @@ fn append_abi_params(
 
 /// Check if a return type requires the sret (struct return) convention.
 /// All structs use sret - they are returned via pointer.
-fn uses_sret(ty: &prim_hir::Type, _layouts: &HashMap<prim_hir::StructId, StructLayout>) -> bool {
-    matches!(ty, prim_hir::Type::Struct(_))
+fn uses_sret(ty: &hir::Type, _layouts: &HashMap<hir::StructId, StructLayout>) -> bool {
+    matches!(ty, hir::Type::Struct(_))
 }
 
 fn append_return(
     sig: &mut Signature,
-    ty: &prim_hir::Type,
-    _layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    _layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
         // Structs use sret - no return values in signature
-        prim_hir::Type::Struct(_) => {}
-        prim_hir::Type::Pointer { .. } => sig.returns.push(AbiParam::new(pointer_type)),
+        hir::Type::Struct(_) => {}
+        hir::Type::Pointer { .. } => sig.returns.push(AbiParam::new(pointer_type)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             sig.returns.push(AbiParam::new(lane));
@@ -1102,12 +1103,12 @@ fn append_return(
 /// Append ABI parameters with structs flattened (for C ABI / runtime functions).
 fn append_abi_params_flattened(
     sig: &mut Signature,
-    ty: &prim_hir::Type,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
-        prim_hir::Type::Struct(id) => {
+        hir::Type::Struct(id) => {
             // Flatten struct fields as separate parameters
             let layout = layouts
                 .get(id)
@@ -1120,8 +1121,8 @@ fn append_abi_params_flattened(
                 sig.params.push(AbiParam::new(field_ty));
             }
         }
-        prim_hir::Type::Pointer { .. } => sig.params.push(AbiParam::new(pointer_type)),
-        prim_hir::Type::Array(_) => sig.params.push(AbiParam::new(pointer_type)),
+        hir::Type::Pointer { .. } => sig.params.push(AbiParam::new(pointer_type)),
+        hir::Type::Array(_) => sig.params.push(AbiParam::new(pointer_type)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             sig.params.push(AbiParam::new(lane));
@@ -1133,12 +1134,12 @@ fn append_abi_params_flattened(
 /// Append return type with structs flattened (for C ABI / runtime functions).
 fn append_return_flattened(
     sig: &mut Signature,
-    ty: &prim_hir::Type,
-    layouts: &HashMap<prim_hir::StructId, StructLayout>,
+    ty: &hir::Type,
+    layouts: &HashMap<hir::StructId, StructLayout>,
     pointer_type: cranelift::prelude::Type,
 ) -> Result<(), CodegenError> {
     match ty {
-        prim_hir::Type::Struct(id) => {
+        hir::Type::Struct(id) => {
             // Flatten struct fields as separate return values
             let layout = layouts
                 .get(id)
@@ -1151,7 +1152,7 @@ fn append_return_flattened(
                 sig.returns.push(AbiParam::new(field_ty));
             }
         }
-        prim_hir::Type::Pointer { .. } => sig.returns.push(AbiParam::new(pointer_type)),
+        hir::Type::Pointer { .. } => sig.returns.push(AbiParam::new(pointer_type)),
         _ => {
             let (lane, _) = scalar_lane(ty)?;
             sig.returns.push(AbiParam::new(lane));
@@ -1160,10 +1161,7 @@ fn append_return_flattened(
     Ok(())
 }
 
-fn export_symbol(
-    func: &prim_hir::HirFunction,
-    program: &HirProgram,
-) -> Result<String, CodegenError> {
+fn export_symbol(func: &hir::HirFunction, program: &HirProgram) -> Result<String, CodegenError> {
     if let Some(binding) = &func.runtime_binding {
         return Ok(binding.clone());
     }
@@ -1173,10 +1171,10 @@ fn export_symbol(
     Ok(symbol_name(func.name, program))
 }
 
-fn abi_slot_count(ty: &prim_hir::Type) -> usize {
+fn abi_slot_count(ty: &hir::Type) -> usize {
     // All types are passed as single values (scalars directly, structs as pointers)
     match ty {
-        prim_hir::Type::Struct(_) => 1, // Pointer to struct
+        hir::Type::Struct(_) => 1, // Pointer to struct
         _ => 1,
     }
 }
@@ -1185,7 +1183,7 @@ fn bind_params(
     builder: &mut FunctionBuilder,
     locals: &mut VarEnv,
     abi_params: &[Value],
-    func: &prim_hir::HirFunction,
+    func: &hir::HirFunction,
 ) -> Result<(), CodegenError> {
     let mut idx = 0usize;
     for param in &func.params {
@@ -1209,8 +1207,8 @@ fn make_string_data(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
     program: &HirProgram,
-    module_id: prim_hir::ModuleId,
-    span_id: prim_hir::SpanId,
+    module_id: hir::ModuleId,
+    span_id: hir::SpanId,
     bytes: &[u8],
 ) -> Result<(Value, Value), CodegenError> {
     let sym_name = string_literal_symbol(program, module_id, span_id, bytes.len());
@@ -1226,7 +1224,7 @@ fn make_string_data(
 
 struct VarEnv {
     /// Maps symbol to a list of Cranelift Variables (one per slot for structs).
-    locals: HashMap<prim_hir::SymbolId, Vec<Variable>>,
+    locals: HashMap<hir::SymbolId, Vec<Variable>>,
 }
 
 impl VarEnv {
@@ -1240,7 +1238,7 @@ impl VarEnv {
     fn declare_local(
         &mut self,
         builder: &mut FunctionBuilder,
-        sym: prim_hir::SymbolId,
+        sym: hir::SymbolId,
         values: Vec<Value>,
     ) {
         let mut vars = Vec::with_capacity(values.len());
@@ -1257,7 +1255,7 @@ impl VarEnv {
     fn assign_local(
         &mut self,
         builder: &mut FunctionBuilder,
-        sym: prim_hir::SymbolId,
+        sym: hir::SymbolId,
         values: Vec<Value>,
     ) -> Result<(), CodegenError> {
         let vars = self
@@ -1277,7 +1275,7 @@ impl VarEnv {
     fn use_symbol(
         &self,
         builder: &mut FunctionBuilder,
-        sym: prim_hir::SymbolId,
+        sym: hir::SymbolId,
     ) -> Result<Vec<Value>, CodegenError> {
         let vars = self
             .locals
@@ -1305,11 +1303,11 @@ fn align_to(value: u32, align: u32) -> u32 {
 }
 
 /// Convert a HIR type to a FieldType for layout computation.
-fn hir_type_to_field_type(ty: &prim_hir::Type) -> Result<FieldType, CodegenError> {
+fn hir_type_to_field_type(ty: &hir::Type) -> Result<FieldType, CodegenError> {
     match ty {
-        prim_hir::Type::Pointer { .. } => Ok(FieldType::Pointer),
-        prim_hir::Type::Struct(id) => Ok(FieldType::Struct(*id)),
-        prim_hir::Type::Array(elem) => {
+        hir::Type::Pointer { .. } => Ok(FieldType::Pointer),
+        hir::Type::Struct(id) => Ok(FieldType::Struct(*id)),
+        hir::Type::Array(elem) => {
             let elem_type = hir_type_to_field_type(elem)?;
             // For now, arrays don't have a known length at this stage
             // This will need refinement when array lengths are tracked

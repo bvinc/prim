@@ -1,8 +1,8 @@
-use crate::{
-    BinaryOp, FileId, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, InternSymbol,
-    SpanId, StructId, SymbolId, Type,
+use super::{
+    BinaryOp, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, InternSymbol, SpanId,
+    StructId, SymbolId, Type,
 };
-use prim_tok::Span;
+use prim_tok::{FileId, Span};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]

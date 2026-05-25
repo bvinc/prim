@@ -1,4 +1,4 @@
-use prim_hir::HirProgram;
+use prim_compiler::hir::HirProgram;
 
 fn push_len_segment(out: &mut String, tag: &str, segment: &str) {
     use std::fmt::Write;
@@ -10,21 +10,21 @@ fn push_tag(out: &mut String, tag: &str, value: &str) {
     let _ = write!(out, "${}{value}", tag);
 }
 
-fn kind_tag(kind: &prim_hir::SymbolKind) -> &'static str {
+fn kind_tag(kind: &prim_compiler::hir::SymbolKind) -> &'static str {
     match kind {
-        prim_hir::SymbolKind::Module => "mod",
-        prim_hir::SymbolKind::Function(_) => "fn",
-        prim_hir::SymbolKind::Struct(_) => "struct",
-        prim_hir::SymbolKind::Global(_) => "global",
-        prim_hir::SymbolKind::Param => "param",
-        prim_hir::SymbolKind::Local => "local",
-        prim_hir::SymbolKind::Field => "field",
-        prim_hir::SymbolKind::Trait => "trait",
-        prim_hir::SymbolKind::Unknown => "unknown",
+        prim_compiler::hir::SymbolKind::Module => "mod",
+        prim_compiler::hir::SymbolKind::Function(_) => "fn",
+        prim_compiler::hir::SymbolKind::Struct(_) => "struct",
+        prim_compiler::hir::SymbolKind::Global(_) => "global",
+        prim_compiler::hir::SymbolKind::Param => "param",
+        prim_compiler::hir::SymbolKind::Local => "local",
+        prim_compiler::hir::SymbolKind::Field => "field",
+        prim_compiler::hir::SymbolKind::Trait => "trait",
+        prim_compiler::hir::SymbolKind::Unknown => "unknown",
     }
 }
 
-pub(crate) fn symbol_name(sym: prim_hir::SymbolId, program: &HirProgram) -> String {
+pub(crate) fn symbol_name(sym: prim_compiler::hir::SymbolId, program: &HirProgram) -> String {
     let entry = &program.symbols.entries[sym.0 as usize];
     let mut name = String::from("prim");
     let module = &program.modules[entry.module.0 as usize];
@@ -42,8 +42,8 @@ pub(crate) fn symbol_name(sym: prim_hir::SymbolId, program: &HirProgram) -> Stri
 
 pub(crate) fn string_literal_symbol(
     program: &HirProgram,
-    module_id: prim_hir::ModuleId,
-    span_id: prim_hir::SpanId,
+    module_id: prim_compiler::hir::ModuleId,
+    span_id: prim_compiler::hir::SpanId,
     bytes_len: usize,
 ) -> String {
     let mut name = String::from("prim");
@@ -65,7 +65,7 @@ pub(crate) fn string_literal_symbol(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prim_hir::{
+    use prim_compiler::hir::{
         FileId, FileInfo, HirProgram, Interner, Items, Module, ModuleId, SpanId, Symbol, SymbolId,
         SymbolKind, SymbolTable,
     };
@@ -117,7 +117,7 @@ mod tests {
         let program = program_with_module_and_symbol(
             vec!["std", "io"],
             "foo",
-            SymbolKind::Function(prim_hir::FuncId(0)),
+            SymbolKind::Function(prim_compiler::hir::FuncId(0)),
         );
         let got = symbol_name(SymbolId(0), &program);
         assert_eq!(got, "prim$M3_std$M2_io$Kfn$N3_foo");
@@ -128,7 +128,7 @@ mod tests {
         let mut program = program_with_module_and_symbol(
             vec!["app"],
             "main",
-            SymbolKind::Function(prim_hir::FuncId(0)),
+            SymbolKind::Function(prim_compiler::hir::FuncId(0)),
         );
         program.spans = vec![(FileId(7), Span::new(5, 9))];
         let got = string_literal_symbol(&program, ModuleId(0), SpanId(0), 4);

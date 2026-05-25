@@ -1,11 +1,12 @@
+pub mod hir;
 mod hir_builder;
 mod loader;
 mod program;
 mod resolver;
 
+pub use hir::{HirProgram, TypeCheckError};
 pub use hir_builder::LoweringError;
 pub use loader::{LoadError, LoadOptions, prim_root};
-pub use prim_hir::{HirProgram, TypeCheckError};
 pub use prim_tok::FileId;
 pub use resolver::ResolveError;
 
@@ -88,8 +89,8 @@ impl From<Vec<LoweringError>> for CompileError {
     }
 }
 
-impl From<prim_hir::TypeCheckError> for CompileError {
-    fn from(e: prim_hir::TypeCheckError) -> Self {
+impl From<hir::TypeCheckError> for CompileError {
+    fn from(e: hir::TypeCheckError) -> Self {
         CompileError::TypeCheck(e)
     }
 }
@@ -117,7 +118,7 @@ pub fn compile(path: &str, options: LoadOptions) -> CompileResult {
     let result = (|| {
         let module_scopes = resolver::collect_scopes(&mut loaded.program)?;
         let mut hir = hir_builder::lower_to_hir(&loaded.program, &module_scopes)?;
-        prim_hir::type_check(&mut hir)?;
+        hir::type_check(&mut hir)?;
         Ok(hir)
     })();
 

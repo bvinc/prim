@@ -1,6 +1,6 @@
+use crate::hir::*;
 use crate::program::{Program, SymbolId as ResSymbolId, SymbolInfo, SymbolKind as ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
-use prim_hir::*;
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
@@ -566,8 +566,8 @@ impl<'a> LoweringContext<'a> {
                 value: value.clone(),
                 ty: self
                     .stdlib_str_struct
-                    .map(prim_hir::Type::Struct)
-                    .unwrap_or(prim_hir::Type::Undetermined),
+                    .map(crate::hir::Type::Struct)
+                    .unwrap_or(crate::hir::Type::Undetermined),
                 span,
             },
             ExprKind::Ident(ident) => {
@@ -762,7 +762,7 @@ impl<'a> LoweringContext<'a> {
         ty: &Type,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
-    ) -> prim_hir::Type {
+    ) -> crate::hir::Type {
         match ty {
             Type::Struct(name) => {
                 let name_str = ast.resolve(*name);
@@ -774,32 +774,32 @@ impl<'a> LoweringContext<'a> {
                     .struct_ids
                     .get(&res_id)
                     .unwrap_or_else(|| panic!("missing struct id for resolved type '{name_str}'"));
-                prim_hir::Type::Struct(sid)
+                crate::hir::Type::Struct(sid)
             }
             Type::Array(inner) => {
-                prim_hir::Type::Array(Box::new(self.lower_type(inner, ast, module_scope)))
+                crate::hir::Type::Array(Box::new(self.lower_type(inner, ast, module_scope)))
             }
             Type::Pointer {
                 mutability,
                 pointee,
-            } => prim_hir::Type::Pointer {
+            } => crate::hir::Type::Pointer {
                 mutable: *mutability == prim_parse::PointerMutability::Mutable,
                 pointee: Box::new(self.lower_type(pointee, ast, module_scope)),
             },
-            Type::Undetermined => prim_hir::Type::Undetermined,
-            Type::U8 => prim_hir::Type::U8,
-            Type::I8 => prim_hir::Type::I8,
-            Type::U16 => prim_hir::Type::U16,
-            Type::I16 => prim_hir::Type::I16,
-            Type::U32 => prim_hir::Type::U32,
-            Type::I32 => prim_hir::Type::I32,
-            Type::U64 => prim_hir::Type::U64,
-            Type::I64 => prim_hir::Type::I64,
-            Type::Usize => prim_hir::Type::Usize,
-            Type::Isize => prim_hir::Type::Isize,
-            Type::F32 => prim_hir::Type::F32,
-            Type::F64 => prim_hir::Type::F64,
-            Type::Bool => prim_hir::Type::Bool,
+            Type::Undetermined => crate::hir::Type::Undetermined,
+            Type::U8 => crate::hir::Type::U8,
+            Type::I8 => crate::hir::Type::I8,
+            Type::U16 => crate::hir::Type::U16,
+            Type::I16 => crate::hir::Type::I16,
+            Type::U32 => crate::hir::Type::U32,
+            Type::I32 => crate::hir::Type::I32,
+            Type::U64 => crate::hir::Type::U64,
+            Type::I64 => crate::hir::Type::I64,
+            Type::Usize => crate::hir::Type::Usize,
+            Type::Isize => crate::hir::Type::Isize,
+            Type::F32 => crate::hir::Type::F32,
+            Type::F64 => crate::hir::Type::F64,
+            Type::Bool => crate::hir::Type::Bool,
         }
     }
 
@@ -808,9 +808,9 @@ impl<'a> LoweringContext<'a> {
         ty: &Type,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
-    ) -> prim_hir::Type {
+    ) -> crate::hir::Type {
         match ty {
-            Type::Undetermined => prim_hir::Type::IntVar,
+            Type::Undetermined => crate::hir::Type::IntVar,
             _ => self.lower_type(ty, ast, module_scope),
         }
     }
@@ -820,9 +820,9 @@ impl<'a> LoweringContext<'a> {
         ty: &Type,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
-    ) -> prim_hir::Type {
+    ) -> crate::hir::Type {
         match ty {
-            Type::Undetermined => prim_hir::Type::FloatVar,
+            Type::Undetermined => crate::hir::Type::FloatVar,
             _ => self.lower_type(ty, ast, module_scope),
         }
     }

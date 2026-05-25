@@ -3,10 +3,9 @@ members = [
     "prim-cli",
     "prim-tok",
     "prim-parse",
+    "prim-compiler",
     "prim-codegen",
     "prim-rt",
-    "prim-compiler",
-    "prim-hir",
 ]
 resolver = "2"
 
