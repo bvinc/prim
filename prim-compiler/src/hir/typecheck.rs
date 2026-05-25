@@ -1,6 +1,6 @@
 use super::{
-    BinaryOp, FuncId, HirBlock, HirExpr, HirFunction, HirProgram, HirStmt, InternSymbol, SpanId,
-    StructId, SymbolId, Type,
+    BinaryOp, Block, Expr, FuncId, Function, InternSymbol, Program, SpanId, Stmt, StructId,
+    SymbolId, Type,
 };
 use prim_tok::{FileId, Span};
 use std::collections::HashMap;
@@ -93,21 +93,21 @@ impl std::fmt::Display for TypeCheckError {
 
 impl std::error::Error for TypeCheckError {}
 
-pub fn type_check(program: &mut HirProgram) -> Result<(), TypeCheckError> {
+pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
     let mut checker = Checker::new(program);
     checker.collect_signatures()?;
     checker.check_functions()
 }
 
 struct Checker<'a> {
-    program: &'a mut HirProgram,
+    program: &'a mut Program,
     func_sigs: HashMap<FuncId, (Vec<Type>, Option<Type>)>,
     struct_fields: HashMap<StructId, HashMap<InternSymbol, Type>>,
     loop_depth: usize,
 }
 
 impl<'a> Checker<'a> {
-    fn new(program: &'a mut HirProgram) -> Self {
+    fn new(program: &'a mut Program) -> Self {
         Self {
             program,
             func_sigs: HashMap::new(),
@@ -149,7 +149,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check_function(&mut self, func: &mut HirFunction) -> Result<(), TypeCheckError> {
+    fn check_function(&mut self, func: &mut Function) -> Result<(), TypeCheckError> {
         let mut locals = HashMap::new();
         for p in &func.params {
             locals.insert(p.name, p.ty.clone());
@@ -202,11 +202,11 @@ impl<'a> Checker<'a> {
 
     fn check_stmt(
         &mut self,
-        stmt: &mut HirStmt,
+        stmt: &mut Stmt,
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<(), TypeCheckError> {
         match stmt {
-            HirStmt::Let {
+            Stmt::Let {
                 name,
                 ty,
                 value,
@@ -244,7 +244,7 @@ impl<'a> Checker<'a> {
                 locals.insert(*name, ty.clone());
                 Ok(())
             }
-            HirStmt::Assign {
+            Stmt::Assign {
                 target,
                 value,
                 span,
@@ -272,17 +272,17 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            HirStmt::Expr(expr) => {
+            Stmt::Expr(expr) => {
                 self.check_expr(expr, locals)?;
                 Ok(())
             }
-            HirStmt::Loop { body, .. } => {
+            Stmt::Loop { body, .. } => {
                 self.loop_depth += 1;
                 self.check_block(body, locals)?;
                 self.loop_depth -= 1;
                 Ok(())
             }
-            HirStmt::While {
+            Stmt::While {
                 condition,
                 body,
                 span,
@@ -302,7 +302,7 @@ impl<'a> Checker<'a> {
                 self.loop_depth -= 1;
                 Ok(())
             }
-            HirStmt::Break { span } => {
+            Stmt::Break { span } => {
                 if self.loop_depth == 0 {
                     Err(self.error(*span, TypeCheckKind::BreakOutsideLoop))
                 } else {
@@ -315,7 +315,7 @@ impl<'a> Checker<'a> {
     /// Check a block (statements + optional trailing expression).
     fn check_block(
         &mut self,
-        block: &mut HirBlock,
+        block: &mut Block,
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<Option<Type>, TypeCheckError> {
         for stmt in &mut block.stmts {
@@ -331,20 +331,20 @@ impl<'a> Checker<'a> {
 
     fn check_expr(
         &mut self,
-        expr: &mut HirExpr,
+        expr: &mut Expr,
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<Type, TypeCheckError> {
         match expr {
-            HirExpr::Int { ty, .. } => Ok(ty.clone()),
-            HirExpr::Float { ty, .. } => Ok(ty.clone()),
-            HirExpr::Bool { ty, .. } => {
+            Expr::Int { ty, .. } => Ok(ty.clone()),
+            Expr::Float { ty, .. } => Ok(ty.clone()),
+            Expr::Bool { ty, .. } => {
                 if matches!(ty, Type::Undetermined) {
                     *ty = Type::Bool;
                 }
                 Ok(ty.clone())
             }
-            HirExpr::Str { ty, .. } => Ok(ty.clone()),
-            HirExpr::Ident { symbol, ty, .. } => {
+            Expr::Str { ty, .. } => Ok(ty.clone()),
+            Expr::Ident { symbol, ty, .. } => {
                 if let Some(t) = locals.get(symbol) {
                     *ty = t.clone();
                     Ok(t.clone())
@@ -353,7 +353,7 @@ impl<'a> Checker<'a> {
                     Ok(Type::Undetermined)
                 }
             }
-            HirExpr::Binary {
+            Expr::Binary {
                 op,
                 left,
                 right,
@@ -431,7 +431,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            HirExpr::Call {
+            Expr::Call {
                 func,
                 args,
                 ty,
@@ -477,7 +477,7 @@ impl<'a> Checker<'a> {
                 *ty = ret_ty.clone();
                 Ok(ret_ty)
             }
-            HirExpr::StructLit {
+            Expr::StructLit {
                 struct_id,
                 fields,
                 ty,
@@ -520,7 +520,7 @@ impl<'a> Checker<'a> {
                 *ty = struct_ty.clone();
                 Ok(struct_ty)
             }
-            HirExpr::Field {
+            Expr::Field {
                 base,
                 field,
                 ty,
@@ -550,7 +550,7 @@ impl<'a> Checker<'a> {
                 *ty = field_ty.clone();
                 Ok(field_ty.clone())
             }
-            HirExpr::Deref { base, ty, span } => {
+            Expr::Deref { base, ty, span } => {
                 let base_ty = self.check_expr(base, locals)?;
                 if let Type::Pointer { pointee, .. } = base_ty {
                     *ty = *pointee.clone();
@@ -559,7 +559,7 @@ impl<'a> Checker<'a> {
                     Err(self.error(*span, TypeCheckKind::InvalidDereference(base_ty)))
                 }
             }
-            HirExpr::ArrayLit { elements, ty, span } => {
+            Expr::ArrayLit { elements, ty, span } => {
                 let mut elem_ty: Option<Type> = None;
                 for elem in elements.iter_mut() {
                     // Propagate expected element type if known
@@ -587,7 +587,7 @@ impl<'a> Checker<'a> {
                 *ty = arr.clone();
                 Ok(arr)
             }
-            HirExpr::If {
+            Expr::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -645,14 +645,14 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            HirExpr::Block { block, ty, .. } => {
+            Expr::Block { block, ty, .. } => {
                 // Check the block and get its type from trailing expression
                 let block_ty = self.check_block(block, locals)?;
                 let result_ty = block_ty.unwrap_or(Type::Undetermined);
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            HirExpr::Error { .. } => Ok(Type::Undetermined),
+            Expr::Error { .. } => Ok(Type::Undetermined),
         }
     }
 
@@ -719,27 +719,27 @@ impl<'a> Checker<'a> {
     }
 
     /// Apply expected type to an expression tree (propagate downward).
-    fn apply_expected(&self, expr: &mut HirExpr, expected: &Type) {
+    fn apply_expected(&self, expr: &mut Expr, expected: &Type) {
         if matches!(expected, Type::Undetermined) {
             return;
         }
         match expr {
-            HirExpr::Int { ty, .. } => {
+            Expr::Int { ty, .. } => {
                 if matches!(ty, Type::IntVar | Type::Undetermined) && self.is_integer(expected) {
                     *ty = expected.clone();
                 }
             }
-            HirExpr::Float { ty, .. } => {
+            Expr::Float { ty, .. } => {
                 if matches!(ty, Type::FloatVar | Type::Undetermined) && self.is_float(expected) {
                     *ty = expected.clone();
                 }
             }
-            HirExpr::Bool { ty, .. } => {
+            Expr::Bool { ty, .. } => {
                 if matches!(ty, Type::Undetermined) && matches!(expected, Type::Bool) {
                     *ty = Type::Bool;
                 }
             }
-            HirExpr::Binary {
+            Expr::Binary {
                 left, right, ty, ..
             } => {
                 // Propagate to operands if the result type is undetermined
@@ -756,7 +756,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Finalize all types in a block, applying defaults.
-    fn finalize_block(&self, block: &mut HirBlock) {
+    fn finalize_block(&self, block: &mut Block) {
         for stmt in &mut block.stmts {
             self.finalize_stmt(stmt);
         }
@@ -765,45 +765,45 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn finalize_stmt(&self, stmt: &mut HirStmt) {
+    fn finalize_stmt(&self, stmt: &mut Stmt) {
         match stmt {
-            HirStmt::Let { ty, value, .. } => {
+            Stmt::Let { ty, value, .. } => {
                 self.finalize_expr(value);
                 // Update let binding type from finalized value type
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(value.ty());
                 }
             }
-            HirStmt::Assign { value, .. } => {
+            Stmt::Assign { value, .. } => {
                 self.finalize_expr(value);
             }
-            HirStmt::Expr(e) => self.finalize_expr(e),
-            HirStmt::Loop { body, .. } => {
+            Stmt::Expr(e) => self.finalize_expr(e),
+            Stmt::Loop { body, .. } => {
                 self.finalize_block(body);
             }
-            HirStmt::While {
+            Stmt::While {
                 condition, body, ..
             } => {
                 self.finalize_expr(condition);
                 self.finalize_block(body);
             }
-            HirStmt::Break { .. } => {}
+            Stmt::Break { .. } => {}
         }
     }
 
-    fn finalize_expr(&self, expr: &mut HirExpr) {
+    fn finalize_expr(&self, expr: &mut Expr) {
         match expr {
-            HirExpr::Int { ty, .. } => {
+            Expr::Int { ty, .. } => {
                 if matches!(ty, Type::IntVar) {
                     *ty = Type::I32;
                 }
             }
-            HirExpr::Float { ty, .. } => {
+            Expr::Float { ty, .. } => {
                 if matches!(ty, Type::FloatVar) {
                     *ty = Type::F64;
                 }
             }
-            HirExpr::Binary {
+            Expr::Binary {
                 left, right, ty, ..
             } => {
                 self.finalize_expr(left);
@@ -812,23 +812,23 @@ impl<'a> Checker<'a> {
                     *ty = self.finalize_type(left.ty());
                 }
             }
-            HirExpr::Call { args, .. } => {
+            Expr::Call { args, .. } => {
                 for arg in args {
                     self.finalize_expr(arg);
                 }
             }
-            HirExpr::StructLit { fields, .. } => {
+            Expr::StructLit { fields, .. } => {
                 for (_, val) in fields {
                     self.finalize_expr(val);
                 }
             }
-            HirExpr::Field { base, .. } => {
+            Expr::Field { base, .. } => {
                 self.finalize_expr(base);
             }
-            HirExpr::Deref { base, .. } => {
+            Expr::Deref { base, .. } => {
                 self.finalize_expr(base);
             }
-            HirExpr::ArrayLit { elements, ty, .. } => {
+            Expr::ArrayLit { elements, ty, .. } => {
                 for elem in elements {
                     self.finalize_expr(elem);
                 }
@@ -838,7 +838,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            HirExpr::If {
+            Expr::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -857,7 +857,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            HirExpr::Block { block, ty, .. } => {
+            Expr::Block { block, ty, .. } => {
                 self.finalize_block(block);
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     if let Some(expr) = &block.expr {

@@ -5,7 +5,6 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use mangle::{string_literal_symbol, symbol_name};
 use prim_compiler::hir;
-use prim_compiler::hir::HirProgram;
 use std::collections::{HashMap, HashSet};
 
 pub mod error;
@@ -177,7 +176,7 @@ impl CraneliftCodeGenerator {
         })
     }
 
-    pub fn generate(mut self, program: &HirProgram) -> Result<Vec<u8>, CodegenError> {
+    pub fn generate(mut self, program: &hir::Program) -> Result<Vec<u8>, CodegenError> {
         self.compute_struct_layouts(program, self.pointer_type)?;
         // Declare all functions first to populate func_ids.
         for func in &program.items.functions {
@@ -215,7 +214,7 @@ impl CraneliftCodeGenerator {
 
     fn compute_struct_layouts(
         &mut self,
-        program: &HirProgram,
+        program: &hir::Program,
         pointer_type: cranelift::prelude::Type,
     ) -> Result<(), CodegenError> {
         let pointer_size = pointer_type.bytes();
@@ -263,8 +262,8 @@ impl CraneliftCodeGenerator {
 
     fn build_signature(
         &self,
-        func: &hir::HirFunction,
-        program: &HirProgram,
+        func: &hir::Function,
+        program: &hir::Program,
     ) -> Result<Signature, CodegenError> {
         let mut sig = self.module.make_signature();
         let is_runtime = func.runtime_binding.is_some();
@@ -312,8 +311,8 @@ impl CraneliftCodeGenerator {
 
     fn generate_function(
         &mut self,
-        func: &hir::HirFunction,
-        program: &HirProgram,
+        func: &hir::Function,
+        program: &hir::Program,
         ctx: &mut codegen::Context,
         builder_context: &mut FunctionBuilderContext,
     ) -> Result<(), CodegenError> {
@@ -448,29 +447,29 @@ impl CraneliftCodeGenerator {
 
     fn lower_stmt(
         &mut self,
-        stmt: &hir::HirStmt,
-        program: &HirProgram,
+        stmt: &hir::Stmt,
+        program: &hir::Program,
         module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
         loop_exits: &mut Vec<Block>,
     ) -> Result<StmtFlow, CodegenError> {
         match stmt {
-            hir::HirStmt::Let { name, value, .. } => {
+            hir::Stmt::Let { name, value, .. } => {
                 let vals = self.lower_expr(value, program, module_id, builder, locals)?;
                 locals.declare_local(builder, *name, vals);
                 Ok(StmtFlow::Continue)
             }
-            hir::HirStmt::Assign { target, value, .. } => {
+            hir::Stmt::Assign { target, value, .. } => {
                 let vals = self.lower_expr(value, program, module_id, builder, locals)?;
                 locals.assign_local(builder, *target, vals)?;
                 Ok(StmtFlow::Continue)
             }
-            hir::HirStmt::Expr(expr) => {
+            hir::Stmt::Expr(expr) => {
                 let _vals = self.lower_expr(expr, program, module_id, builder, locals)?;
                 Ok(StmtFlow::Value)
             }
-            hir::HirStmt::Loop { body, .. } => {
+            hir::Stmt::Loop { body, .. } => {
                 let body_block = builder.create_block();
                 let exit = builder.create_block();
                 builder.ins().jump(body_block, &[]);
@@ -499,7 +498,7 @@ impl CraneliftCodeGenerator {
                 builder.seal_block(exit);
                 Ok(StmtFlow::Continue)
             }
-            hir::HirStmt::While {
+            hir::Stmt::While {
                 condition, body, ..
             } => {
                 let header_block = builder.create_block();
@@ -543,7 +542,7 @@ impl CraneliftCodeGenerator {
                 builder.seal_block(exit);
                 Ok(StmtFlow::Continue)
             }
-            hir::HirStmt::Break { .. } => {
+            hir::Stmt::Break { .. } => {
                 let exit = loop_exits
                     .last()
                     .copied()
@@ -554,11 +553,11 @@ impl CraneliftCodeGenerator {
         }
     }
 
-    /// Lower a HirBlock, returning the trailing expression value if present.
+    /// Lower a hir::Block, returning the trailing expression value if present.
     fn lower_block(
         &mut self,
-        block: &hir::HirBlock,
-        program: &HirProgram,
+        block: &hir::Block,
+        program: &hir::Program,
         module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
@@ -591,18 +590,18 @@ impl CraneliftCodeGenerator {
 
     fn lower_expr(
         &mut self,
-        expr: &hir::HirExpr,
-        program: &HirProgram,
+        expr: &hir::Expr,
+        program: &hir::Program,
         module_id: hir::ModuleId,
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
     ) -> Result<Vec<Value>, CodegenError> {
         Ok(match expr {
-            hir::HirExpr::Int { value, ty, .. } => {
+            hir::Expr::Int { value, ty, .. } => {
                 let (lane, _) = scalar_lane(ty)?;
                 vec![builder.ins().iconst(lane, *value)]
             }
-            hir::HirExpr::Float { value, ty, .. } => {
+            hir::Expr::Float { value, ty, .. } => {
                 let v = if matches!(ty, hir::Type::F32) {
                     builder.ins().f32const(Ieee32::with_float(*value as f32))
                 } else {
@@ -610,11 +609,11 @@ impl CraneliftCodeGenerator {
                 };
                 vec![v]
             }
-            hir::HirExpr::Bool { value, .. } => {
+            hir::Expr::Bool { value, .. } => {
                 let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
                 vec![v]
             }
-            hir::HirExpr::Str { value, ty, span } => {
+            hir::Expr::Str { value, ty, span } => {
                 let (data_ptr, len) = make_string_data(
                     builder,
                     &mut self.module,
@@ -658,8 +657,8 @@ impl CraneliftCodeGenerator {
                     vec![data_ptr, len]
                 }
             }
-            hir::HirExpr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
-            hir::HirExpr::Binary {
+            hir::Expr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
+            hir::Expr::Binary {
                 op, left, right, ..
             } => {
                 let l = self.lower_expr(left, program, module_id, builder, locals)?;
@@ -694,7 +693,7 @@ impl CraneliftCodeGenerator {
                 };
                 vec![res]
             }
-            hir::HirExpr::Call { func, args, ty, .. } => {
+            hir::Expr::Call { func, args, ty, .. } => {
                 let target = *self
                     .func_ids
                     .get(func)
@@ -798,7 +797,7 @@ impl CraneliftCodeGenerator {
                     builder.inst_results(call).to_vec()
                 }
             }
-            hir::HirExpr::StructLit {
+            hir::Expr::StructLit {
                 struct_id, fields, ..
             } => {
                 let layout = self
@@ -852,7 +851,7 @@ impl CraneliftCodeGenerator {
 
                 vec![struct_ptr]
             }
-            hir::HirExpr::Field {
+            hir::Expr::Field {
                 base, field, ty, ..
             } => {
                 let base_vals = self.lower_expr(base, program, module_id, builder, locals)?;
@@ -893,7 +892,7 @@ impl CraneliftCodeGenerator {
                     }
                 }
             }
-            hir::HirExpr::Deref { base, .. } => {
+            hir::Expr::Deref { base, .. } => {
                 let ptr = self.lower_expr(base, program, module_id, builder, locals)?[0];
                 let pointee = match base.ty() {
                     hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
@@ -909,7 +908,7 @@ impl CraneliftCodeGenerator {
                 let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
                 vec![loaded]
             }
-            hir::HirExpr::ArrayLit { elements, .. } => {
+            hir::Expr::ArrayLit { elements, .. } => {
                 if elements.is_empty() {
                     vec![builder.ins().iconst(types::I64, 0)]
                 } else {
@@ -917,7 +916,7 @@ impl CraneliftCodeGenerator {
                     self.lower_expr(&elements[0], program, module_id, builder, locals)?
                 }
             }
-            hir::HirExpr::If {
+            hir::Expr::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -1026,13 +1025,13 @@ impl CraneliftCodeGenerator {
                     vec![]
                 }
             }
-            hir::HirExpr::Block { block, .. } => {
+            hir::Expr::Block { block, .. } => {
                 let mut loop_exits: Vec<Block> = Vec::new();
                 let (vals, _terminated) =
                     self.lower_block(block, program, module_id, builder, locals, &mut loop_exits)?;
                 vals.unwrap_or_default()
             }
-            hir::HirExpr::Error { .. } => {
+            hir::Expr::Error { .. } => {
                 unreachable!("error nodes should not reach codegen")
             }
         })
@@ -1161,7 +1160,7 @@ fn append_return_flattened(
     Ok(())
 }
 
-fn export_symbol(func: &hir::HirFunction, program: &HirProgram) -> Result<String, CodegenError> {
+fn export_symbol(func: &hir::Function, program: &hir::Program) -> Result<String, CodegenError> {
     if let Some(binding) = &func.runtime_binding {
         return Ok(binding.clone());
     }
@@ -1183,7 +1182,7 @@ fn bind_params(
     builder: &mut FunctionBuilder,
     locals: &mut VarEnv,
     abi_params: &[Value],
-    func: &hir::HirFunction,
+    func: &hir::Function,
 ) -> Result<(), CodegenError> {
     let mut idx = 0usize;
     for param in &func.params {
@@ -1206,7 +1205,7 @@ enum StmtFlow {
 fn make_string_data(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
-    program: &HirProgram,
+    program: &hir::Program,
     module_id: hir::ModuleId,
     span_id: hir::SpanId,
     bytes: &[u8],
@@ -1286,7 +1285,7 @@ impl VarEnv {
 }
 
 /// Entry point used by prim-cli.
-pub fn generate_object_code(hir: &HirProgram) -> Result<Vec<u8>, CodegenError> {
+pub fn generate_object_code(hir: &hir::Program) -> Result<Vec<u8>, CodegenError> {
     if hir.main.is_none() {
         return Err(CodegenError::MissingMain);
     }

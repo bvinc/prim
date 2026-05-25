@@ -4,7 +4,7 @@ mod loader;
 mod program;
 mod resolver;
 
-pub use hir::{HirProgram, TypeCheckError};
+pub use hir::{Program, TypeCheckError};
 pub use hir_builder::LoweringError;
 pub use loader::{LoadError, LoadOptions, prim_root};
 pub use prim_tok::FileId;
@@ -107,7 +107,7 @@ impl From<hir::TypeCheckError> for CompileError {
 pub fn compile(
     path: &str,
     options: LoadOptions,
-) -> (Arc<SourceMap>, Result<HirProgram, CompileError>) {
+) -> (Arc<SourceMap>, Result<hir::Program, CompileError>) {
     let mut program = match loader::load_program(path, options) {
         Ok(p) => p,
         Err(e) => return (Arc::new(SourceMap::default()), Err(e.into())),

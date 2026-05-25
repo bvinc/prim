@@ -4,7 +4,8 @@
 //! for use by both the CLI binary and tests.
 
 use prim_codegen::generate_object_code;
-use prim_compiler::{CompileError, FileId, HirProgram, LoadError, LoadOptions, SourceMap, compile};
+use prim_compiler::hir;
+use prim_compiler::{CompileError, FileId, LoadError, LoadOptions, SourceMap, compile};
 use prim_tok::{Span, byte_offset_to_line_col};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,7 +95,7 @@ pub fn compile_and_run_with_root(
 }
 
 /// Compile source code to HIR.
-pub fn compile_source(path: &str) -> Result<HirProgram, RunError> {
+pub fn compile_source(path: &str) -> Result<hir::Program, RunError> {
     compile_source_with_root(path, None)
 }
 
@@ -102,7 +103,7 @@ pub fn compile_source(path: &str) -> Result<HirProgram, RunError> {
 pub fn compile_source_with_root(
     path: &str,
     prim_root: Option<&Path>,
-) -> Result<HirProgram, RunError> {
+) -> Result<hir::Program, RunError> {
     let options = LoadOptions {
         prim_root: prim_root.map(Path::to_path_buf),
         ..Default::default()

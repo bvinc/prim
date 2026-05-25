@@ -20,7 +20,7 @@ pub struct SymbolId(pub u32);
 pub struct SpanId(pub u32);
 
 #[derive(Clone, Debug)]
-pub struct HirProgram {
+pub struct Program {
     pub modules: Vec<Module>,
     pub items: Items,
     pub symbols: SymbolTable,
@@ -39,76 +39,76 @@ pub struct Module {
 
 #[derive(Clone, Debug, Default)]
 pub struct Items {
-    pub functions: Vec<HirFunction>,
-    pub structs: Vec<HirStruct>,
+    pub functions: Vec<Function>,
+    pub structs: Vec<Struct>,
 }
 
 #[derive(Clone, Debug)]
-pub struct HirFunction {
+pub struct Function {
     pub id: FuncId,
     pub name: SymbolId,
     pub module: ModuleId,
     pub file: FileId,
-    pub params: Vec<HirParam>,
+    pub params: Vec<Param>,
     pub ret: Option<Type>,
-    pub body: HirBlock,
+    pub body: Block,
     pub span: SpanId,
     pub runtime_binding: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub struct HirStruct {
+pub struct Struct {
     pub id: StructId,
     pub name: SymbolId,
     pub module: ModuleId,
     pub file: FileId,
-    pub fields: Vec<HirField>,
+    pub fields: Vec<Field>,
     pub span: SpanId,
 }
 
 #[derive(Clone, Debug)]
-pub struct HirParam {
+pub struct Param {
     pub name: SymbolId,
     pub ty: Type,
     pub span: SpanId,
 }
 
 #[derive(Clone, Debug)]
-pub struct HirField {
+pub struct Field {
     pub name: InternSymbol,
     pub ty: Type,
     pub span: SpanId,
 }
 
 #[derive(Clone, Debug)]
-pub struct HirBlock {
-    pub stmts: Vec<HirStmt>,
+pub struct Block {
+    pub stmts: Vec<Stmt>,
     /// Trailing expression (without semicolon) - the block's value.
-    pub expr: Option<Box<HirExpr>>,
+    pub expr: Option<Box<Expr>>,
 }
 
 #[derive(Clone, Debug)]
-pub enum HirStmt {
+pub enum Stmt {
     Let {
         name: SymbolId,
         mutable: bool,
         ty: Type,
-        value: HirExpr,
+        value: Expr,
         span: SpanId,
     },
     Assign {
         target: SymbolId,
-        value: HirExpr,
+        value: Expr,
         span: SpanId,
     },
-    Expr(HirExpr),
+    Expr(Expr),
     Loop {
-        body: HirBlock,
+        body: Block,
         span: SpanId,
     },
     While {
-        condition: HirExpr,
-        body: HirBlock,
+        condition: Expr,
+        body: Block,
         span: SpanId,
     },
     Break {
@@ -117,7 +117,7 @@ pub enum HirStmt {
 }
 
 #[derive(Clone, Debug)]
-pub enum HirExpr {
+pub enum Expr {
     Int {
         value: i64,
         ty: Type,
@@ -145,48 +145,48 @@ pub enum HirExpr {
     },
     Binary {
         op: BinaryOp,
-        left: Box<HirExpr>,
-        right: Box<HirExpr>,
+        left: Box<Expr>,
+        right: Box<Expr>,
         ty: Type,
         span: SpanId,
     },
     Call {
         func: FuncId,
-        args: Vec<HirExpr>,
+        args: Vec<Expr>,
         ty: Type,
         span: SpanId,
     },
     StructLit {
         struct_id: StructId,
-        fields: Vec<(InternSymbol, HirExpr)>,
+        fields: Vec<(InternSymbol, Expr)>,
         ty: Type,
         span: SpanId,
     },
     Field {
-        base: Box<HirExpr>,
+        base: Box<Expr>,
         field: InternSymbol,
         ty: Type,
         span: SpanId,
     },
     Deref {
-        base: Box<HirExpr>,
+        base: Box<Expr>,
         ty: Type,
         span: SpanId,
     },
     ArrayLit {
-        elements: Vec<HirExpr>,
+        elements: Vec<Expr>,
         ty: Type,
         span: SpanId,
     },
     If {
-        condition: Box<HirExpr>,
-        then_branch: HirBlock,
-        else_branch: Option<HirBlock>,
+        condition: Box<Expr>,
+        then_branch: Block,
+        else_branch: Option<Block>,
         ty: Type,
         span: SpanId,
     },
     Block {
-        block: HirBlock,
+        block: Block,
         ty: Type,
         span: SpanId,
     },
@@ -197,42 +197,42 @@ pub enum HirExpr {
     },
 }
 
-impl HirExpr {
+impl Expr {
     pub fn ty(&self) -> &Type {
         match self {
-            HirExpr::Int { ty, .. }
-            | HirExpr::Float { ty, .. }
-            | HirExpr::Bool { ty, .. }
-            | HirExpr::Str { ty, .. }
-            | HirExpr::Ident { ty, .. }
-            | HirExpr::Binary { ty, .. }
-            | HirExpr::Call { ty, .. }
-            | HirExpr::StructLit { ty, .. }
-            | HirExpr::Field { ty, .. }
-            | HirExpr::Deref { ty, .. }
-            | HirExpr::ArrayLit { ty, .. }
-            | HirExpr::If { ty, .. }
-            | HirExpr::Block { ty, .. } => ty,
-            HirExpr::Error { .. } => &Type::Undetermined,
+            Expr::Int { ty, .. }
+            | Expr::Float { ty, .. }
+            | Expr::Bool { ty, .. }
+            | Expr::Str { ty, .. }
+            | Expr::Ident { ty, .. }
+            | Expr::Binary { ty, .. }
+            | Expr::Call { ty, .. }
+            | Expr::StructLit { ty, .. }
+            | Expr::Field { ty, .. }
+            | Expr::Deref { ty, .. }
+            | Expr::ArrayLit { ty, .. }
+            | Expr::If { ty, .. }
+            | Expr::Block { ty, .. } => ty,
+            Expr::Error { .. } => &Type::Undetermined,
         }
     }
 
     pub fn span(&self) -> SpanId {
         match self {
-            HirExpr::Int { span, .. }
-            | HirExpr::Float { span, .. }
-            | HirExpr::Bool { span, .. }
-            | HirExpr::Str { span, .. }
-            | HirExpr::Ident { span, .. }
-            | HirExpr::Binary { span, .. }
-            | HirExpr::Call { span, .. }
-            | HirExpr::StructLit { span, .. }
-            | HirExpr::Field { span, .. }
-            | HirExpr::Deref { span, .. }
-            | HirExpr::ArrayLit { span, .. }
-            | HirExpr::If { span, .. }
-            | HirExpr::Block { span, .. }
-            | HirExpr::Error { span } => *span,
+            Expr::Int { span, .. }
+            | Expr::Float { span, .. }
+            | Expr::Bool { span, .. }
+            | Expr::Str { span, .. }
+            | Expr::Ident { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::StructLit { span, .. }
+            | Expr::Field { span, .. }
+            | Expr::Deref { span, .. }
+            | Expr::ArrayLit { span, .. }
+            | Expr::If { span, .. }
+            | Expr::Block { span, .. }
+            | Expr::Error { span } => *span,
         }
     }
 }
