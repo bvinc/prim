@@ -57,22 +57,7 @@ pub(crate) enum ImportCoverage {
     Symbols(Vec<String>),
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ExportTable {
-    pub functions: Vec<String>,
-    pub structs: Vec<String>,
-    pub traits: Vec<String>,
-    pub impls: Vec<String>,
-}
-
-impl ExportTable {
-    pub fn contains(&self, name: &str) -> bool {
-        self.functions.iter().any(|n| n == name)
-            || self.structs.iter().any(|n| n == name)
-            || self.traits.iter().any(|n| n == name)
-            || self.impls.iter().any(|n| n == name)
-    }
-}
+pub(crate) type ExportTable = HashMap<String, SymbolKind>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SymbolKind {
@@ -80,6 +65,7 @@ pub(crate) enum SymbolKind {
     Function,
     Struct,
     Trait,
+    Impl,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

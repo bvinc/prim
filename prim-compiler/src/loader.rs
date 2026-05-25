@@ -1,6 +1,6 @@
 use crate::program::{
     ExportTable, FileId, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
-    ModuleOrigin, NameResolution, Program,
+    ModuleOrigin, NameResolution, Program, SymbolKind,
 };
 use prim_parse::{self, ImportDecl, ImportSelector};
 use std::collections::HashMap;
@@ -497,7 +497,7 @@ impl Loader {
                 };
                 let module = &self.program.modules[module_id.0 as usize];
                 for sym in symbols {
-                    if !module.exports.contains(sym) {
+                    if !module.exports.contains_key(sym) {
                         return Err(LoadError::InvalidModule(format!(
                             "Module '{}' does not define '{}'",
                             module.name.join("."),
@@ -523,25 +523,22 @@ fn collect_exports(files: &[ModuleFile]) -> ExportTable {
     let mut exports = ExportTable::default();
     for file in files {
         for s in &file.ast.structs {
-            exports
-                .structs
-                .push(file.ast.resolve(s.name.sym).to_string());
+            let name = file.ast.resolve(s.name.sym).to_string();
+            exports.insert(name, SymbolKind::Struct);
         }
         for f in &file.ast.functions {
-            let name = file.ast.resolve(f.name.sym);
-            exports.functions.push(name.to_string());
+            let name = file.ast.resolve(f.name.sym).to_string();
+            exports.insert(name, SymbolKind::Function);
         }
         for t in &file.ast.traits {
-            exports
-                .traits
-                .push(file.ast.resolve(t.name.sym).to_string());
+            let name = file.ast.resolve(t.name.sym).to_string();
+            exports.insert(name, SymbolKind::Trait);
         }
         for im in &file.ast.impls {
             let trait_name = file.ast.resolve(im.trait_name.sym);
             let struct_name = file.ast.resolve(im.struct_name.sym);
-            exports
-                .impls
-                .push(format!("impl {} for {}", trait_name, struct_name));
+            let name = format!("impl {} for {}", trait_name, struct_name);
+            exports.insert(name, SymbolKind::Impl);
         }
     }
     exports

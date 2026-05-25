@@ -881,6 +881,7 @@ impl<'a> LoweringContext<'a> {
                 SymbolKind::Struct(sid)
             }
             ResSymbolKind::Trait => SymbolKind::Trait,
+            ResSymbolKind::Impl => SymbolKind::Unknown,
             ResSymbolKind::Module => SymbolKind::Module,
         }
     }
