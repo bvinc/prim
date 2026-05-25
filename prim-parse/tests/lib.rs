@@ -1,6 +1,4 @@
-use prim_parse::{
-    BinaryOp, ExprKind, ImportSelector, ParseError, PointerMutability, Stmt, Type, parse,
-};
+use prim_parse::{BinaryOp, ExprKind, ImportSelector, ParseError, Stmt, Type, parse};
 use prim_tok::TokenKind;
 
 fn parse_ok(source: &str) -> prim_parse::Program {
@@ -1222,15 +1220,11 @@ fn test_parse_pointer_types() {
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
-        type_annotation:
-            Some(Type::Pointer {
-                mutability,
-                pointee,
-            }),
+        type_annotation: Some(Type::Pointer { mutable, pointee }),
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(*mutability, PointerMutability::Const);
+        assert!(!mutable);
         assert!(matches!(**pointee, Type::U8));
     } else {
         panic!("Expected const pointer type annotation");
@@ -1242,15 +1236,11 @@ fn test_parse_pointer_types() {
 
     let main_func_mut = &program_mut.functions[0];
     if let Stmt::Let {
-        type_annotation:
-            Some(Type::Pointer {
-                mutability,
-                pointee,
-            }),
+        type_annotation: Some(Type::Pointer { mutable, pointee }),
         ..
     } = &main_func_mut.body.stmts[0]
     {
-        assert_eq!(*mutability, PointerMutability::Mutable);
+        assert!(mutable);
         assert!(matches!(**pointee, Type::I32));
     } else {
         panic!("Expected mutable pointer type annotation");

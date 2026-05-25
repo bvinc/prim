@@ -24,12 +24,6 @@ pub struct Ident {
 use parser::Parser;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PointerMutability {
-    Const,
-    Mutable,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     U8,
     I8,
@@ -46,10 +40,7 @@ pub enum Type {
     Bool,
     Array(Box<Type>),
     Struct(InternSymbol),
-    Pointer {
-        mutability: PointerMutability,
-        pointee: Box<Type>,
-    },
+    Pointer { mutable: bool, pointee: Box<Type> },
     Undetermined, // Type not yet determined during parsing
 }
 

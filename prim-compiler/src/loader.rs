@@ -1,6 +1,6 @@
 use crate::program::{
     ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleKey, ModuleOrigin,
-    Program, SymbolKind,
+    Program, ResSymbolKind,
 };
 use prim_parse::{self, ImportDecl, ImportSelector};
 use prim_tok::{FileId, ModuleId};
@@ -519,21 +519,21 @@ fn collect_exports(files: &[ModuleFile]) -> ExportTable {
     for file in files {
         for s in &file.ast.structs {
             let name = file.ast.resolve(s.name.sym).to_string();
-            exports.insert(name, SymbolKind::Struct);
+            exports.insert(name, ResSymbolKind::Struct);
         }
         for f in &file.ast.functions {
             let name = file.ast.resolve(f.name.sym).to_string();
-            exports.insert(name, SymbolKind::Function);
+            exports.insert(name, ResSymbolKind::Function);
         }
         for t in &file.ast.traits {
             let name = file.ast.resolve(t.name.sym).to_string();
-            exports.insert(name, SymbolKind::Trait);
+            exports.insert(name, ResSymbolKind::Trait);
         }
         for im in &file.ast.impls {
             let trait_name = file.ast.resolve(im.trait_name.sym);
             let struct_name = file.ast.resolve(im.struct_name.sym);
             let name = format!("impl {} for {}", trait_name, struct_name);
-            exports.insert(name, SymbolKind::Impl);
+            exports.insert(name, ResSymbolKind::Impl);
         }
     }
     exports

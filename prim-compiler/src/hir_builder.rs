@@ -1,5 +1,5 @@
 use crate::hir::*;
-use crate::program::{Program, SymbolId as ResSymbolId, SymbolInfo, SymbolKind as ResSymbolKind};
+use crate::program::{Program, ResSymbolId, ResSymbolInfo, ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
@@ -155,7 +155,7 @@ struct LoweringContext<'a> {
     struct_ids: HashMap<ResSymbolId, StructId>,
     func_ids: HashMap<ResSymbolId, FuncId>,
     symbol_map: HashMap<ResSymbolId, SymbolId>,
-    symbols_info: &'a [SymbolInfo],
+    symbols_info: &'a [ResSymbolInfo],
     stdlib_str_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
@@ -779,11 +779,8 @@ impl<'a> LoweringContext<'a> {
             Type::Array(inner) => {
                 crate::hir::Type::Array(Box::new(self.lower_type(inner, ast, module_scope)))
             }
-            Type::Pointer {
-                mutability,
-                pointee,
-            } => crate::hir::Type::Pointer {
-                mutable: *mutability == prim_parse::PointerMutability::Mutable,
+            Type::Pointer { mutable, pointee } => crate::hir::Type::Pointer {
+                mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, ast, module_scope)),
             },
             Type::Undetermined => crate::hir::Type::Undetermined,

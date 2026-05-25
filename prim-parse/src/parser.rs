@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
     BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, Ident, ImportDecl, ImportSelector,
-    Interner, NamePath, Parameter, ParseError, PointerMutability, Program, Severity, Span, Stmt,
-    StructDefinition, StructField, StructFieldDefinition, Type,
+    Interner, NamePath, Parameter, ParseError, Program, Severity, Span, Stmt, StructDefinition,
+    StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -905,14 +905,14 @@ impl<'a> Parser<'a> {
             }
             TokenKind::UnaryStar => {
                 self.advance(); // consume '*'
-                let mutability = match self.peek_kind() {
+                let mutable = match self.peek_kind() {
                     Some(TokenKind::Const) => {
                         self.advance();
-                        PointerMutability::Const
+                        false
                     }
                     Some(TokenKind::Mut) => {
                         self.advance();
-                        PointerMutability::Mutable
+                        true
                     }
                     Some(kind) => {
                         return Err(ParseError::UnexpectedToken {
@@ -928,10 +928,7 @@ impl<'a> Parser<'a> {
                     }
                 };
                 let pointee = Box::new(self.parse_type()?);
-                Ok(Type::Pointer {
-                    mutability,
-                    pointee,
-                })
+                Ok(Type::Pointer { mutable, pointee })
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_string(),

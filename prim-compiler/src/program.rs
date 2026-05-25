@@ -20,7 +20,7 @@ pub(crate) struct Program {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
-    pub symbols: Vec<SymbolInfo>,
+    pub symbols: Vec<ResSymbolInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,10 +51,10 @@ pub(crate) enum ImportCoverage {
     Symbols(Vec<String>),
 }
 
-pub(crate) type ExportTable = HashMap<String, SymbolKind>;
+pub(crate) type ExportTable = HashMap<String, ResSymbolKind>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SymbolKind {
+pub(crate) enum ResSymbolKind {
     Module,
     Function,
     Struct,
@@ -63,12 +63,12 @@ pub(crate) enum SymbolKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SymbolId(pub u32);
+pub(crate) struct ResSymbolId(pub u32);
 
 #[derive(Clone, Debug)]
-pub(crate) struct SymbolInfo {
+pub(crate) struct ResSymbolInfo {
     pub name: String,
-    pub kind: SymbolKind,
+    pub kind: ResSymbolKind,
     pub module: Option<ModuleId>,
     #[allow(dead_code)] // Useful for diagnostics
     pub file: FileId,

@@ -95,9 +95,6 @@ impl From<hir::TypeCheckError> for CompileError {
     }
 }
 
-/// Result of compilation: source map for error reporting plus the compilation result.
-pub type CompileResult = (Arc<SourceMap>, Result<HirProgram, CompileError>);
-
 /// Compile a Prim source file to HIR.
 ///
 /// This is the main entry point for compilation. It:
@@ -107,7 +104,10 @@ pub type CompileResult = (Arc<SourceMap>, Result<HirProgram, CompileError>);
 /// 4. Type checks the HIR
 ///
 /// Returns the source map (for error reporting) and the compilation result.
-pub fn compile(path: &str, options: LoadOptions) -> CompileResult {
+pub fn compile(
+    path: &str,
+    options: LoadOptions,
+) -> (Arc<SourceMap>, Result<HirProgram, CompileError>) {
     let mut program = match loader::load_program(path, options) {
         Ok(p) => p,
         Err(e) => return (Arc::new(SourceMap::default()), Err(e.into())),

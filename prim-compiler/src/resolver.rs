@@ -1,5 +1,5 @@
 use crate::program::{
-    ImportCoverage, ImportRequest, ModuleFile, Program, SymbolId, SymbolInfo, SymbolKind,
+    ImportCoverage, ImportRequest, ModuleFile, Program, ResSymbolId, ResSymbolInfo, ResSymbolKind,
 };
 use prim_tok::{FileId, ModuleId, Span};
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ impl std::fmt::Display for ResolveError {
 impl std::error::Error for ResolveError {}
 
 /// Module-level scope mapping names to symbols.
-pub type ModuleScope = HashMap<String, SymbolId>;
+pub type ModuleScope = HashMap<String, ResSymbolId>;
 
 /// All module scopes indexed by module id.
 pub type ModuleScopes = HashMap<ModuleId, ModuleScope>;
@@ -67,7 +67,7 @@ pub fn collect_scopes(program: &mut Program) -> Result<ModuleScopes, Vec<Resolve
 
 struct ScopeCollector<'a> {
     program: &'a Program,
-    symbols: Vec<SymbolInfo>,
+    symbols: Vec<ResSymbolInfo>,
     module_scopes: ModuleScopes,
     errors: Vec<ResolveError>,
 }
@@ -85,13 +85,13 @@ impl<'a> ScopeCollector<'a> {
     fn add_symbol(
         &mut self,
         name: String,
-        kind: SymbolKind,
+        kind: ResSymbolKind,
         module: Option<ModuleId>,
         file: FileId,
         span: Span,
-    ) -> SymbolId {
-        let id = SymbolId(self.symbols.len() as u32);
-        self.symbols.push(SymbolInfo {
+    ) -> ResSymbolId {
+        let id = ResSymbolId(self.symbols.len() as u32);
+        self.symbols.push(ResSymbolInfo {
             name,
             kind,
             module,
@@ -110,7 +110,7 @@ impl<'a> ScopeCollector<'a> {
             // Register the module itself
             let module_symbol = self.add_symbol(
                 module.name.join("."),
-                SymbolKind::Module,
+                ResSymbolKind::Module,
                 Some(module.id),
                 file_id,
                 Span::empty_at(0),
@@ -160,7 +160,7 @@ impl<'a> ScopeCollector<'a> {
             }
             let sym = self.add_symbol(
                 name.clone(),
-                SymbolKind::Struct,
+                ResSymbolKind::Struct,
                 Some(module_id),
                 file.file_id,
                 s.span,
@@ -180,7 +180,7 @@ impl<'a> ScopeCollector<'a> {
             }
             let sym = self.add_symbol(
                 name.clone(),
-                SymbolKind::Function,
+                ResSymbolKind::Function,
                 Some(module_id),
                 file.file_id,
                 func.span,
@@ -200,7 +200,7 @@ impl<'a> ScopeCollector<'a> {
             }
             let sym = self.add_symbol(
                 name.clone(),
-                SymbolKind::Trait,
+                ResSymbolKind::Trait,
                 Some(module_id),
                 file.file_id,
                 tr.span,
