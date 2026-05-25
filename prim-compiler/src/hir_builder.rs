@@ -207,7 +207,7 @@ impl<'a> LoweringContext<'a> {
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
             symbol_map: HashMap::new(),
-            symbols_info: &program.name_resolution.symbols,
+            symbols_info: &program.symbols,
             stdlib_str_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),

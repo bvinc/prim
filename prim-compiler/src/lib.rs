@@ -108,16 +108,16 @@ pub type CompileResult = (Arc<SourceMap>, Result<HirProgram, CompileError>);
 ///
 /// Returns the source map (for error reporting) and the compilation result.
 pub fn compile(path: &str, options: LoadOptions) -> CompileResult {
-    let mut loaded = match loader::load_program(path, options) {
-        Ok(l) => l,
+    let mut program = match loader::load_program(path, options) {
+        Ok(p) => p,
         Err(e) => return (Arc::new(SourceMap::default()), Err(e.into())),
     };
 
-    let source_map = build_source_map(&loaded.program);
+    let source_map = build_source_map(&program);
 
     let result = (|| {
-        let module_scopes = resolver::collect_scopes(&mut loaded.program)?;
-        let mut hir = hir_builder::lower_to_hir(&loaded.program, &module_scopes)?;
+        let module_scopes = resolver::collect_scopes(&mut program)?;
+        let mut hir = hir_builder::lower_to_hir(&program, &module_scopes)?;
         hir::type_check(&mut hir)?;
         Ok(hir)
     })();

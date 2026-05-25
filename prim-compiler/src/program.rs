@@ -20,7 +20,7 @@ pub(crate) struct Program {
     pub modules: Vec<Module>,
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
-    pub name_resolution: NameResolution,
+    pub symbols: Vec<SymbolInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,10 +74,4 @@ pub(crate) struct SymbolInfo {
     pub file: FileId,
     #[allow(dead_code)] // Useful for diagnostics
     pub span: Span,
-}
-
-/// Top-level symbol definitions collected during scope resolution.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct NameResolution {
-    pub symbols: Vec<SymbolInfo>,
 }

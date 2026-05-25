@@ -1,6 +1,6 @@
 use crate::program::{
     ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleKey, ModuleOrigin,
-    NameResolution, Program, SymbolKind,
+    Program, SymbolKind,
 };
 use prim_parse::{self, ImportDecl, ImportSelector};
 use prim_tok::{FileId, ModuleId};
@@ -8,11 +8,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-
-/// A fully loaded program.
-pub struct LoadedProgram {
-    pub program: Program,
-}
 
 /// Resolve the Prim root directory from `PRIM_ROOT` or the current executable location.
 pub fn prim_root() -> Result<PathBuf, LoadError> {
@@ -93,7 +88,7 @@ fn inject_prelude_imports(
 pub fn load_program(
     entry_path: impl AsRef<Path>,
     options: LoadOptions,
-) -> Result<LoadedProgram, LoadError> {
+) -> Result<Program, LoadError> {
     let entry_path = entry_path.as_ref();
     let prim_root = match &options.prim_root {
         Some(root) => root.clone(),
@@ -146,7 +141,7 @@ impl Loader {
                 modules: Vec::new(),
                 root: ModuleId(0),
                 module_index: HashMap::new(),
-                name_resolution: NameResolution::default(),
+                symbols: Vec::new(),
             },
             module_cache: HashMap::new(),
             next_file_id: 0,
@@ -159,7 +154,7 @@ impl Loader {
         ModuleFile { file_id, path, ast }
     }
 
-    fn load_single_file(mut self, path: &Path) -> Result<LoadedProgram, LoadError> {
+    fn load_single_file(mut self, path: &Path) -> Result<Program, LoadError> {
         let source = std::fs::read_to_string(path)?;
         let (ast, _diagnostics) = prim_parse::parse(&source);
         let ast = ast?;
@@ -221,12 +216,10 @@ impl Loader {
         }
         self.validate_module_imports(module_id)?;
 
-        Ok(LoadedProgram {
-            program: self.program,
-        })
+        Ok(self.program)
     }
 
-    fn load_directory(mut self, dir: &Path) -> Result<LoadedProgram, LoadError> {
+    fn load_directory(mut self, dir: &Path) -> Result<Program, LoadError> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -331,9 +324,7 @@ impl Loader {
         }
         self.validate_module_imports(module_id)?;
 
-        Ok(LoadedProgram {
-            program: self.program,
-        })
+        Ok(self.program)
     }
 
     fn ensure_module(

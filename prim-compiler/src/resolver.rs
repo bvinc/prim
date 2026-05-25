@@ -58,7 +58,7 @@ pub fn collect_scopes(program: &mut Program) -> Result<ModuleScopes, Vec<Resolve
         ..
     } = collector;
     if errors.is_empty() {
-        program.name_resolution.symbols = symbols;
+        program.symbols = symbols;
         Ok(module_scopes)
     } else {
         Err(errors)
