@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use prim_parse::BinaryOp;
+pub use prim_parse::{BinaryOp, InternSymbol, Interner};
 pub use prim_tok::{FileId, ModuleId, Span};
-pub use prim_util::{InternSymbol, Interner};
 
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};

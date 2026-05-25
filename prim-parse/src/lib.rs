@@ -4,7 +4,13 @@ mod error;
 pub use error::{Diagnostic, ParseError, Severity};
 
 pub use prim_tok::Span;
-pub use prim_util::{InternSymbol, Interner};
+
+/// Interned symbol handle for names. Cheap to copy and compare.
+pub type InternSymbol = string_interner::symbol::SymbolU32;
+
+/// String interner for name deduplication.
+pub type Interner =
+    string_interner::StringInterner<string_interner::backend::BufferBackend<InternSymbol>>;
 
 mod number;
 mod parser;
