@@ -4,6 +4,14 @@ pub use error::TokenError;
 mod span;
 pub use span::{Span, byte_offset_to_line_col};
 
+/// Unique identifier for a source file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileId(pub u32);
+
+/// Unique identifier for a module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ModuleId(pub u32);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenKind {
     // Literals

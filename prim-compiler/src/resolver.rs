@@ -1,8 +1,7 @@
 use crate::program::{
-    FileId, ImportCoverage, ImportRequest, ModuleFile, ModuleId, Program, SymbolId, SymbolInfo,
-    SymbolKind,
+    ImportCoverage, ImportRequest, ModuleFile, Program, SymbolId, SymbolInfo, SymbolKind,
 };
-use prim_parse::Span;
+use prim_tok::{FileId, ModuleId, Span};
 use std::collections::HashMap;
 
 #[derive(Debug)]

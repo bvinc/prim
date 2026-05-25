@@ -6,7 +6,7 @@ mod resolver;
 pub use hir_builder::LoweringError;
 pub use loader::{LoadError, LoadOptions, prim_root};
 pub use prim_hir::{HirProgram, TypeCheckError};
-pub use program::FileId;
+pub use prim_tok::FileId;
 pub use resolver::ResolveError;
 
 use std::collections::HashMap;

@@ -1,13 +1,7 @@
 use prim_parse as ast;
-use prim_parse::Span;
+use prim_tok::{FileId, ModuleId, Span};
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ModuleId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FileId(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ModuleKey {

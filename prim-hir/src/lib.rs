@@ -1,16 +1,13 @@
-use prim_tok::Span;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
 pub use prim_parse::BinaryOp;
+pub use prim_tok::{FileId, ModuleId, Span};
 pub use prim_util::{InternSymbol, Interner};
 
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ModuleId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncId(pub u32);
@@ -26,9 +23,6 @@ pub struct SymbolId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SpanId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FileId(pub u32);
 
 #[derive(Clone, Debug)]
 pub struct HirProgram {

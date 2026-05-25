@@ -1,8 +1,9 @@
 use crate::program::{
-    ExportTable, FileId, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleId, ModuleKey,
-    ModuleOrigin, NameResolution, Program, SymbolKind,
+    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleKey, ModuleOrigin,
+    NameResolution, Program, SymbolKind,
 };
 use prim_parse::{self, ImportDecl, ImportSelector};
+use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
 use std::env;
 use std::fmt;

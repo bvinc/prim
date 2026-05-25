@@ -125,8 +125,7 @@ pub fn format_compile_error(
         }
         CompileError::Load(e) => e.to_string(),
         CompileError::TypeCheck(e) => {
-            // Convert prim_hir::FileId to prim_compiler::FileId via inner u32
-            format_error_with_file(source_map, FileId(e.file.0), e.span, e, fallback_path)
+            format_error_with_file(source_map, e.file, e.span, e, fallback_path)
         }
         CompileError::Resolve(errors) => errors
             .iter()
@@ -135,9 +134,7 @@ pub fn format_compile_error(
             .join("\n"),
         CompileError::Lowering(errors) => errors
             .iter()
-            .map(|e| {
-                format_error_with_file(source_map, FileId(e.file().0), e.span(), e, fallback_path)
-            })
+            .map(|e| format_error_with_file(source_map, e.file(), e.span(), e, fallback_path))
             .collect::<Vec<_>>()
             .join("\n"),
     };

@@ -1,37 +1,35 @@
-use crate::program::{
-    FileId as ProgFileId, ModuleId as ProgModuleId, Program, SymbolId as ResSymbolId, SymbolInfo,
-    SymbolKind as ResSymbolKind,
-};
+use crate::program::{Program, SymbolId as ResSymbolId, SymbolInfo, SymbolKind as ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_hir::*;
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
+use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum LoweringError {
     AssignToImmutable {
         name: String,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
     },
     UnknownName {
         name: String,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
     },
     UnknownFunction {
         name: String,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
     },
     UnknownStruct {
         name: String,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
     },
     UnknownModule {
         path: String,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
     },
 }
@@ -71,7 +69,7 @@ impl LoweringError {
         }
     }
 
-    pub fn file(&self) -> ProgFileId {
+    pub fn file(&self) -> FileId {
         match self {
             LoweringError::AssignToImmutable { file, .. }
             | LoweringError::UnknownName { file, .. }
@@ -175,7 +173,7 @@ impl<'a> LoweringContext<'a> {
         let mut files = vec![None; max_file];
         for module in &program.modules {
             for file in &module.files {
-                let id = FileId(file.file_id.0);
+                let id = file.file_id;
                 let slot = &mut files[id.0 as usize];
                 *slot = Some(FileInfo {
                     id,
@@ -204,7 +202,7 @@ impl<'a> LoweringContext<'a> {
             },
             items: Items::default(),
             modules: Vec::new(),
-            root_module: ModuleId(program.root.0),
+            root_module: program.root,
             main: None,
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
@@ -218,8 +216,8 @@ impl<'a> LoweringContext<'a> {
 
     fn declare_modules_and_items(&mut self) {
         for module in &self.program.modules {
-            let module_id = ModuleId(module.id.0);
-            let files = module.files.iter().map(|f| FileId(f.file_id.0)).collect();
+            let module_id = module.id;
+            let files = module.files.iter().map(|f| f.file_id).collect();
             self.modules.push(Module {
                 id: module_id,
                 name: module.name.clone(),
@@ -245,12 +243,12 @@ impl<'a> LoweringContext<'a> {
                     {
                         self.stdlib_str_struct = Some(sid);
                     }
-                    let span = self.span_id(s.span, FileId(file.file_id.0));
+                    let span = self.span_id(s.span, file.file_id);
                     self.items.structs.push(HirStruct {
                         id: sid,
                         name: sym_id,
                         module: module_id,
-                        file: FileId(file.file_id.0),
+                        file: file.file_id,
                         fields: Vec::new(),
                         span,
                     });
@@ -266,12 +264,12 @@ impl<'a> LoweringContext<'a> {
                         .func_ids
                         .entry(res_id)
                         .or_insert_with(|| FuncId(self.items.functions.len() as u32));
-                    let span = self.span_id(f.span, FileId(file.file_id.0));
+                    let span = self.span_id(f.span, file.file_id);
                     self.items.functions.push(HirFunction {
                         id: fid,
                         name: sym_id,
                         module: module_id,
-                        file: FileId(file.file_id.0),
+                        file: file.file_id,
                         params: Vec::new(),
                         ret: None,
                         body: HirBlock {
@@ -288,7 +286,7 @@ impl<'a> LoweringContext<'a> {
 
     fn populate_items(&mut self) {
         for module in &self.program.modules {
-            let module_id = ModuleId(module.id.0);
+            let module_id = module.id;
             let module_scope = self
                 .module_scopes
                 .get(&module.id)
@@ -307,7 +305,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|f| HirField {
                             name: f.name.sym,
                             ty: self.lower_type(&f.field_type, ast, &module_scope),
-                            span: self.span_id(f.name.span, FileId(file.file_id.0)),
+                            span: self.span_id(f.name.span, file.file_id),
                         })
                         .collect();
                     if let Some(hir_struct) = self.items.structs.get_mut(sid.0 as usize) {
@@ -336,7 +334,7 @@ impl<'a> LoweringContext<'a> {
                             HirParam {
                                 name: sym,
                                 ty: self.lower_type(&p.type_annotation, ast, &module_scope),
-                                span: self.span_id(p.name.span, FileId(file.file_id.0)),
+                                span: self.span_id(p.name.span, file.file_id),
                             }
                         })
                         .collect();
@@ -346,7 +344,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|t| self.lower_type(t, ast, &module_scope));
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, &module_scope);
-                    let span = self.span_id(f.span, FileId(file.file_id.0));
+                    let span = self.span_id(f.span, file.file_id);
                     if let Some(hir_func) = self.items.functions.get_mut(fid.0 as usize) {
                         hir_func.params = params;
                         hir_func.ret = ret;
@@ -378,7 +376,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn find_top_level_symbol(&self, name: &str, module_id: ProgModuleId) -> ResSymbolId {
+    fn find_top_level_symbol(&self, name: &str, module_id: ModuleId) -> ResSymbolId {
         self.module_scopes
             .get(&module_id)
             .and_then(|scope| scope.get(name).copied())
@@ -414,7 +412,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         stmt: &Stmt,
         module: ModuleId,
-        file_id: ProgFileId,
+        file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> HirStmt {
@@ -443,7 +441,7 @@ impl<'a> LoweringContext<'a> {
                         module_scope,
                     ),
                     value: value_hir,
-                    span: self.span_id(name.span, FileId(file_id.0)),
+                    span: self.span_id(name.span, file_id),
                 }
             }
             Stmt::Assign { target, value } => {
@@ -461,7 +459,7 @@ impl<'a> LoweringContext<'a> {
                         HirStmt::Assign {
                             target: binding.symbol,
                             value: self.lower_expr(value, module, file_id, ast, module_scope),
-                            span: self.span_id(target.span, FileId(file_id.0)),
+                            span: self.span_id(target.span, file_id),
                         }
                     }
                     None => {
@@ -470,7 +468,7 @@ impl<'a> LoweringContext<'a> {
                             file: file_id,
                             span: target.span,
                         });
-                        let span = self.span_id(target.span, FileId(file_id.0));
+                        let span = self.span_id(target.span, file_id);
                         HirStmt::Expr(HirExpr::Error { span })
                     }
                 }
@@ -480,7 +478,7 @@ impl<'a> LoweringContext<'a> {
             }
             Stmt::Loop { body, span } => HirStmt::Loop {
                 body: self.lower_stmt_list(body, module, file_id, ast, module_scope),
-                span: self.span_id(*span, FileId(file_id.0)),
+                span: self.span_id(*span, file_id),
             },
             Stmt::While {
                 condition,
@@ -489,10 +487,10 @@ impl<'a> LoweringContext<'a> {
             } => HirStmt::While {
                 condition: self.lower_expr(condition, module, file_id, ast, module_scope),
                 body: self.lower_stmt_list(body, module, file_id, ast, module_scope),
-                span: self.span_id(*span, FileId(file_id.0)),
+                span: self.span_id(*span, file_id),
             },
             Stmt::Break { span } => HirStmt::Break {
-                span: self.span_id(*span, FileId(file_id.0)),
+                span: self.span_id(*span, file_id),
             },
         }
     }
@@ -501,7 +499,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         stmts: &[Stmt],
         module: ModuleId,
-        file_id: ProgFileId,
+        file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> HirBlock {
@@ -521,7 +519,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         block: &prim_parse::Block,
         module: ModuleId,
-        file_id: ProgFileId,
+        file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> HirBlock {
@@ -543,11 +541,11 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         expr: &Expr,
         module: ModuleId,
-        file_id: ProgFileId,
+        file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> HirExpr {
-        let span = self.span_id(expr.span, FileId(file_id.0));
+        let span = self.span_id(expr.span, file_id);
         match &expr.kind {
             ExprKind::Int(value) => HirExpr::Int {
                 value: *value,
@@ -603,7 +601,7 @@ impl<'a> LoweringContext<'a> {
                             .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
                             .collect(),
                         ty: self.lower_type(&expr.ty, ast, module_scope),
-                        span: self.span_id(call_span, FileId(file_id.0)),
+                        span: self.span_id(call_span, file_id),
                     },
                     None => HirExpr::Error { span },
                 }
@@ -682,7 +680,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         name: &str,
         module: ModuleId,
-        file: ProgFileId,
+        file: FileId,
         span: Span,
         module_scope: &ModuleScope,
     ) -> Option<SymbolId> {
@@ -705,7 +703,7 @@ impl<'a> LoweringContext<'a> {
     fn resolve_function_path(
         &mut self,
         path: &prim_parse::NamePath,
-        file_id: ProgFileId,
+        file_id: FileId,
         ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> Option<ResSymbolId> {
@@ -842,7 +840,6 @@ impl<'a> LoweringContext<'a> {
         let info = &self.symbols_info[res_id.0 as usize];
         let module = info
             .module
-            .map(|m| ModuleId(m.0))
             .or(module_hint)
             .expect("missing module for symbol");
         let kind = self.convert_kind(info.kind, res_id);
