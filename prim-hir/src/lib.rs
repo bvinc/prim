@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+pub use prim_parse::BinaryOp;
 pub use prim_util::{InternSymbol, Interner};
 
 pub mod typecheck;
@@ -298,40 +299,6 @@ pub enum SymbolKind {
     Field,
     Trait,
     Unknown,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinaryOp {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-    Equals,
-    NotEquals,
-    Greater,
-    GreaterEquals,
-    Less,
-    LessEquals,
-}
-
-impl fmt::Display for BinaryOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let symbol = match self {
-            BinaryOp::Add => "+",
-            BinaryOp::Subtract => "-",
-            BinaryOp::Multiply => "*",
-            BinaryOp::Divide => "/",
-            BinaryOp::Modulo => "%",
-            BinaryOp::Equals => "==",
-            BinaryOp::NotEquals => "!=",
-            BinaryOp::Greater => ">",
-            BinaryOp::GreaterEquals => ">=",
-            BinaryOp::Less => "<",
-            BinaryOp::LessEquals => "<=",
-        };
-        write!(f, "{symbol}")
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

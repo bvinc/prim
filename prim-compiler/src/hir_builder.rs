@@ -4,7 +4,7 @@ use crate::program::{
 };
 use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_hir::*;
-use prim_parse::{BinaryOp as AstBinaryOp, Expr, ExprKind, Span, Stmt, Type};
+use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -584,19 +584,7 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             ExprKind::Binary { left, op, right } => HirExpr::Binary {
-                op: match op {
-                    AstBinaryOp::Add => BinaryOp::Add,
-                    AstBinaryOp::Subtract => BinaryOp::Subtract,
-                    AstBinaryOp::Multiply => BinaryOp::Multiply,
-                    AstBinaryOp::Divide => BinaryOp::Divide,
-                    AstBinaryOp::Modulo => BinaryOp::Modulo,
-                    AstBinaryOp::Equals => BinaryOp::Equals,
-                    AstBinaryOp::NotEquals => BinaryOp::NotEquals,
-                    AstBinaryOp::Greater => BinaryOp::Greater,
-                    AstBinaryOp::GreaterEquals => BinaryOp::GreaterEquals,
-                    AstBinaryOp::Less => BinaryOp::Less,
-                    AstBinaryOp::LessEquals => BinaryOp::LessEquals,
-                },
+                op: *op,
                 left: Box::new(self.lower_expr(left, module, file_id, ast, module_scope)),
                 right: Box::new(self.lower_expr(right, module, file_id, ast, module_scope)),
                 ty: self.lower_type(&expr.ty, ast, module_scope),

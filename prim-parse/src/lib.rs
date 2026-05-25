@@ -89,7 +89,7 @@ pub enum ExprKind {
     Block(Block),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Subtract,
@@ -102,6 +102,25 @@ pub enum BinaryOp {
     GreaterEquals,
     Less,
     LessEquals,
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let symbol = match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Subtract => "-",
+            BinaryOp::Multiply => "*",
+            BinaryOp::Divide => "/",
+            BinaryOp::Modulo => "%",
+            BinaryOp::Equals => "==",
+            BinaryOp::NotEquals => "!=",
+            BinaryOp::Greater => ">",
+            BinaryOp::GreaterEquals => ">=",
+            BinaryOp::Less => "<",
+            BinaryOp::LessEquals => "<=",
+        };
+        write!(f, "{symbol}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
