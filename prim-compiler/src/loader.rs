@@ -129,7 +129,7 @@ struct Loader {
     next_file_id: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ModuleCacheEntry {
     imports: Vec<ImportRequest>,
     files: Vec<ModuleFile>,
@@ -180,6 +180,7 @@ impl Loader {
             &self.module_root,
             &self.std_root,
         )?;
+        let module_name = vec![module_name];
         let mut imports = Vec::new();
         let mut import_index = HashMap::new();
         for ImportRequest { module, coverage } in planned {
@@ -189,18 +190,19 @@ impl Loader {
             inject_prelude_imports(
                 &mut imports,
                 &mut import_index,
-                &[module_name.clone()],
+                &module_name,
                 ModuleOrigin::User,
             );
         }
 
-        let module_files = vec![self.alloc_file(path.to_path_buf(), ast.clone())];
+        let module_files = vec![self.alloc_file(path.to_path_buf(), ast)];
 
         let exports = collect_exports(&module_files);
         let module_id = ModuleId(self.program.modules.len() as u32);
+
         let module = Module {
             id: module_id,
-            name: vec![module_name],
+            name: module_name,
             files: module_files,
             imports: imports.clone(),
             exports,
@@ -211,12 +213,12 @@ impl Loader {
         self.program.root = module_id;
         self.program.modules.push(module);
 
-        // Ensure dependencies are loaded.
+        // Ensure dependencies are loaded (clone needed: ensure_module borrows &mut self).
         let mut stack = Vec::new();
         for ImportRequest { module, .. } in &imports {
             self.ensure_module(module, &mut stack)?;
         }
-        self.validate_imports(&imports)?;
+        self.validate_module_imports(module_id)?;
 
         Ok(LoadedProgram {
             program: self.program,
@@ -296,27 +298,28 @@ impl Loader {
             )));
         }
 
+        let module_segments = vec![module_name];
+
         if self.options.include_prelude {
             inject_prelude_imports(
                 &mut imports,
                 &mut import_index,
-                &[module_name.clone()],
+                &module_segments,
                 ModuleOrigin::User,
             );
         }
 
         let exports = collect_exports(&module_files);
-        let module_segments = vec![module_name.clone()];
         let module_id = ModuleId(self.program.modules.len() as u32);
+
+        let key = ModuleKey::Name(module_segments.clone());
         let module = Module {
             id: module_id,
-            name: module_segments.clone(),
+            name: module_segments,
             files: module_files,
             imports: imports.clone(),
             exports,
         };
-
-        let key = ModuleKey::Name(module_segments.clone());
         self.program.module_index.insert(key, module_id);
         self.program.root = module_id;
         self.program.modules.push(module);
@@ -325,7 +328,7 @@ impl Loader {
         for ImportRequest { module, .. } in &imports {
             self.ensure_module(module, &mut stack)?;
         }
-        self.validate_imports(&imports)?;
+        self.validate_module_imports(module_id)?;
 
         Ok(LoadedProgram {
             program: self.program,
@@ -354,13 +357,15 @@ impl Loader {
             return Ok(*id);
         }
 
-        let entry = self.load_module_entry(module_segments)?.clone();
+        self.load_module_entry(module_segments)?;
+        let entry = self.module_cache.remove(&module_key).unwrap();
         let exports = collect_exports(&entry.files);
         let id = ModuleId(self.program.modules.len() as u32);
+
         let module = Module {
             id,
             name: module_segments.to_vec(),
-            files: entry.files.clone(),
+            files: entry.files,
             imports: entry.imports.clone(),
             exports,
         };
@@ -374,17 +379,14 @@ impl Loader {
 
         // Validate imports of this module (including selective symbol imports).
         // Validation needs the imported modules to have been loaded into `module_index`.
-        self.validate_imports(&entry.imports)?;
+        self.validate_module_imports(id)?;
 
         stack.pop();
 
         Ok(id)
     }
 
-    fn load_module_entry(
-        &mut self,
-        module_segments: &[String],
-    ) -> Result<&ModuleCacheEntry, LoadError> {
+    fn load_module_entry(&mut self, module_segments: &[String]) -> Result<(), LoadError> {
         let module_key = module_segments.join(".");
         if !self.module_cache.contains_key(&module_key) {
             let search_path =
@@ -480,27 +482,28 @@ impl Loader {
             );
         }
 
-        Ok(self.module_cache.get(&module_key).unwrap())
+        Ok(())
     }
 }
 
 impl Loader {
-    fn validate_imports(&self, imports: &[ImportRequest]) -> Result<(), LoadError> {
+    fn validate_module_imports(&self, id: ModuleId) -> Result<(), LoadError> {
+        let imports = &self.program.modules[id.0 as usize].imports;
         for ImportRequest { module, coverage } in imports {
             if let ImportCoverage::Symbols(symbols) = coverage {
                 let key = ModuleKey::Name(module.clone());
-                let Some(&module_id) = self.program.module_index.get(&key) else {
+                let Some(&dep_id) = self.program.module_index.get(&key) else {
                     return Err(LoadError::InvalidModule(format!(
                         "Imported module '{}' not found",
                         module.join(".")
                     )));
                 };
-                let module = &self.program.modules[module_id.0 as usize];
+                let dep = &self.program.modules[dep_id.0 as usize];
                 for sym in symbols {
-                    if !module.exports.contains_key(sym) {
+                    if !dep.exports.contains_key(sym) {
                         return Err(LoadError::InvalidModule(format!(
                             "Module '{}' does not define '{}'",
-                            module.name.join("."),
+                            dep.name.join("."),
                             sym
                         )));
                     }

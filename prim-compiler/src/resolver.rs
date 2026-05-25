@@ -52,25 +52,32 @@ pub type ModuleScopes = HashMap<ModuleId, ModuleScope>;
 pub fn collect_scopes(program: &mut Program) -> Result<ModuleScopes, Vec<ResolveError>> {
     let mut collector = ScopeCollector::new(program);
     collector.collect();
-    if collector.errors.is_empty() {
-        Ok(collector.module_scopes)
+    let ScopeCollector {
+        symbols,
+        module_scopes,
+        errors,
+        ..
+    } = collector;
+    if errors.is_empty() {
+        program.name_resolution.symbols = symbols;
+        Ok(module_scopes)
     } else {
-        Err(collector.errors)
+        Err(errors)
     }
 }
 
 struct ScopeCollector<'a> {
-    program: &'a mut Program,
-    next_symbol: u32,
+    program: &'a Program,
+    symbols: Vec<SymbolInfo>,
     module_scopes: ModuleScopes,
     errors: Vec<ResolveError>,
 }
 
 impl<'a> ScopeCollector<'a> {
-    fn new(program: &'a mut Program) -> Self {
+    fn new(program: &'a Program) -> Self {
         Self {
             program,
-            next_symbol: 0,
+            symbols: Vec::new(),
             module_scopes: HashMap::new(),
             errors: Vec::new(),
         }
@@ -84,9 +91,8 @@ impl<'a> ScopeCollector<'a> {
         file: FileId,
         span: Span,
     ) -> SymbolId {
-        let id = SymbolId(self.next_symbol);
-        self.next_symbol += 1;
-        self.program.name_resolution.symbols.push(SymbolInfo {
+        let id = SymbolId(self.symbols.len() as u32);
+        self.symbols.push(SymbolInfo {
             name,
             kind,
             module,
@@ -97,10 +103,8 @@ impl<'a> ScopeCollector<'a> {
     }
 
     fn collect(&mut self) {
-        let modules = self.program.modules.clone();
-
         // First pass: collect symbols from each module (without imports)
-        for module in &modules {
+        for module in &self.program.modules {
             let mut scope = HashMap::new();
             let file_id = module.files.first().map(|f| f.file_id).unwrap_or(FileId(0));
 
@@ -126,7 +130,7 @@ impl<'a> ScopeCollector<'a> {
         }
 
         // Second pass: apply imports to each module's scope
-        for module in &modules {
+        for module in &self.program.modules {
             let base_scope = self
                 .module_scopes
                 .get(&module.id)
