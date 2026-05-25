@@ -5,7 +5,7 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use mangle::{string_literal_symbol, symbol_name};
 use prim_hir::HirProgram;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub mod error;
 mod mangle;
@@ -17,6 +17,8 @@ struct CraneliftCodeGenerator {
     struct_layouts: HashMap<prim_hir::StructId, StructLayout>,
     func_ids: HashMap<prim_hir::FuncId, cranelift_module::FuncId>,
     func_params: HashMap<prim_hir::FuncId, Vec<cranelift::prelude::Type>>,
+    /// Functions backed by a runtime binding (C ABI, flattened structs).
+    runtime_funcs: HashSet<prim_hir::FuncId>,
 }
 
 fn expected_return_lanes(
@@ -170,6 +172,7 @@ impl CraneliftCodeGenerator {
             struct_layouts: HashMap::new(),
             func_ids: HashMap::new(),
             func_params: HashMap::new(),
+            runtime_funcs: HashSet::new(),
         })
     }
 
@@ -192,6 +195,9 @@ impl CraneliftCodeGenerator {
             let func_id = self.module.declare_function(&sym, linkage, &sig)?;
             self.func_ids.insert(func.id, func_id);
             self.func_params.insert(func.id, params);
+            if func.runtime_binding.is_some() {
+                self.runtime_funcs.insert(func.id);
+            }
         }
 
         let mut ctx = self.module.make_context();
@@ -694,9 +700,7 @@ impl CraneliftCodeGenerator {
                     .ok_or(CodegenError::MissingFunction(*func))?;
                 let callee = self.module.declare_func_in_func(target, builder.func);
 
-                // Check if the callee is a runtime-bound function
-                let func_def = program.items.functions.iter().find(|f| f.id == *func);
-                let is_runtime_call = func_def.is_some_and(|f| f.runtime_binding.is_some());
+                let is_runtime_call = self.runtime_funcs.contains(func);
 
                 // Runtime functions don't use sret, they return via registers
                 let call_uses_sret = !is_runtime_call && uses_sret(ty, &self.struct_layouts);
@@ -724,7 +728,10 @@ impl CraneliftCodeGenerator {
                 };
 
                 // Get arg types from function definition for flattening
-                let arg_types: Vec<_> = func_def
+                let arg_types: Vec<_> = program
+                    .items
+                    .functions
+                    .get(func.0 as usize)
                     .map(|f| f.params.iter().map(|p| p.ty.clone()).collect())
                     .unwrap_or_default();
 
