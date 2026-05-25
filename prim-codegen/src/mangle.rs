@@ -15,7 +15,6 @@ fn kind_tag(kind: &prim_compiler::hir::SymbolKind) -> &'static str {
         prim_compiler::hir::SymbolKind::Module => "mod",
         prim_compiler::hir::SymbolKind::Function(_) => "fn",
         prim_compiler::hir::SymbolKind::Struct(_) => "struct",
-        prim_compiler::hir::SymbolKind::Global(_) => "global",
         prim_compiler::hir::SymbolKind::Param => "param",
         prim_compiler::hir::SymbolKind::Local => "local",
         prim_compiler::hir::SymbolKind::Field => "field",
@@ -86,8 +85,6 @@ mod tests {
             id: module_id,
             name: module_name.into_iter().map(|s| s.to_string()).collect(),
             files: Vec::new(),
-            exports: Vec::new(),
-            imports: Vec::new(),
         };
         let symbol = Symbol {
             id: symbol_id,

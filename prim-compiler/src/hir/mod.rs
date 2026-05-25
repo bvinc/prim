@@ -14,9 +14,6 @@ pub struct FuncId(pub u32);
 pub struct StructId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct GlobalId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SymbolId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,21 +35,12 @@ pub struct Module {
     pub id: ModuleId,
     pub name: Vec<String>,
     pub files: Vec<FileId>,
-    pub exports: Vec<SymbolId>,
-    pub imports: Vec<ResolvedImport>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ResolvedImport {
-    pub from: ModuleId,
-    pub symbols: Vec<SymbolId>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Items {
     pub functions: Vec<HirFunction>,
     pub structs: Vec<HirStruct>,
-    pub globals: Vec<HirGlobal>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,17 +63,6 @@ pub struct HirStruct {
     pub module: ModuleId,
     pub file: FileId,
     pub fields: Vec<HirField>,
-    pub span: SpanId,
-}
-
-#[derive(Clone, Debug)]
-pub struct HirGlobal {
-    pub id: GlobalId,
-    pub name: SymbolId,
-    pub module: ModuleId,
-    pub file: FileId,
-    pub ty: Type,
-    pub init: HirExpr,
     pub span: SpanId,
 }
 
@@ -285,7 +262,6 @@ pub enum SymbolKind {
     Module,
     Function(FuncId),
     Struct(StructId),
-    Global(GlobalId),
     Param,
     Local,
     Field,

@@ -222,8 +222,6 @@ impl<'a> LoweringContext<'a> {
                 id: module_id,
                 name: module.name.clone(),
                 files,
-                exports: Vec::new(),
-                imports: Vec::new(),
             });
 
             for file in &module.files {
@@ -354,14 +352,6 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
-
-        for module in &mut self.modules {
-            for ((mid, _name), sym) in &self.symbols.by_name {
-                if *mid == module.id {
-                    module.exports.push(*sym);
-                }
-            }
-        }
     }
 
     fn finish(self) -> HirProgram {
@@ -391,10 +381,7 @@ impl<'a> LoweringContext<'a> {
     ) -> SymbolId {
         let id = SymbolId(self.symbols.entries.len() as u32);
         match kind {
-            SymbolKind::Function(_)
-            | SymbolKind::Struct(_)
-            | SymbolKind::Global(_)
-            | SymbolKind::Module => {
+            SymbolKind::Function(_) | SymbolKind::Struct(_) | SymbolKind::Module => {
                 self.symbols.by_name.insert((module, name), id);
             }
             _ => {}
