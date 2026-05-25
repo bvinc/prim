@@ -2,7 +2,7 @@
 
 ## Overview
 
-Prim is a statically-typed programming language with a focus on simplicity and clarity. It compiles to native machine code via the Cranelift backend.
+Prim is a statically-typed programming language with a focus on simplicity, safety, and concurrency. It compiles to native machine code via the Cranelift backend. Prim uses ownership and borrowing for memory safety (no garbage collection) and provides green threads with growable, copyable stacks for lightweight concurrency.
 
 ## Grammar
 
@@ -156,10 +156,19 @@ The compiler provides clear error messages for:
 
 ## Memory Model
 
-- All variables are stack-allocated
-- No heap allocation or garbage collection
+- All variables are currently stack-allocated
+- No garbage collection (by design — this is a permanent decision)
 - Function parameters are passed by value
-- No pointers or references
+- Pointers: `*const T` and `*mut T` with explicit dereference
+
+### Planned: Ownership and Borrowing
+
+Prim will adopt ownership semantics with compile-time borrow checking:
+
+- Each value has a single owner. When the owner goes out of scope, the value is dropped.
+- Values can be borrowed immutably (`&T`) or mutably (`&mut T`).
+- Lifetimes will be tracked to prevent dangling references.
+- No garbage collector — memory safety is enforced entirely at compile time.
 
 ## Modules
 

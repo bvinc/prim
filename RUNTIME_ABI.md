@@ -6,7 +6,9 @@ This document defines the stable C ABI between Prim-compiled code and the runtim
 Goals
 - Simple, portable C ABI surface (no Rust-specific mangling or layout).
 - Keep symbol names and calling conventions stable as the language evolves.
-- Support future green-thread scheduler without breaking existing callers.
+- Support green-thread scheduler with growable, copyable stacks (like Go).
+- Provide runtime type information sufficient for stack relocation during GC-free operation.
+- No garbage collection — the runtime manages scheduling and stacks, not object lifetimes.
 
 Conventions
 - Calling convention: C (`extern "C"`).

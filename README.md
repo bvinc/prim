@@ -1,4 +1,18 @@
-Prim is a programming language that values simplicity, safety, and a useful and rich type system.  It draws inspiration from both rust and go.
+Prim is a programming language that values simplicity, safety, and a useful and rich type system. It draws inspiration from both Rust and Go.
+
+## Design Goals
+
+1. **Simplicity above all.** The language, compiler, and runtime should be as simple as possible. Fewer concepts, fewer special cases, less code.
+
+2. **Green threads with moveable stacks.** The runtime provides lightweight, cooperatively-scheduled green threads. Stacks are growable and relocatable (copied/moved as needed, like Go), enabling millions of concurrent tasks without OS thread overhead.
+
+3. **No garbage collection.** Memory is managed through ownership, borrowing, and lifetimes — not a GC. The programmer always knows when memory is freed.
+
+4. **Strong types with a borrow checker.** Ownership and lifetime tracking are enforced at compile time, preventing use-after-free, data races, and dangling references without runtime cost.
+
+### Current Status
+
+The compiler implements basic types, structs, functions, control flow, modules, and type inference. The runtime provides allocation, basic I/O, and a transitional threading API. Ownership, borrowing, lifetimes, and green threads are not yet implemented.
 
 Primitive integer types: u8, i8, u16, i16, u32, i32, u64, i64, usize, isize.
 Primitive floating point types: f32, f64.

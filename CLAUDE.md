@@ -6,15 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Prim** is a programming language compiler implemented in Rust that compiles Prim source code to native x86-64 executables using the Cranelift code generation backend.
 
-### Language Features
+### Design Goals
+
+1. **Simplicity above all.** Less code, fewer concepts, fewer special cases. When in doubt, simplify.
+2. **Green threads with copyable stacks.** The runtime will provide lightweight cooperative scheduling with growable, relocatable stacks (copied/moved like Go), enabling millions of concurrent tasks.
+3. **No garbage collection.** Memory is managed through ownership, borrowing, and lifetimes.
+4. **Strong types with a borrow checker.** Compile-time ownership and lifetime enforcement, similar to Rust but simpler.
+
+### Current Language Features
 - **Primitive types**: Integers (u8-u64, i8-i64, usize, isize), floats (f32, f64), booleans
-- **Variables**: `let` bindings with optional type annotations
-- **Expressions**: Arithmetic operations (+, -, *, ==), literals, variables, field access
+- **Variables**: `let` bindings with optional type annotations, mutability via `let mut`
+- **Expressions**: Arithmetic, comparison, literals, variables, field access, blocks
 - **Structs**: User-defined types with named fields
 - **Functions**: User-defined functions with parameters and return types
-- **Methods**: `impl` blocks with `&self` methods
-- **Control flow**: `if` expressions, `loop` with `break`
+- **Control flow**: `if`/`else` expressions, `loop` with `break`, `while`
+- **Pointers**: Const and mutable pointers with dereference
+- **Modules**: Directory-based modules with selective imports
 - **Type inference**: Basic type inference for unspecified types
+
+### Not Yet Implemented
+- Ownership and borrowing (move semantics, borrow checker)
+- Lifetimes
+- Enums and pattern matching
+- Traits and methods (parsed but not compiled)
+- Generics
+- Green thread integration in the language
+- Runtime type information for stack relocation
 
 ## Architecture
 
