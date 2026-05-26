@@ -117,7 +117,7 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_signatures(&mut self) -> Result<(), TypeCheckError> {
-        for s in &self.program.items.structs {
+        for s in &self.program.structs {
             let mut fields = HashMap::new();
             for f in &s.fields {
                 if matches!(f.ty, Type::Undetermined) {
@@ -128,7 +128,7 @@ impl<'a> Checker<'a> {
             self.struct_fields.insert(s.id, fields);
         }
 
-        for f in &self.program.items.functions {
+        for f in &self.program.functions {
             for param in &f.params {
                 if matches!(param.ty, Type::Undetermined) {
                     return Err(self.error(param.span, TypeCheckKind::UndeterminedParamType));
@@ -141,11 +141,11 @@ impl<'a> Checker<'a> {
     }
 
     fn check_functions(&mut self) -> Result<(), TypeCheckError> {
-        let mut funcs = std::mem::take(&mut self.program.items.functions);
+        let mut funcs = std::mem::take(&mut self.program.functions);
         for func in funcs.iter_mut() {
             self.check_function(func)?;
         }
-        self.program.items.functions = funcs;
+        self.program.functions = funcs;
         Ok(())
     }
 

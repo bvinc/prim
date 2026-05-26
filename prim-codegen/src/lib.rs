@@ -179,7 +179,7 @@ impl CraneliftCodeGenerator {
     pub fn generate(mut self, program: &hir::Program) -> Result<Vec<u8>, CodegenError> {
         self.compute_struct_layouts(program, self.pointer_type)?;
         // Declare all functions first to populate func_ids.
-        for func in &program.items.functions {
+        for func in &program.functions {
             let sig = self.build_signature(func, program)?;
             let params: Vec<_> = sig.params.iter().map(|p| p.value_type).collect();
 
@@ -202,7 +202,7 @@ impl CraneliftCodeGenerator {
 
         let mut ctx = self.module.make_context();
         let mut builder_context = FunctionBuilderContext::new();
-        for func in &program.items.functions {
+        for func in &program.functions {
             if func.runtime_binding.is_some() {
                 continue;
             }
@@ -220,7 +220,7 @@ impl CraneliftCodeGenerator {
         let pointer_size = pointer_type.bytes();
 
         // Process structs in order (assumes HIR provides them in dependency order)
-        for st in &program.items.structs {
+        for st in &program.structs {
             let mut fields = Vec::new();
             let mut offset: u32 = 0;
             let mut struct_align: u32 = 1;
@@ -725,7 +725,6 @@ impl CraneliftCodeGenerator {
 
                 // Get arg types from function definition for flattening
                 let arg_types: Vec<_> = program
-                    .items
                     .functions
                     .get(func.0 as usize)
                     .map(|f| f.params.iter().map(|p| p.ty.clone()).collect())

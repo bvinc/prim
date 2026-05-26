@@ -24,7 +24,7 @@ fn kind_tag(kind: &hir::SymbolKind) -> &'static str {
 }
 
 pub(crate) fn symbol_name(sym: hir::SymbolId, program: &hir::Program) -> String {
-    let entry = &program.symbols.entries[sym.0 as usize];
+    let entry = &program.symbols[sym.0 as usize];
     let mut name = String::from("prim");
     let module = &program.modules[entry.module.0 as usize];
     for seg in &module.name {
@@ -64,12 +64,8 @@ pub(crate) fn string_literal_symbol(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hir::{
-        FileId, FileInfo, Interner, Items, Module, ModuleId, Program, SpanId, Symbol, SymbolId,
-        SymbolKind, SymbolTable,
-    };
+    use hir::{FileId, Interner, Module, ModuleId, Program, SpanId, Symbol, SymbolId, SymbolKind};
     use prim_tok::Span;
-    use std::path::PathBuf;
 
     fn program_with_module_and_symbol(
         module_name: Vec<&str>,
@@ -92,16 +88,11 @@ mod tests {
         };
         Program {
             modules: vec![module],
-            items: Items::default(),
-            symbols: SymbolTable {
-                entries: vec![symbol],
-            },
+            functions: Vec::new(),
+            structs: Vec::new(),
+            symbols: vec![symbol],
             interner,
             main: None,
-            files: vec![FileInfo {
-                id: FileId(0),
-                path: PathBuf::from("dummy.prim"),
-            }],
             spans: vec![(FileId(0), Span::new(0, 0))],
         }
     }

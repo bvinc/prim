@@ -1,6 +1,6 @@
 use crate::hir::{
-    self, Field, FileInfo, FuncId, Function, InternSymbol, Interner, Items, Module, Param, SpanId,
-    Struct, StructId, Symbol, SymbolId, SymbolKind, SymbolTable,
+    self, Field, FuncId, Function, InternSymbol, Interner, Module, Param, SpanId, Struct, StructId,
+    Symbol, SymbolId, SymbolKind,
 };
 use crate::program::{Program, ResSymbolId, ResSymbolInfo, ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
@@ -149,9 +149,9 @@ struct LoweringContext<'a> {
     module_scopes: &'a ModuleScopes,
     interner: Interner,
     spans: Vec<(FileId, Span)>,
-    files: Vec<FileInfo>,
-    symbols: SymbolTable,
-    items: Items,
+    symbols: Vec<Symbol>,
+    functions: Vec<Function>,
+    structs: Vec<Struct>,
     modules: Vec<Module>,
     root_module: ModuleId,
     main: Option<SymbolId>,
@@ -166,26 +166,6 @@ struct LoweringContext<'a> {
 
 impl<'a> LoweringContext<'a> {
     fn new(program: &'a Program, module_scopes: &'a ModuleScopes) -> Self {
-        let max_file = program
-            .modules
-            .iter()
-            .flat_map(|m| m.files.iter().map(|f| f.file_id.0 as usize))
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-        let mut files = vec![None; max_file];
-        for module in &program.modules {
-            for file in &module.files {
-                let id = file.file_id;
-                let slot = &mut files[id.0 as usize];
-                *slot = Some(FileInfo {
-                    id,
-                    path: file.path.clone(),
-                });
-            }
-        }
-        let files: Vec<FileInfo> = files.into_iter().flatten().collect();
-
         let root_module = &program.modules[program.root.0 as usize];
         let interner = root_module
             .files
@@ -198,11 +178,9 @@ impl<'a> LoweringContext<'a> {
             module_scopes,
             interner,
             spans: Vec::new(),
-            files,
-            symbols: SymbolTable {
-                entries: Vec::new(),
-            },
-            items: Items::default(),
+            symbols: Vec::new(),
+            functions: Vec::new(),
+            structs: Vec::new(),
             modules: Vec::new(),
             root_module: program.root,
             main: None,
@@ -232,7 +210,7 @@ impl<'a> LoweringContext<'a> {
                     let sid = *self
                         .struct_ids
                         .entry(res_id)
-                        .or_insert_with(|| StructId(self.items.structs.len() as u32));
+                        .or_insert_with(|| StructId(self.structs.len() as u32));
                     if self.stdlib_str_struct.is_none()
                         && module.name.len() == 2
                         && module.name[0] == "std"
@@ -242,7 +220,7 @@ impl<'a> LoweringContext<'a> {
                         self.stdlib_str_struct = Some(sid);
                     }
                     let span = self.span_id(s.span, file.file_id);
-                    self.items.structs.push(Struct {
+                    self.structs.push(Struct {
                         id: sid,
                         name: sym_id,
                         module: module_id,
@@ -261,9 +239,9 @@ impl<'a> LoweringContext<'a> {
                     let fid = *self
                         .func_ids
                         .entry(res_id)
-                        .or_insert_with(|| FuncId(self.items.functions.len() as u32));
+                        .or_insert_with(|| FuncId(self.functions.len() as u32));
                     let span = self.span_id(f.span, file.file_id);
-                    self.items.functions.push(Function {
+                    self.functions.push(Function {
                         id: fid,
                         name: sym_id,
                         module: module_id,
@@ -306,7 +284,7 @@ impl<'a> LoweringContext<'a> {
                             span: self.span_id(f.name.span, file.file_id),
                         })
                         .collect();
-                    if let Some(hir_struct) = self.items.structs.get_mut(sid.0 as usize) {
+                    if let Some(hir_struct) = self.structs.get_mut(sid.0 as usize) {
                         hir_struct.fields = fields;
                     }
                 }
@@ -343,7 +321,7 @@ impl<'a> LoweringContext<'a> {
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, &module_scope);
                     let span = self.span_id(f.span, file.file_id);
-                    if let Some(hir_func) = self.items.functions.get_mut(fid.0 as usize) {
+                    if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                         hir_func.params = params;
                         hir_func.ret = ret;
                         hir_func.body = body;
@@ -357,11 +335,11 @@ impl<'a> LoweringContext<'a> {
     fn finish(self) -> hir::Program {
         hir::Program {
             modules: self.modules,
-            items: self.items,
+            functions: self.functions,
+            structs: self.structs,
             symbols: self.symbols,
             interner: self.interner,
             main: self.main,
-            files: self.files,
             spans: self.spans,
         }
     }
@@ -379,8 +357,8 @@ impl<'a> LoweringContext<'a> {
         name: InternSymbol,
         kind: SymbolKind,
     ) -> SymbolId {
-        let id = SymbolId(self.symbols.entries.len() as u32);
-        self.symbols.entries.push(Symbol {
+        let id = SymbolId(self.symbols.len() as u32);
+        self.symbols.push(Symbol {
             id,
             module,
             name,
@@ -862,14 +840,14 @@ impl<'a> LoweringContext<'a> {
                 let fid = *self
                     .func_ids
                     .entry(res_id)
-                    .or_insert_with(|| FuncId(self.items.functions.len() as u32));
+                    .or_insert_with(|| FuncId(self.functions.len() as u32));
                 SymbolKind::Function(fid)
             }
             ResSymbolKind::Struct => {
                 let sid = *self
                     .struct_ids
                     .entry(res_id)
-                    .or_insert_with(|| StructId(self.items.structs.len() as u32));
+                    .or_insert_with(|| StructId(self.structs.len() as u32));
                 SymbolKind::Struct(sid)
             }
             ResSymbolKind::Trait => SymbolKind::Trait,

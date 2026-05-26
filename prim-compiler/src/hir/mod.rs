@@ -1,7 +1,6 @@
 pub use prim_parse::{BinaryOp, InternSymbol, Interner};
 pub use prim_tok::{FileId, ModuleId, Span};
 use std::fmt;
-use std::path::PathBuf;
 
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
@@ -21,11 +20,11 @@ pub struct SpanId(pub u32);
 #[derive(Clone, Debug)]
 pub struct Program {
     pub modules: Vec<Module>,
-    pub items: Items,
-    pub symbols: SymbolTable,
+    pub functions: Vec<Function>,
+    pub structs: Vec<Struct>,
+    pub symbols: Vec<Symbol>,
     pub interner: Interner,
     pub main: Option<SymbolId>,
-    pub files: Vec<FileInfo>,
     pub spans: Vec<(FileId, Span)>,
 }
 
@@ -33,12 +32,6 @@ pub struct Program {
 pub struct Module {
     pub id: ModuleId,
     pub name: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Items {
-    pub functions: Vec<Function>,
-    pub structs: Vec<Struct>,
 }
 
 #[derive(Clone, Debug)]
@@ -155,17 +148,6 @@ pub enum ExprKind {
     Block(Block),
     /// Placeholder for expressions that failed during lowering.
     Error,
-}
-
-#[derive(Clone, Debug)]
-pub struct FileInfo {
-    pub id: FileId,
-    pub path: PathBuf,
-}
-
-#[derive(Clone, Debug)]
-pub struct SymbolTable {
-    pub entries: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug)]
