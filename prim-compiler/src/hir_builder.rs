@@ -201,7 +201,6 @@ impl<'a> LoweringContext<'a> {
             files,
             symbols: SymbolTable {
                 entries: Vec::new(),
-                by_name: HashMap::new(),
             },
             items: Items::default(),
             modules: Vec::new(),
@@ -220,11 +219,9 @@ impl<'a> LoweringContext<'a> {
     fn declare_modules_and_items(&mut self) {
         for module in &self.program.modules {
             let module_id = module.id;
-            let files = module.files.iter().map(|f| f.file_id).collect();
             self.modules.push(Module {
                 id: module_id,
                 name: module.name.clone(),
-                files,
             });
 
             for file in &module.files {
@@ -383,12 +380,6 @@ impl<'a> LoweringContext<'a> {
         kind: SymbolKind,
     ) -> SymbolId {
         let id = SymbolId(self.symbols.entries.len() as u32);
-        match kind {
-            SymbolKind::Function(_) | SymbolKind::Struct(_) | SymbolKind::Module => {
-                self.symbols.by_name.insert((module, name), id);
-            }
-            _ => {}
-        }
         self.symbols.entries.push(Symbol {
             id,
             module,
@@ -459,7 +450,11 @@ impl<'a> LoweringContext<'a> {
                             span: target.span,
                         });
                         let span = self.span_id(target.span, file_id);
-                        hir::Stmt::Expr(hir::Expr::Error { span })
+                        hir::Stmt::Expr(hir::Expr {
+                            kind: hir::ExprKind::Error,
+                            ty: hir::Type::Undetermined,
+                            span,
+                        })
                     }
                 }
             }
@@ -536,64 +531,68 @@ impl<'a> LoweringContext<'a> {
         module_scope: &ModuleScope,
     ) -> hir::Expr {
         let span = self.span_id(expr.span, file_id);
-        match &expr.kind {
-            ExprKind::Int(value) => hir::Expr::Int {
-                value: *value,
-                ty: self.lower_int_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::Float(value) => hir::Expr::Float {
-                value: *value,
-                ty: self.lower_float_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::Bool(value) => hir::Expr::Bool {
-                value: *value,
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::String(value) => hir::Expr::Str {
-                value: value.clone(),
-                ty: self
-                    .stdlib_str_struct
+        let error = || hir::Expr {
+            kind: hir::ExprKind::Error,
+            ty: hir::Type::Undetermined,
+            span,
+        };
+        let (kind, ty) = match &expr.kind {
+            ExprKind::Int(value) => (
+                hir::ExprKind::Int(*value),
+                self.lower_int_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::Float(value) => (
+                hir::ExprKind::Float(*value),
+                self.lower_float_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::Bool(value) => (
+                hir::ExprKind::Bool(*value),
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::String(value) => (
+                hir::ExprKind::Str(value.clone()),
+                self.stdlib_str_struct
                     .map(hir::Type::Struct)
                     .unwrap_or(hir::Type::Undetermined),
-                span,
-            },
+            ),
             ExprKind::Ident(ident) => {
                 let name_str = ast.resolve(ident.sym);
                 match self.resolve_name(name_str, module, file_id, ident.span, module_scope) {
-                    Some(sym) => hir::Expr::Ident {
-                        symbol: sym,
-                        ty: self.lower_type(&expr.ty, ast, module_scope),
-                        span,
-                    },
-                    None => hir::Expr::Error { span },
+                    Some(sym) => (
+                        hir::ExprKind::Ident(sym),
+                        self.lower_type(&expr.ty, ast, module_scope),
+                    ),
+                    None => return error(),
                 }
             }
-            ExprKind::Binary { left, op, right } => hir::Expr::Binary {
-                op: *op,
-                left: Box::new(self.lower_expr(left, module, file_id, ast, module_scope)),
-                right: Box::new(self.lower_expr(right, module, file_id, ast, module_scope)),
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
+            ExprKind::Binary { left, op, right } => (
+                hir::ExprKind::Binary {
+                    op: *op,
+                    left: Box::new(self.lower_expr(left, module, file_id, ast, module_scope)),
+                    right: Box::new(self.lower_expr(right, module, file_id, ast, module_scope)),
+                },
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
             ExprKind::FunctionCall { path, args } => {
                 let call_span = path.segments.last().expect("empty path").span;
                 let fid = self
                     .resolve_function_path(path, file_id, ast, module_scope)
                     .and_then(|id| self.func_ids.get(&id).copied());
                 match fid {
-                    Some(fid) => hir::Expr::Call {
-                        func: fid,
-                        args: args
-                            .iter()
-                            .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
-                            .collect(),
-                        ty: self.lower_type(&expr.ty, ast, module_scope),
-                        span: self.span_id(call_span, file_id),
-                    },
-                    None => hir::Expr::Error { span },
+                    Some(fid) => {
+                        return hir::Expr {
+                            kind: hir::ExprKind::Call {
+                                func: fid,
+                                args: args
+                                    .iter()
+                                    .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                                    .collect(),
+                            },
+                            ty: self.lower_type(&expr.ty, ast, module_scope),
+                            span: self.span_id(call_span, file_id),
+                        };
+                    }
+                    None => return error(),
                 }
             }
             ExprKind::StructLiteral { name, fields } => {
@@ -602,68 +601,89 @@ impl<'a> LoweringContext<'a> {
                     .get(struct_name)
                     .and_then(|res_id| self.struct_ids.get(res_id).copied());
                 match struct_id {
-                    Some(struct_id) => hir::Expr::StructLit {
-                        struct_id,
-                        fields: fields
-                            .iter()
-                            .map(|f| {
-                                (
-                                    f.name.sym,
-                                    self.lower_expr(&f.value, module, file_id, ast, module_scope),
-                                )
-                            })
-                            .collect(),
-                        ty: self.lower_type(&expr.ty, ast, module_scope),
-                        span,
-                    },
+                    Some(struct_id) => (
+                        hir::ExprKind::StructLit {
+                            struct_id,
+                            fields: fields
+                                .iter()
+                                .map(|f| {
+                                    (
+                                        f.name.sym,
+                                        self.lower_expr(
+                                            &f.value,
+                                            module,
+                                            file_id,
+                                            ast,
+                                            module_scope,
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                        },
+                        self.lower_type(&expr.ty, ast, module_scope),
+                    ),
                     None => {
                         self.errors.push(LoweringError::UnknownStruct {
                             name: struct_name.to_string(),
                             file: file_id,
                             span: name.span,
                         });
-                        hir::Expr::Error { span }
+                        return error();
                     }
                 }
             }
-            ExprKind::FieldAccess { object, field } => hir::Expr::Field {
-                base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
-                field: field.sym,
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::Dereference(operand) => hir::Expr::Deref {
-                base: Box::new(self.lower_expr(operand, module, file_id, ast, module_scope)),
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::Array(elements) => hir::Expr::ArrayLit {
-                elements: elements
-                    .iter()
-                    .map(|e| self.lower_expr(e, module, file_id, ast, module_scope))
-                    .collect(),
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
+            ExprKind::FieldAccess { object, field } => (
+                hir::ExprKind::Field {
+                    base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
+                    field: field.sym,
+                },
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::Dereference(operand) => (
+                hir::ExprKind::Deref(Box::new(self.lower_expr(
+                    operand,
+                    module,
+                    file_id,
+                    ast,
+                    module_scope,
+                ))),
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::Array(elements) => (
+                hir::ExprKind::ArrayLit(
+                    elements
+                        .iter()
+                        .map(|e| self.lower_expr(e, module, file_id, ast, module_scope))
+                        .collect(),
+                ),
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
             ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
-            } => hir::Expr::If {
-                condition: Box::new(self.lower_expr(condition, module, file_id, ast, module_scope)),
-                then_branch: self.lower_block(then_branch, module, file_id, ast, module_scope),
-                else_branch: else_branch
-                    .as_ref()
-                    .map(|b| self.lower_block(b, module, file_id, ast, module_scope)),
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
-            ExprKind::Block(block) => hir::Expr::Block {
-                block: self.lower_block(block, module, file_id, ast, module_scope),
-                ty: self.lower_type(&expr.ty, ast, module_scope),
-                span,
-            },
-        }
+            } => (
+                hir::ExprKind::If {
+                    condition: Box::new(self.lower_expr(
+                        condition,
+                        module,
+                        file_id,
+                        ast,
+                        module_scope,
+                    )),
+                    then_branch: self.lower_block(then_branch, module, file_id, ast, module_scope),
+                    else_branch: else_branch
+                        .as_ref()
+                        .map(|b| self.lower_block(b, module, file_id, ast, module_scope)),
+                },
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
+            ExprKind::Block(block) => (
+                hir::ExprKind::Block(self.lower_block(block, module, file_id, ast, module_scope)),
+                self.lower_type(&expr.ty, ast, module_scope),
+            ),
+        };
+        hir::Expr { kind, ty, span }
     }
 
     fn resolve_name(

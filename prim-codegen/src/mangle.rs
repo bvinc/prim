@@ -69,7 +69,6 @@ mod tests {
         SymbolKind, SymbolTable,
     };
     use prim_tok::Span;
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn program_with_module_and_symbol(
@@ -84,7 +83,6 @@ mod tests {
         let module = Module {
             id: module_id,
             name: module_name.into_iter().map(|s| s.to_string()).collect(),
-            files: Vec::new(),
         };
         let symbol = Symbol {
             id: symbol_id,
@@ -97,7 +95,6 @@ mod tests {
             items: Items::default(),
             symbols: SymbolTable {
                 entries: vec![symbol],
-                by_name: HashMap::new(),
             },
             interner,
             main: None,

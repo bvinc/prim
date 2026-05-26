@@ -596,12 +596,13 @@ impl CraneliftCodeGenerator {
         builder: &mut FunctionBuilder,
         locals: &mut VarEnv,
     ) -> Result<Vec<Value>, CodegenError> {
-        Ok(match expr {
-            hir::Expr::Int { value, ty, .. } => {
+        let ty = &expr.ty;
+        Ok(match &expr.kind {
+            hir::ExprKind::Int(value) => {
                 let (lane, _) = scalar_lane(ty)?;
                 vec![builder.ins().iconst(lane, *value)]
             }
-            hir::Expr::Float { value, ty, .. } => {
+            hir::ExprKind::Float(value) => {
                 let v = if matches!(ty, hir::Type::F32) {
                     builder.ins().f32const(Ieee32::with_float(*value as f32))
                 } else {
@@ -609,22 +610,20 @@ impl CraneliftCodeGenerator {
                 };
                 vec![v]
             }
-            hir::Expr::Bool { value, .. } => {
+            hir::ExprKind::Bool(value) => {
                 let v = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
                 vec![v]
             }
-            hir::Expr::Str { value, ty, span } => {
+            hir::ExprKind::Str(value) => {
                 let (data_ptr, len) = make_string_data(
                     builder,
                     &mut self.module,
                     program,
                     module_id,
-                    *span,
+                    expr.span,
                     value.as_bytes(),
                 )?;
 
-                // String literals have type Str (a struct with data and len fields)
-                // Allocate a stack slot and store the (data, len) pair
                 if let hir::Type::Struct(struct_id) = ty {
                     let layout = self
                         .struct_layouts
@@ -638,8 +637,6 @@ impl CraneliftCodeGenerator {
                     ));
                     let str_ptr = builder.ins().stack_addr(self.pointer_type, slot, 0);
 
-                    // Store fields at their computed offsets
-                    // Str has: data (field 0) and len (field 1)
                     if layout.fields.len() >= 2 {
                         let data_offset = layout.fields[0].offset as i32;
                         let len_offset = layout.fields[1].offset as i32;
@@ -653,12 +650,11 @@ impl CraneliftCodeGenerator {
 
                     vec![str_ptr]
                 } else {
-                    // Fallback for untyped string (shouldn't happen)
                     vec![data_ptr, len]
                 }
             }
-            hir::Expr::Ident { symbol, .. } => locals.use_symbol(builder, *symbol)?,
-            hir::Expr::Binary {
+            hir::ExprKind::Ident(symbol) => locals.use_symbol(builder, *symbol)?,
+            hir::ExprKind::Binary {
                 op, left, right, ..
             } => {
                 let l = self.lower_expr(left, program, module_id, builder, locals)?;
@@ -693,7 +689,7 @@ impl CraneliftCodeGenerator {
                 };
                 vec![res]
             }
-            hir::Expr::Call { func, args, ty, .. } => {
+            hir::ExprKind::Call { func, args } => {
                 let target = *self
                     .func_ids
                     .get(func)
@@ -797,7 +793,7 @@ impl CraneliftCodeGenerator {
                     builder.inst_results(call).to_vec()
                 }
             }
-            hir::Expr::StructLit {
+            hir::ExprKind::StructLit {
                 struct_id, fields, ..
             } => {
                 let layout = self
@@ -851,13 +847,11 @@ impl CraneliftCodeGenerator {
 
                 vec![struct_ptr]
             }
-            hir::Expr::Field {
-                base, field, ty, ..
-            } => {
+            hir::ExprKind::Field { base, field } => {
                 let base_vals = self.lower_expr(base, program, module_id, builder, locals)?;
                 let struct_ptr = base_vals[0];
                 let struct_id = base
-                    .ty()
+                    .ty
                     .as_struct()
                     .ok_or(CodegenError::InvalidFieldAccess)?;
                 let layout = self
@@ -876,9 +870,8 @@ impl CraneliftCodeGenerator {
                     .ins()
                     .iadd_imm(struct_ptr, field_layout.offset as i64);
 
-                match ty {
+                match &expr.ty {
                     hir::Type::Struct(_) => {
-                        // For nested struct, return pointer to the embedded data
                         vec![field_ptr]
                     }
                     _ => {
@@ -892,9 +885,9 @@ impl CraneliftCodeGenerator {
                     }
                 }
             }
-            hir::Expr::Deref { base, .. } => {
+            hir::ExprKind::Deref(base) => {
                 let ptr = self.lower_expr(base, program, module_id, builder, locals)?[0];
-                let pointee = match base.ty() {
+                let pointee = match &base.ty {
                     hir::Type::Pointer { pointee, .. } => pointee.as_ref(),
                     _ => return Err(CodegenError::InvalidDereference),
                 };
@@ -908,7 +901,7 @@ impl CraneliftCodeGenerator {
                 let loaded = builder.ins().load(lane, MemFlags::new(), ptr, 0);
                 vec![loaded]
             }
-            hir::Expr::ArrayLit { elements, .. } => {
+            hir::ExprKind::ArrayLit(elements) => {
                 if elements.is_empty() {
                     vec![builder.ins().iconst(types::I64, 0)]
                 } else {
@@ -916,12 +909,10 @@ impl CraneliftCodeGenerator {
                     self.lower_expr(&elements[0], program, module_id, builder, locals)?
                 }
             }
-            hir::Expr::If {
+            hir::ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
-                ty,
-                ..
             } => {
                 let cond = self.lower_expr(condition, program, module_id, builder, locals)?;
                 let cond_val = cond[0];
@@ -1025,13 +1016,13 @@ impl CraneliftCodeGenerator {
                     vec![]
                 }
             }
-            hir::Expr::Block { block, .. } => {
+            hir::ExprKind::Block(block) => {
                 let mut loop_exits: Vec<Block> = Vec::new();
                 let (vals, _terminated) =
                     self.lower_block(block, program, module_id, builder, locals, &mut loop_exits)?;
                 vals.unwrap_or_default()
             }
-            hir::Expr::Error { .. } => {
+            hir::ExprKind::Error => {
                 unreachable!("error nodes should not reach codegen")
             }
         })

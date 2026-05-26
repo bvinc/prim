@@ -1,6 +1,6 @@
 use super::{
-    BinaryOp, Block, Expr, FuncId, Function, InternSymbol, Program, SpanId, Stmt, StructId,
-    SymbolId, Type,
+    BinaryOp, Block, Expr, ExprKind, FuncId, Function, InternSymbol, Program, SpanId, Stmt,
+    StructId, SymbolId, Type,
 };
 use prim_tok::{FileId, Span};
 use std::collections::HashMap;
@@ -156,27 +156,21 @@ impl<'a> Checker<'a> {
         }
         self.loop_depth = 0;
 
-        // Type check all statements
         for stmt in &mut func.body.stmts {
             self.check_stmt(stmt, &mut locals)?;
         }
 
-        // Check return type
         if let Some(ret_ty) = &func.ret {
-            // Check for trailing expression in the block
             if let Some(expr) = &mut func.body.expr {
-                // Propagate expected return type
                 self.apply_expected(expr, ret_ty);
                 let expr_ty = self.check_expr(expr, &mut locals)?;
-
-                // Unify and check
                 match self.unify(&expr_ty, ret_ty) {
                     Some(unified) => {
                         self.apply_expected(expr, &unified);
                     }
                     None => {
                         return Err(self.error(
-                            expr.span(),
+                            expr.span,
                             TypeCheckKind::TypeMismatch {
                                 expected: ret_ty.clone(),
                                 found: expr_ty,
@@ -187,16 +181,11 @@ impl<'a> Checker<'a> {
             } else {
                 return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
             }
-        } else {
-            // No return type - still check trailing expression if present
-            if let Some(expr) = &mut func.body.expr {
-                self.check_expr(expr, &mut locals)?;
-            }
+        } else if let Some(expr) = &mut func.body.expr {
+            self.check_expr(expr, &mut locals)?;
         }
 
-        // Finalize all types (apply defaults for IntVar -> i32, FloatVar -> f64)
         self.finalize_block(&mut func.body);
-
         Ok(())
     }
 
@@ -213,18 +202,13 @@ impl<'a> Checker<'a> {
                 span,
                 ..
             } => {
-                // If we have an expected type, propagate it to the value
                 if !matches!(ty, Type::Undetermined) {
                     self.apply_expected(value, ty);
                 }
-
                 let val_ty = self.check_expr(value, locals)?;
-
                 if matches!(ty, Type::Undetermined) {
-                    // Infer type from value
                     *ty = val_ty.clone();
                 } else {
-                    // Check compatibility via unification
                     match self.unify(ty, &val_ty) {
                         Some(unified) => {
                             *ty = unified.clone();
@@ -249,18 +233,12 @@ impl<'a> Checker<'a> {
                 value,
                 span,
             } => {
-                // Look up the target's type
                 let target_ty = locals
                     .get(target)
                     .cloned()
                     .ok_or_else(|| self.error(*span, TypeCheckKind::UndefinedSymbol(*target)))?;
-
-                // Propagate expected type to value
                 self.apply_expected(value, &target_ty);
-
                 let val_ty = self.check_expr(value, locals)?;
-
-                // Check type compatibility
                 if self.unify(&target_ty, &val_ty).is_none() {
                     return Err(self.error(
                         *span,
@@ -312,7 +290,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Check a block (statements + optional trailing expression).
     fn check_block(
         &mut self,
         block: &mut Block,
@@ -334,17 +311,18 @@ impl<'a> Checker<'a> {
         expr: &mut Expr,
         locals: &mut HashMap<SymbolId, Type>,
     ) -> Result<Type, TypeCheckError> {
-        match expr {
-            Expr::Int { ty, .. } => Ok(ty.clone()),
-            Expr::Float { ty, .. } => Ok(ty.clone()),
-            Expr::Bool { ty, .. } => {
+        let Expr { kind, ty, span } = expr;
+        match kind {
+            ExprKind::Int(_) => Ok(ty.clone()),
+            ExprKind::Float(_) => Ok(ty.clone()),
+            ExprKind::Bool(_) => {
                 if matches!(ty, Type::Undetermined) {
                     *ty = Type::Bool;
                 }
                 Ok(ty.clone())
             }
-            Expr::Str { ty, .. } => Ok(ty.clone()),
-            Expr::Ident { symbol, ty, .. } => {
+            ExprKind::Str(_) => Ok(ty.clone()),
+            ExprKind::Ident(symbol) => {
                 if let Some(t) = locals.get(symbol) {
                     *ty = t.clone();
                     Ok(t.clone())
@@ -353,12 +331,8 @@ impl<'a> Checker<'a> {
                     Ok(Type::Undetermined)
                 }
             }
-            Expr::Binary {
-                op,
-                left,
-                right,
-                ty,
-                span,
+            ExprKind::Binary {
+                op, left, right, ..
             } => {
                 let l = self.check_expr(left, locals)?;
                 let r = self.check_expr(right, locals)?;
@@ -368,75 +342,60 @@ impl<'a> Checker<'a> {
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
-                    | BinaryOp::Modulo => {
-                        // Try to unify the operand types
-                        match self.unify_numeric(&l, &r) {
-                            Some(unified) => {
-                                // Propagate the unified type back to operands
-                                self.apply_expected(left, &unified);
-                                self.apply_expected(right, &unified);
-                                *ty = unified.clone();
-                                Ok(unified)
-                            }
-                            None => Err(self.error(
-                                *span,
-                                TypeCheckKind::InvalidBinaryOperands {
-                                    op: *op,
-                                    left: l,
-                                    right: r,
-                                },
-                            )),
+                    | BinaryOp::Modulo => match self.unify_numeric(&l, &r) {
+                        Some(unified) => {
+                            self.apply_expected(left, &unified);
+                            self.apply_expected(right, &unified);
+                            *ty = unified.clone();
+                            Ok(unified)
                         }
-                    }
-                    BinaryOp::Equals | BinaryOp::NotEquals => {
-                        // Try to unify for equality comparison
-                        match self.unify(&l, &r) {
-                            Some(unified) if self.is_equality_compatible(&unified) => {
-                                self.apply_expected(left, &unified);
-                                self.apply_expected(right, &unified);
-                                *ty = Type::Bool;
-                                Ok(Type::Bool)
-                            }
-                            _ => Err(self.error(
-                                *span,
-                                TypeCheckKind::InvalidBinaryOperands {
-                                    op: *op,
-                                    left: l,
-                                    right: r,
-                                },
-                            )),
+                        None => Err(self.error(
+                            *span,
+                            TypeCheckKind::InvalidBinaryOperands {
+                                op: *op,
+                                left: l,
+                                right: r,
+                            },
+                        )),
+                    },
+                    BinaryOp::Equals | BinaryOp::NotEquals => match self.unify(&l, &r) {
+                        Some(unified) if self.is_equality_compatible(&unified) => {
+                            self.apply_expected(left, &unified);
+                            self.apply_expected(right, &unified);
+                            *ty = Type::Bool;
+                            Ok(Type::Bool)
                         }
-                    }
+                        _ => Err(self.error(
+                            *span,
+                            TypeCheckKind::InvalidBinaryOperands {
+                                op: *op,
+                                left: l,
+                                right: r,
+                            },
+                        )),
+                    },
                     BinaryOp::Greater
                     | BinaryOp::GreaterEquals
                     | BinaryOp::Less
-                    | BinaryOp::LessEquals => {
-                        // Try to unify for comparison
-                        match self.unify_numeric(&l, &r) {
-                            Some(unified) => {
-                                self.apply_expected(left, &unified);
-                                self.apply_expected(right, &unified);
-                                *ty = Type::Bool;
-                                Ok(Type::Bool)
-                            }
-                            None => Err(self.error(
-                                *span,
-                                TypeCheckKind::InvalidBinaryOperands {
-                                    op: *op,
-                                    left: l,
-                                    right: r,
-                                },
-                            )),
+                    | BinaryOp::LessEquals => match self.unify_numeric(&l, &r) {
+                        Some(unified) => {
+                            self.apply_expected(left, &unified);
+                            self.apply_expected(right, &unified);
+                            *ty = Type::Bool;
+                            Ok(Type::Bool)
                         }
-                    }
+                        None => Err(self.error(
+                            *span,
+                            TypeCheckKind::InvalidBinaryOperands {
+                                op: *op,
+                                left: l,
+                                right: r,
+                            },
+                        )),
+                    },
                 }
             }
-            Expr::Call {
-                func,
-                args,
-                ty,
-                span,
-            } => {
+            ExprKind::Call { func, args } => {
                 let (params, ret) = self
                     .func_sigs
                     .get(func)
@@ -453,11 +412,8 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (arg, expected) in args.iter_mut().zip(params.iter()) {
-                    // Propagate expected parameter type
                     self.apply_expected(arg, expected);
                     let got = self.check_expr(arg, locals)?;
-
-                    // Check via unification
                     match self.unify(expected, &got) {
                         Some(unified) => {
                             self.apply_expected(arg, &unified);
@@ -477,12 +433,7 @@ impl<'a> Checker<'a> {
                 *ty = ret_ty.clone();
                 Ok(ret_ty)
             }
-            Expr::StructLit {
-                struct_id,
-                fields,
-                ty,
-                span,
-            } => {
+            ExprKind::StructLit { struct_id, fields } => {
                 for (field_sym, val) in fields {
                     let expected = {
                         let map = self.struct_fields.get(struct_id).ok_or_else(|| {
@@ -500,7 +451,6 @@ impl<'a> Checker<'a> {
                     };
                     self.apply_expected(val, &expected);
                     let got = self.check_expr(val, locals)?;
-
                     match self.unify(&expected, &got) {
                         Some(unified) => {
                             self.apply_expected(val, &unified);
@@ -520,12 +470,7 @@ impl<'a> Checker<'a> {
                 *ty = struct_ty.clone();
                 Ok(struct_ty)
             }
-            Expr::Field {
-                base,
-                field,
-                ty,
-                span,
-            } => {
+            ExprKind::Field { base, field } => {
                 let base_ty = self.check_expr(base, locals)?;
                 let struct_id = match base_ty {
                     Type::Struct(id) => id,
@@ -550,7 +495,7 @@ impl<'a> Checker<'a> {
                 *ty = field_ty.clone();
                 Ok(field_ty.clone())
             }
-            Expr::Deref { base, ty, span } => {
+            ExprKind::Deref(base) => {
                 let base_ty = self.check_expr(base, locals)?;
                 if let Type::Pointer { pointee, .. } = base_ty {
                     *ty = *pointee.clone();
@@ -559,10 +504,9 @@ impl<'a> Checker<'a> {
                     Err(self.error(*span, TypeCheckKind::InvalidDereference(base_ty)))
                 }
             }
-            Expr::ArrayLit { elements, ty, span } => {
+            ExprKind::ArrayLit(elements) => {
                 let mut elem_ty: Option<Type> = None;
                 for elem in elements.iter_mut() {
-                    // Propagate expected element type if known
                     if let Some(ref expected) = elem_ty {
                         self.apply_expected(elem, expected);
                     }
@@ -587,14 +531,11 @@ impl<'a> Checker<'a> {
                 *ty = arr.clone();
                 Ok(arr)
             }
-            Expr::If {
+            ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
-                ty,
-                span,
             } => {
-                // Check condition is bool
                 let cond_ty = self.check_expr(condition, locals)?;
                 if !matches!(cond_ty, Type::Bool) {
                     return Err(self.error(
@@ -605,81 +546,53 @@ impl<'a> Checker<'a> {
                         },
                     ));
                 }
-
-                // Check then branch
                 let then_ty = self.check_block(then_branch, locals)?;
-
-                // Check else branch
                 let else_ty = if let Some(else_block) = else_branch {
                     self.check_block(else_block, locals)?
                 } else {
                     None
                 };
-
-                // Determine the if expression's type
                 let result_ty = match (then_ty, else_ty) {
-                    (Some(t), Some(e)) => {
-                        // Both branches have values - unify them
-                        match self.unify(&t, &e) {
-                            Some(unified) => unified,
-                            None => {
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::TypeMismatch {
-                                        expected: t,
-                                        found: e,
-                                    },
-                                ));
-                            }
+                    (Some(t), Some(e)) => match self.unify(&t, &e) {
+                        Some(unified) => unified,
+                        None => {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::TypeMismatch {
+                                    expected: t,
+                                    found: e,
+                                },
+                            ));
                         }
-                    }
-                    (Some(t), None) => {
-                        // Only then has value, else is missing - this is okay for statement context
-                        // but for expression context would be an error (caught at call site)
-                        t
-                    }
+                    },
+                    (Some(t), None) => t,
                     (None, Some(e)) => e,
                     (None, None) => Type::Undetermined,
                 };
-
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            Expr::Block { block, ty, .. } => {
-                // Check the block and get its type from trailing expression
+            ExprKind::Block(block) => {
                 let block_ty = self.check_block(block, locals)?;
                 let result_ty = block_ty.unwrap_or(Type::Undetermined);
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            Expr::Error { .. } => Ok(Type::Undetermined),
+            ExprKind::Error => Ok(Type::Undetermined),
         }
     }
 
     // === Type Inference Helpers ===
 
-    /// Unify two types, returning a concrete type if possible.
-    /// Returns None if the types are incompatible.
     fn unify(&self, a: &Type, b: &Type) -> Option<Type> {
         match (a, b) {
-            // Undetermined unifies with anything
             (Type::Undetermined, other) | (other, Type::Undetermined) => Some(other.clone()),
-
-            // IntVar unifies with any integer type or another IntVar
             (Type::IntVar, Type::IntVar) => Some(Type::IntVar),
             (Type::IntVar, t) | (t, Type::IntVar) if self.is_integer(t) => Some(t.clone()),
-
-            // FloatVar unifies with any float type or another FloatVar
             (Type::FloatVar, Type::FloatVar) => Some(Type::FloatVar),
             (Type::FloatVar, t) | (t, Type::FloatVar) if self.is_float(t) => Some(t.clone()),
-
-            // IntVar and FloatVar are incompatible
             (Type::IntVar, Type::FloatVar) | (Type::FloatVar, Type::IntVar) => None,
-
-            // Struct types must match exactly
             (Type::Struct(x), Type::Struct(y)) if x == y => Some(a.clone()),
-
-            // Pointer types
             (
                 Type::Pointer {
                     mutable: ma,
@@ -693,22 +606,14 @@ impl<'a> Checker<'a> {
                 mutable: *ma,
                 pointee: Box::new(p),
             }),
-
-            // Array types
             (Type::Array(a_elem), Type::Array(b_elem)) => {
                 self.unify(a_elem, b_elem).map(|e| Type::Array(Box::new(e)))
             }
-
-            // Same concrete types
             (a, b) if a == b => Some(a.clone()),
-
-            // Otherwise incompatible
             _ => None,
         }
     }
 
-    /// Unify two types for numeric operations.
-    /// Both types must be numeric (or unify to a numeric type).
     fn unify_numeric(&self, a: &Type, b: &Type) -> Option<Type> {
         let unified = self.unify(a, b)?;
         if self.is_numeric_or_var(&unified) {
@@ -718,31 +623,28 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Apply expected type to an expression tree (propagate downward).
     fn apply_expected(&self, expr: &mut Expr, expected: &Type) {
         if matches!(expected, Type::Undetermined) {
             return;
         }
-        match expr {
-            Expr::Int { ty, .. } => {
+        let Expr { kind, ty, .. } = expr;
+        match kind {
+            ExprKind::Int(_) => {
                 if matches!(ty, Type::IntVar | Type::Undetermined) && self.is_integer(expected) {
                     *ty = expected.clone();
                 }
             }
-            Expr::Float { ty, .. } => {
+            ExprKind::Float(_) => {
                 if matches!(ty, Type::FloatVar | Type::Undetermined) && self.is_float(expected) {
                     *ty = expected.clone();
                 }
             }
-            Expr::Bool { ty, .. } => {
+            ExprKind::Bool(_) => {
                 if matches!(ty, Type::Undetermined) && matches!(expected, Type::Bool) {
                     *ty = Type::Bool;
                 }
             }
-            Expr::Binary {
-                left, right, ty, ..
-            } => {
-                // Propagate to operands if the result type is undetermined
+            ExprKind::Binary { left, right, .. } => {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     self.apply_expected(left, expected);
                     self.apply_expected(right, expected);
@@ -755,7 +657,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Finalize all types in a block, applying defaults.
     fn finalize_block(&self, block: &mut Block) {
         for stmt in &mut block.stmts {
             self.finalize_stmt(stmt);
@@ -769,9 +670,8 @@ impl<'a> Checker<'a> {
         match stmt {
             Stmt::Let { ty, value, .. } => {
                 self.finalize_expr(value);
-                // Update let binding type from finalized value type
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(value.ty());
+                    *ty = self.finalize_type(&value.ty);
                 }
             }
             Stmt::Assign { value, .. } => {
@@ -792,44 +692,43 @@ impl<'a> Checker<'a> {
     }
 
     fn finalize_expr(&self, expr: &mut Expr) {
-        match expr {
-            Expr::Int { ty, .. } => {
+        let Expr { kind, ty, .. } = expr;
+        match kind {
+            ExprKind::Int(_) => {
                 if matches!(ty, Type::IntVar) {
                     *ty = Type::I32;
                 }
             }
-            Expr::Float { ty, .. } => {
+            ExprKind::Float(_) => {
                 if matches!(ty, Type::FloatVar) {
                     *ty = Type::F64;
                 }
             }
-            Expr::Binary {
-                left, right, ty, ..
-            } => {
+            ExprKind::Binary { left, right, .. } => {
                 self.finalize_expr(left);
                 self.finalize_expr(right);
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(left.ty());
+                    *ty = self.finalize_type(&left.ty);
                 }
             }
-            Expr::Call { args, .. } => {
+            ExprKind::Call { args, .. } => {
                 for arg in args {
                     self.finalize_expr(arg);
                 }
             }
-            Expr::StructLit { fields, .. } => {
+            ExprKind::StructLit { fields, .. } => {
                 for (_, val) in fields {
                     self.finalize_expr(val);
                 }
             }
-            Expr::Field { base, .. } => {
+            ExprKind::Field { base, .. } => {
                 self.finalize_expr(base);
             }
-            Expr::Deref { base, .. } => {
+            ExprKind::Deref(base) => {
                 self.finalize_expr(base);
             }
-            Expr::ArrayLit { elements, ty, .. } => {
-                for elem in elements {
+            ExprKind::ArrayLit(elements) => {
+                for elem in elements.iter_mut() {
                     self.finalize_expr(elem);
                 }
                 if let Type::Array(elem_ty) = ty {
@@ -838,11 +737,10 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Expr::If {
+            ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
-                ty,
                 ..
             } => {
                 self.finalize_expr(condition);
@@ -851,17 +749,16 @@ impl<'a> Checker<'a> {
                     self.finalize_block(else_block);
                 }
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    // Try to get type from branches
                     if let Some(then_expr) = &then_branch.expr {
-                        *ty = self.finalize_type(then_expr.ty());
+                        *ty = self.finalize_type(&then_expr.ty);
                     }
                 }
             }
-            Expr::Block { block, ty, .. } => {
+            ExprKind::Block(block) => {
                 self.finalize_block(block);
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     if let Some(expr) = &block.expr {
-                        *ty = self.finalize_type(expr.ty());
+                        *ty = self.finalize_type(&expr.ty);
                     }
                 }
             }
@@ -869,7 +766,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Apply default types: IntVar -> i32, FloatVar -> f64
     fn finalize_type(&self, ty: &Type) -> Type {
         match ty {
             Type::IntVar => Type::I32,

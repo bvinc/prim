@@ -1,6 +1,5 @@
 pub use prim_parse::{BinaryOp, InternSymbol, Interner};
 pub use prim_tok::{FileId, ModuleId, Span};
-use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -34,7 +33,6 @@ pub struct Program {
 pub struct Module {
     pub id: ModuleId,
     pub name: Vec<String>,
-    pub files: Vec<FileId>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -117,124 +115,46 @@ pub enum Stmt {
 }
 
 #[derive(Clone, Debug)]
-pub enum Expr {
-    Int {
-        value: i64,
-        ty: Type,
-        span: SpanId,
-    },
-    Float {
-        value: f64,
-        ty: Type,
-        span: SpanId,
-    },
-    Bool {
-        value: bool,
-        ty: Type,
-        span: SpanId,
-    },
-    Str {
-        value: String,
-        ty: Type,
-        span: SpanId,
-    },
-    Ident {
-        symbol: SymbolId,
-        ty: Type,
-        span: SpanId,
-    },
+pub struct Expr {
+    pub kind: ExprKind,
+    pub ty: Type,
+    pub span: SpanId,
+}
+
+#[derive(Clone, Debug)]
+pub enum ExprKind {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    Ident(SymbolId),
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
-        ty: Type,
-        span: SpanId,
     },
     Call {
         func: FuncId,
         args: Vec<Expr>,
-        ty: Type,
-        span: SpanId,
     },
     StructLit {
         struct_id: StructId,
         fields: Vec<(InternSymbol, Expr)>,
-        ty: Type,
-        span: SpanId,
     },
     Field {
         base: Box<Expr>,
         field: InternSymbol,
-        ty: Type,
-        span: SpanId,
     },
-    Deref {
-        base: Box<Expr>,
-        ty: Type,
-        span: SpanId,
-    },
-    ArrayLit {
-        elements: Vec<Expr>,
-        ty: Type,
-        span: SpanId,
-    },
+    Deref(Box<Expr>),
+    ArrayLit(Vec<Expr>),
     If {
         condition: Box<Expr>,
         then_branch: Block,
         else_branch: Option<Block>,
-        ty: Type,
-        span: SpanId,
     },
-    Block {
-        block: Block,
-        ty: Type,
-        span: SpanId,
-    },
+    Block(Block),
     /// Placeholder for expressions that failed during lowering.
-    /// Errors are already recorded; this node prevents cascading failures.
-    Error {
-        span: SpanId,
-    },
-}
-
-impl Expr {
-    pub fn ty(&self) -> &Type {
-        match self {
-            Expr::Int { ty, .. }
-            | Expr::Float { ty, .. }
-            | Expr::Bool { ty, .. }
-            | Expr::Str { ty, .. }
-            | Expr::Ident { ty, .. }
-            | Expr::Binary { ty, .. }
-            | Expr::Call { ty, .. }
-            | Expr::StructLit { ty, .. }
-            | Expr::Field { ty, .. }
-            | Expr::Deref { ty, .. }
-            | Expr::ArrayLit { ty, .. }
-            | Expr::If { ty, .. }
-            | Expr::Block { ty, .. } => ty,
-            Expr::Error { .. } => &Type::Undetermined,
-        }
-    }
-
-    pub fn span(&self) -> SpanId {
-        match self {
-            Expr::Int { span, .. }
-            | Expr::Float { span, .. }
-            | Expr::Bool { span, .. }
-            | Expr::Str { span, .. }
-            | Expr::Ident { span, .. }
-            | Expr::Binary { span, .. }
-            | Expr::Call { span, .. }
-            | Expr::StructLit { span, .. }
-            | Expr::Field { span, .. }
-            | Expr::Deref { span, .. }
-            | Expr::ArrayLit { span, .. }
-            | Expr::If { span, .. }
-            | Expr::Block { span, .. }
-            | Expr::Error { span } => *span,
-        }
-    }
+    Error,
 }
 
 #[derive(Clone, Debug)]
@@ -246,7 +166,6 @@ pub struct FileInfo {
 #[derive(Clone, Debug)]
 pub struct SymbolTable {
     pub entries: Vec<Symbol>,
-    pub by_name: HashMap<(ModuleId, InternSymbol), SymbolId>,
 }
 
 #[derive(Clone, Debug)]
