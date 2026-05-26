@@ -263,11 +263,8 @@ impl<'a> LoweringContext<'a> {
     fn populate_items(&mut self) {
         for module in &self.program.modules {
             let module_id = module.id;
-            let module_scope = self
-                .module_scopes
-                .get(&module.id)
-                .cloned()
-                .unwrap_or_default();
+            let empty = ModuleScope::default();
+            let module_scope = self.module_scopes.get(&module.id).unwrap_or(&empty);
 
             for file in &module.files {
                 let ast = &file.ast;
@@ -280,7 +277,7 @@ impl<'a> LoweringContext<'a> {
                         .iter()
                         .map(|f| Field {
                             name: f.name.sym,
-                            ty: self.lower_type(&f.field_type, ast, &module_scope),
+                            ty: self.lower_type(&f.field_type, ast, module_scope),
                             span: self.span_id(f.name.span, file.file_id),
                         })
                         .collect();
@@ -309,7 +306,7 @@ impl<'a> LoweringContext<'a> {
                             );
                             Param {
                                 name: sym,
-                                ty: self.lower_type(&p.type_annotation, ast, &module_scope),
+                                ty: self.lower_type(&p.type_annotation, ast, module_scope),
                                 span: self.span_id(p.name.span, file.file_id),
                             }
                         })
@@ -317,9 +314,9 @@ impl<'a> LoweringContext<'a> {
                     let ret = f
                         .return_type
                         .as_ref()
-                        .map(|t| self.lower_type(t, ast, &module_scope));
+                        .map(|t| self.lower_type(t, ast, module_scope));
                     let body =
-                        self.lower_block(&f.body, module_id, file.file_id, ast, &module_scope);
+                        self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
                     if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                         hir_func.params = params;

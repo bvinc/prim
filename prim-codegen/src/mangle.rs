@@ -46,7 +46,7 @@ pub(crate) fn string_literal_symbol(
     bytes_len: usize,
 ) -> String {
     let mut name = String::from("prim");
-    if let Some(module) = program.modules.iter().find(|m| m.id == module_id) {
+    if let Some(module) = program.modules.get(module_id.0 as usize) {
         for seg in &module.name {
             push_len_segment(&mut name, "M", seg);
         }

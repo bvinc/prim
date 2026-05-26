@@ -130,12 +130,8 @@ impl<'a> ScopeCollector<'a> {
 
         // Second pass: apply imports to each module's scope
         for module in &self.program.modules {
-            let base_scope = self
-                .module_scopes
-                .get(&module.id)
-                .cloned()
-                .unwrap_or_default();
-            let effective_scope = self.apply_imports(&base_scope, &module.imports);
+            let base_scope = self.module_scopes.remove(&module.id).unwrap_or_default();
+            let effective_scope = self.apply_imports(base_scope, &module.imports);
             self.module_scopes.insert(module.id, effective_scope);
         }
     }
@@ -209,9 +205,7 @@ impl<'a> ScopeCollector<'a> {
         }
     }
 
-    fn apply_imports(&self, module_scope: &ModuleScope, imports: &[ImportRequest]) -> ModuleScope {
-        let mut scope = module_scope.clone();
-
+    fn apply_imports(&self, mut scope: ModuleScope, imports: &[ImportRequest]) -> ModuleScope {
         for ImportRequest { module, coverage } in imports {
             let key = crate::program::ModuleKey::Name(module.clone());
             let Some(module_id) = self.program.module_index.get(&key).copied() else {

@@ -72,16 +72,22 @@ fn inject_prelude_imports(
     module_segments: &[String],
     origin: ModuleOrigin,
 ) {
-    let std_string = vec!["std".into(), "string".into()];
-    if module_segments != std_string {
-        merge_import_request(imports, import_index, std_string, ImportCoverage::All);
+    if module_segments != ["std", "string"] {
+        merge_import_request(
+            imports,
+            import_index,
+            vec!["std".into(), "string".into()],
+            ImportCoverage::All,
+        );
     }
 
-    if matches!(origin, ModuleOrigin::User) {
-        let std_io = vec!["std".into(), "io".into()];
-        if module_segments != std_io {
-            merge_import_request(imports, import_index, std_io, ImportCoverage::All);
-        }
+    if matches!(origin, ModuleOrigin::User) && module_segments != ["std", "io"] {
+        merge_import_request(
+            imports,
+            import_index,
+            vec!["std".into(), "io".into()],
+            ImportCoverage::All,
+        );
     }
 }
 
