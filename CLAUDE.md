@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Prim** is a programming language compiler implemented in Rust that compiles Prim source code to native x86-64 executables using the Cranelift code generation backend.
+**Prim** is a programming language compiler implemented in Rust that compiles Prim source code to WebAssembly (wasm32 + WASI) modules, runnable via wasmtime.
 
 ### Design Goals
 
@@ -41,9 +41,7 @@ prim/
 ├── prim-tok/           # Tokenizer/lexer (source → tokens)
 ├── prim-parse/         # Parser (tokens → AST)
 ├── prim-compiler/      # Name resolution, type checking, AST → HIR lowering
-├── prim-hir/           # High-level IR definitions and type checker
-├── prim-codegen/       # Cranelift code generation (HIR → object code)
-├── prim-rt/            # Runtime library (static lib linked into executables)
+├── prim-wasm/          # HIR → wasm32+WASI module via wasm-encoder
 ├── prim-std/           # Standard library (Prim source files)
 └── prim-cli/test_programs/  # Test .prim programs with .expected output files
 ```
@@ -51,9 +49,10 @@ prim/
 ### Compilation Pipeline
 1. **Tokenization** (`prim-tok`): Source code → tokens using zero-copy string slices
 2. **Parsing** (`prim-parse`): Tokens → AST via recursive descent
-3. **Lowering** (`prim-compiler`): AST → HIR with name resolution and type checking
-4. **Code Generation** (`prim-codegen`): HIR → native object code via Cranelift IR
-5. **Linking**: Object code + runtime library → executable via system linker
+3. **Lowering** (`prim-compiler`): AST → HIR with name resolution
+4. **Type checking** (`prim-compiler::hir::typecheck`): infer and resolve types on HIR in place
+5. **Code Generation** (`prim-wasm`): HIR → wasm binary; runtime helpers (println_*, allocator) are inlined as wasm functions using WASI fd_write directly
+6. **Execution**: `prim run` shells out to `wasmtime run`; `prim build` writes the `.wasm` file
 
 ## Development Commands
 
@@ -90,7 +89,7 @@ cargo run -p prim -- build prim-cli/test_programs/basic_hello.prim
 cargo run -p prim -- run prim-cli/test_programs/basic_hello.prim
 ```
 
-The `PRIM_ROOT` environment variable tells the CLI where to find the standard library and runtime.
+The `PRIM_ROOT` environment variable tells the CLI where to find the standard library. Running compiled output also requires `wasmtime` on `PATH`.
 
 ## Git Hooks
 
