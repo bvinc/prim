@@ -14,14 +14,13 @@ path = "src/main.rs"
 [dependencies]
 prim-tok = { path = "../prim-tok" }
 prim-parse = { path = "../prim-parse" }
-prim-codegen = { path = "../prim-codegen" }
+prim-wasm = { path = "../prim-wasm" }
 prim-compiler = { path = "../prim-compiler" }
 tempfile = "3.8"
 indexmap = "2.2"
 
 [dev-dependencies]
 tempfile = "3.8"
-prim-rt = { path = "../prim-rt" }
 
 [lints]
 workspace = true

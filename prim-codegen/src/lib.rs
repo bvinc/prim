@@ -1024,6 +1024,9 @@ impl CraneliftCodeGenerator {
             hir::ExprKind::Error => {
                 unreachable!("error nodes should not reach codegen")
             }
+            hir::ExprKind::Dbg { .. } => {
+                unreachable!("@dbg is only supported by the wasm backend")
+            }
         })
     }
 }

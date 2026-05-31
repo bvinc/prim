@@ -5,6 +5,7 @@ members = [
     "prim-parse",
     "prim-compiler",
     "prim-codegen",
+    "prim-wasm",
     "prim-rt",
 ]
 resolver = "2"

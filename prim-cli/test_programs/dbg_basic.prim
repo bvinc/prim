@@ -1,0 +1,10 @@
+import std.io.println_i32
+
+fn main() {
+    let n = 5
+    @dbg(n <= 1)
+    @dbg(n + 1)
+    @dbg(true)
+    let y = @dbg(n * 2)
+    println_i32(y)
+}

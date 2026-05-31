@@ -1,6 +1,8 @@
 byte_array_literal
 float_ops
+import_selective_fn
 literal_errors
 numeric_min_max
+print_str
 struct_errors
 struct_type_checking

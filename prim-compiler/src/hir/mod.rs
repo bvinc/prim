@@ -140,6 +140,12 @@ pub enum ExprKind {
     },
     Deref(Box<Expr>),
     ArrayLit(Vec<Expr>),
+    Dbg {
+        /// Pre-rendered `[path:line:col] expr_text = ` prefix string,
+        /// computed at lowering time so codegen needs no source access.
+        prefix: String,
+        inner: Box<Expr>,
+    },
     If {
         condition: Box<Expr>,
         then_branch: Block,

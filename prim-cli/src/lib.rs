@@ -3,12 +3,12 @@
 //! This module exposes the core compilation and execution functionality
 //! for use by both the CLI binary and tests.
 
-use prim_codegen::generate_object_code;
 use prim_compiler::hir;
 use prim_compiler::{CompileError, FileId, LoadError, LoadOptions, SourceMap, compile};
 use prim_tok::{Span, byte_offset_to_line_col};
+use prim_wasm::generate_wasm;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -25,7 +25,6 @@ pub struct RunOutput {
 pub enum RunError {
     CompilationError(String),
     IoError(std::io::Error),
-    LinkingError(String),
     ExecutionError(String),
 }
 
@@ -34,7 +33,6 @@ impl std::fmt::Display for RunError {
         match self {
             RunError::CompilationError(msg) => write!(f, "Compilation error: {}", msg),
             RunError::IoError(err) => write!(f, "IO error: {}", err),
-            RunError::LinkingError(msg) => write!(f, "Linking error: {}", msg),
             RunError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
         }
     }
@@ -57,6 +55,7 @@ pub fn compile_and_run(path: &str) -> Result<RunOutput, RunError> {
 
 /// Compile and run a Prim source file with an explicit prim root.
 ///
+/// Compiles to wasm and runs via wasmtime.
 /// If `prim_root` is None, uses PRIM_ROOT from environment or exe-relative discovery.
 pub fn compile_and_run_with_root(
     path: &str,
@@ -64,28 +63,26 @@ pub fn compile_and_run_with_root(
 ) -> Result<RunOutput, RunError> {
     let hir = compile_source_with_root(path, prim_root)?;
 
-    let object_code = generate_object_code(&hir)
+    let wasm_bytes = generate_wasm(&hir)
         .map_err(|err| RunError::CompilationError(format!("Code generation error: {}", err)))?;
 
-    // Create temporary files for object code and executable
-    let temp_obj = tempfile::Builder::new()
-        .suffix(".o")
+    let temp_wasm = tempfile::Builder::new()
+        .suffix(".wasm")
         .tempfile()
         .map_err(RunError::IoError)?;
-    let obj_filename = temp_obj.path().to_string_lossy().to_string();
 
-    let temp_exe_file = tempfile::Builder::new()
-        .tempfile()
-        .map_err(RunError::IoError)?;
-    let temp_exe_path = temp_exe_file.into_temp_path();
-    let executable_name = temp_exe_path.to_string_lossy().to_string();
+    fs::write(temp_wasm.path(), &wasm_bytes)?;
 
-    fs::write(&obj_filename, &object_code)?;
-    link_executable_with_root(&obj_filename, &executable_name, prim_root)?;
-
-    let run_result = Command::new(&executable_name)
+    let run_result = Command::new("wasmtime")
+        .arg("run")
+        .arg(temp_wasm.path())
         .output()
-        .map_err(|err| RunError::ExecutionError(format!("Error running program: {}", err)))?;
+        .map_err(|err| {
+            RunError::ExecutionError(format!(
+                "Error running wasmtime: {}. Make sure wasmtime is installed.",
+                err
+            ))
+        })?;
 
     Ok(RunOutput {
         stdout: String::from_utf8_lossy(&run_result.stdout).into_owned(),
@@ -177,66 +174,17 @@ fn format_with_span(
     }
 }
 
-/// Link object code into an executable.
-pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), RunError> {
-    link_executable_with_root(obj_path, exe_path, None)
+/// Generate a wasm binary from a source file.
+pub fn generate_wasm_binary(path: &str) -> Result<Vec<u8>, RunError> {
+    generate_wasm_binary_with_root(path, None)
 }
 
-/// Link object code into an executable with an explicit prim root.
-pub fn link_executable_with_root(
-    obj_path: &str,
-    exe_path: &str,
+/// Generate a wasm binary from a source file with an explicit prim root.
+pub fn generate_wasm_binary_with_root(
+    path: &str,
     prim_root: Option<&Path>,
-) -> Result<(), RunError> {
-    let rt_lib = runtime_lib_path_with_root(prim_root)?;
-    let output = Command::new("gcc")
-        .args([obj_path, rt_lib.to_string_lossy().as_ref(), "-o", exe_path])
-        .output()
-        .map_err(|err| {
-            RunError::LinkingError(format!(
-                "Error running linker: {}. Make sure gcc is installed and in your PATH",
-                err
-            ))
-        })?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(RunError::LinkingError(format!(
-            "Linking failed: {}",
-            stderr
-        )))
-    }
-}
-
-/// Return a path to the runtime static library.
-pub fn runtime_lib_path() -> Result<PathBuf, RunError> {
-    runtime_lib_path_with_root(None)
-}
-
-/// Return a path to the runtime static library with an explicit prim root.
-pub fn runtime_lib_path_with_root(prim_root: Option<&Path>) -> Result<PathBuf, RunError> {
-    let root = match prim_root {
-        Some(r) => r.to_path_buf(),
-        None => {
-            prim_compiler::prim_root().map_err(|e| RunError::CompilationError(e.to_string()))?
-        }
-    };
-
-    let staticlib_name = if cfg!(target_os = "windows") {
-        "prim_rt.lib"
-    } else {
-        "libprim_rt.a"
-    };
-
-    let staticlib_path = root.join("lib").join(staticlib_name);
-    if !staticlib_path.exists() {
-        return Err(RunError::LinkingError(format!(
-            "runtime static library not found at {}",
-            staticlib_path.display()
-        )));
-    }
-
-    Ok(staticlib_path)
+) -> Result<Vec<u8>, RunError> {
+    let hir = compile_source_with_root(path, prim_root)?;
+    generate_wasm(&hir)
+        .map_err(|err| RunError::CompilationError(format!("Code generation error: {}", err)))
 }

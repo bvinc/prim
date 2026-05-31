@@ -19,22 +19,6 @@ pub fn staged_prim_root() -> PathBuf {
         let std_dst = root.join("src").join("std");
         copy_dir(&std_src, &std_dst).expect("copy std");
 
-        // Copy runtime library
-        let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-        let lib_name = if cfg!(target_os = "windows") {
-            "prim_rt.lib"
-        } else {
-            "libprim_rt.a"
-        };
-        let rt_src = workspace
-            .join("target")
-            .join(&profile)
-            .join("deps")
-            .join(lib_name);
-        let rt_dst_dir = root.join("lib");
-        fs::create_dir_all(&rt_dst_dir).expect("create lib dir");
-        fs::copy(&rt_src, rt_dst_dir.join(lib_name)).expect("copy runtime lib");
-
         root
     })
     .clone()

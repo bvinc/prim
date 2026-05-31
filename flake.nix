@@ -21,6 +21,7 @@
           rustup
 
           pre-commit
+          wasmtime
 
           # debugging & profiling
           gdb

@@ -78,6 +78,7 @@ pub enum ExprKind {
     },
     Dereference(Box<Expr>),
     Array(Vec<Expr>),
+    Dbg(Box<Expr>),
     If {
         condition: Box<Expr>,
         then_branch: Block,

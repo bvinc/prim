@@ -1,5 +1,4 @@
-use prim::{RunError, compile_and_run, compile_source, link_executable};
-use prim_codegen::generate_object_code;
+use prim::{RunError, compile_and_run, generate_wasm_binary};
 use std::env;
 use std::fs;
 use std::time::Instant;
@@ -107,35 +106,15 @@ fn print_help(program_name: &str) {
 }
 
 fn build_program(filename: &str) -> Result<(), MainError> {
-    let compile_start = Instant::now();
-    let hir = compile_source(filename)?;
-    let compile_dur = compile_start.elapsed();
+    let start = Instant::now();
+    let wasm_bytes = generate_wasm_binary(filename)?;
+    let dur = start.elapsed();
 
-    let link_start = Instant::now();
-    let object_code = generate_object_code(&hir)
-        .map_err(|err| RunError::CompilationError(format!("Code generation error: {}", err)))?;
+    let wasm_filename = filename.trim_end_matches(".prim").to_string() + ".wasm";
+    fs::write(&wasm_filename, &wasm_bytes).map_err(RunError::IoError)?;
 
-    let executable_name = filename.trim_end_matches(".prim");
-    let obj_filename = format!("{}.o", executable_name);
-
-    fs::write(&obj_filename, &object_code).map_err(RunError::IoError)?;
-    link_executable(&obj_filename, executable_name)?;
-
-    let link_dur = link_start.elapsed();
-    println!("Successfully built executable: {}", executable_name);
-    println!(
-        "[timing] compile: {} ms, link: {} ms",
-        compile_dur.as_millis(),
-        link_dur.as_millis()
-    );
-
-    // Clean up object file
-    if let Err(err) = fs::remove_file(&obj_filename) {
-        eprintln!(
-            "Warning: Could not clean up object file {}: {}",
-            obj_filename, err
-        );
-    }
+    println!("Successfully built: {}", wasm_filename);
+    println!("[timing] {} ms", dur.as_millis());
     Ok(())
 }
 

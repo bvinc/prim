@@ -258,14 +258,18 @@ fn test_parse_error_unexpected_token() {
 }
 
 #[test]
-fn test_parse_error_from_tokenizer() {
-    let result = parse("fn main() { let x = @ }").0;
+fn test_parse_error_unknown_expression_attribute() {
+    // Only @dbg is allowed at expression position; anything else is an error.
+    let result = parse("fn main() { let x = @foo(1) }").0;
 
     match result {
-        Err(ParseError::TokenError(prim_tok::TokenError::UnexpectedCharacter { ch, .. })) => {
-            assert_eq!(ch, '@');
+        Err(ParseError::InvalidAttributeUsage { message, .. }) => {
+            assert!(
+                message.contains("@foo"),
+                "expected message to mention @foo, got: {message}"
+            );
         }
-        _ => panic!("Expected TokenError from tokenizer, got {:?}", result),
+        _ => panic!("Expected InvalidAttributeUsage, got {:?}", result),
     }
 }
 

@@ -435,15 +435,7 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::Block(block),
                 })
             }
-            Some(TokenKind::At) => {
-                // Treat stray '@' as a tokenizer-level unexpected character to preserve error behavior
-                Err(ParseError::TokenError(
-                    prim_tok::TokenError::UnexpectedCharacter {
-                        ch: '@',
-                        span: self.current_span(),
-                    },
-                ))
-            }
+            Some(TokenKind::At) => self.parse_expr_attribute(),
             Some(kind) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: kind,
@@ -1287,6 +1279,30 @@ impl PendingAttrs {
 }
 
 impl<'a> Parser<'a> {
+    /// Parse an expression-position attribute like `@dbg(expr)`.
+    /// Currently only `@dbg` is supported here.
+    fn parse_expr_attribute(&mut self) -> Result<Expr, ParseError> {
+        let at_span = self.advance().span; // consume '@'
+        let name_tok = self.consume(TokenKind::Identifier, "attribute name")?;
+        let name_span = name_tok.span;
+        let name = name_span.text(self.source).to_string();
+        if name != "dbg" {
+            return Err(ParseError::InvalidAttributeUsage {
+                message: format!("unknown expression attribute @{name}"),
+                span: name_span,
+            });
+        }
+        self.consume(TokenKind::LeftParen, "Expected '(' after @dbg")?;
+        let inner = self.parse_expression(Precedence::NONE)?;
+        let close = self.consume(TokenKind::RightParen, "Expected ')' after @dbg argument")?;
+        let span = at_span.cover(close.span);
+        Ok(Expr {
+            span,
+            ty: Type::Undetermined,
+            kind: ExprKind::Dbg(Box::new(inner)),
+        })
+    }
+
     fn parse_attributes(&mut self) -> Result<PendingAttrs, ParseError> {
         let mut attrs = PendingAttrs::default();
         loop {

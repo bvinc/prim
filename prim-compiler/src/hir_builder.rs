@@ -7,6 +7,7 @@ use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum LoweringError {
@@ -162,6 +163,12 @@ struct LoweringContext<'a> {
     stdlib_str_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
+    /// Path per file, populated up-front from the program. Used to build
+    /// `@dbg` prefix strings.
+    file_paths: HashMap<FileId, PathBuf>,
+    /// Lazily-read source bytes keyed by FileId. Populated on first `@dbg`
+    /// lowering for a given file.
+    source_cache: HashMap<FileId, String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -172,6 +179,13 @@ impl<'a> LoweringContext<'a> {
             .first()
             .map(|f| f.ast.interner.clone())
             .expect("root module should have at least one file");
+
+        let mut file_paths = HashMap::new();
+        for module in &program.modules {
+            for file in &module.files {
+                file_paths.insert(file.file_id, file.path.clone());
+            }
+        }
 
         Self {
             program,
@@ -191,7 +205,21 @@ impl<'a> LoweringContext<'a> {
             stdlib_str_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
+            file_paths,
+            source_cache: HashMap::new(),
         }
+    }
+
+    /// Read (lazily, cached) the source text for the given file.
+    /// Returns an empty string if reading fails — `@dbg` is best-effort and
+    /// shouldn't break the build if a file is gone.
+    fn source_for(&mut self, file_id: FileId) -> &str {
+        self.source_cache.entry(file_id).or_insert_with(|| {
+            self.file_paths
+                .get(&file_id)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default()
+        })
     }
 
     fn declare_modules_and_items(&mut self) {
@@ -657,6 +685,33 @@ impl<'a> LoweringContext<'a> {
                 hir::ExprKind::Block(self.lower_block(block, module, file_id, ast, module_scope)),
                 self.lower_type(&expr.ty, ast, module_scope),
             ),
+            ExprKind::Dbg(inner) => {
+                let inner_span = inner.span;
+                // Take path as an owned String now so the &self.file_paths
+                // borrow is released before we call source_for(&mut self).
+                // Use only the basename so output is portable across machines.
+                let path_str = self
+                    .file_paths
+                    .get(&file_id)
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let prefix = {
+                    let source = self.source_for(file_id);
+                    let (line, col) = inner_span.line_col(source);
+                    let expr_text = inner_span.text(source);
+                    format!("[{path_str}:{line}:{col}] {expr_text} = ")
+                };
+                let lowered_inner = self.lower_expr(inner, module, file_id, ast, module_scope);
+                let dbg_ty = lowered_inner.ty.clone();
+                (
+                    hir::ExprKind::Dbg {
+                        prefix,
+                        inner: Box::new(lowered_inner),
+                    },
+                    dbg_ty,
+                )
+            }
         };
         hir::Expr { kind, ty, span }
     }
