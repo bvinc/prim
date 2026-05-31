@@ -2,6 +2,7 @@ use prim_parse as ast;
 use prim_tok::{FileId, ModuleId, Span};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ModuleKey {
@@ -21,6 +22,9 @@ pub(crate) struct Program {
     pub root: ModuleId,
     pub module_index: HashMap<ModuleKey, ModuleId>,
     pub symbols: Vec<ResSymbolInfo>,
+    /// One interner shared by every file in this compilation. Identifiers
+    /// from any file are universally comparable.
+    pub interner: Arc<ast::Interner>,
 }
 
 #[derive(Clone, Debug)]

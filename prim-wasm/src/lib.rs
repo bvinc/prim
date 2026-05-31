@@ -249,19 +249,56 @@ struct DbgSite {
     len: u32,
 }
 
+/// Static-memory location of a string literal's bytes.
+#[derive(Clone, Copy)]
+struct StrSite {
+    ptr: u32,
+    len: u32,
+}
+
 struct EmitCtx<'a> {
+    program: &'a hir::Program,
     locals: HashMap<hir::SymbolId, u32>,
     funcs: &'a HashMap<hir::FuncId, u32>,
     runtime: &'a HashMap<hir::FuncId, String>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
     scratch_base: u32,
-    /// Counter increments once per `StructLit` or `Dbg` site encountered in
-    /// pre-order. Indexes into the function's scratch local pool.
+    /// Counter increments once per `StructLit`, `Dbg`, or `Str` site
+    /// encountered in pre-order. Indexes into the function's scratch
+    /// local pool.
     scratch_counter: Cell<u32>,
     /// Per-function slice of dbg site memory layouts, indexed by `dbg_counter`.
     dbg_sites: &'a [DbgSite],
     dbg_counter: Cell<u32>,
+    /// Per-function slice of string literal memory layouts.
+    str_sites: &'a [StrSite],
+    str_counter: Cell<u32>,
+}
+
+/// Look up the offset of a struct field by its name.
+///
+/// Walks `program.structs` to find the struct, then matches a field by its
+/// resolved name string. The `lasso::ThreadedRodeo` interner is shared
+/// across the whole compilation so `InternSymbol` comparisons would also
+/// work, but resolving by string is one extra layer that makes this robust
+/// against future name-collisions in synthetic symbols.
+fn struct_field_offset(
+    program: &hir::Program,
+    layouts: &HashMap<hir::StructId, StructLayout>,
+    struct_id: hir::StructId,
+    field_name: &str,
+) -> Option<u32> {
+    let s = program.structs.iter().find(|s| s.id == struct_id)?;
+    let field = s
+        .fields
+        .iter()
+        .find(|f| program.interner.resolve(&f.name) == field_name)?;
+    layouts
+        .get(&struct_id)?
+        .fields
+        .get(&field.name)
+        .map(|(off, _)| *off)
 }
 
 // --- Main entry point ---
@@ -346,29 +383,44 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let main_wasm_idx = main_wasm_idx.ok_or(WasmError::MissingMain)?;
 
     // First pass: walk every user function in the same order they'll be emitted,
-    // collect dbg prefix strings, lay them out in static memory starting at
-    // DBG_DATA_START. Record per-function slice ranges so each function's
-    // EmitCtx can index into the global table by per-function counter.
-    const DBG_DATA_START: u32 = 128;
+    // collect dbg prefix strings AND string literal bytes, lay them out in
+    // static memory starting at STATIC_DATA_START. Record per-function slice
+    // ranges so each function's EmitCtx can index into the global tables by
+    // per-function counter.
+    const STATIC_DATA_START: u32 = 128;
     let mut dbg_sites: Vec<DbgSite> = Vec::new();
-    let mut dbg_data: Vec<u8> = Vec::new();
+    let mut str_sites: Vec<StrSite> = Vec::new();
+    let mut static_data: Vec<u8> = Vec::new();
     let mut per_func_dbg_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
-    let mut cursor: u32 = DBG_DATA_START;
+    let mut per_func_str_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
+    let mut cursor: u32 = STATIC_DATA_START;
     for func in &program.functions {
         if func.runtime_binding.is_some() {
             continue;
         }
-        let start = dbg_sites.len();
+        let dbg_start = dbg_sites.len();
         let mut prefixes: Vec<&str> = Vec::new();
         collect_dbg_prefixes_block(&func.body, &mut prefixes);
         for prefix in prefixes {
             let bytes = prefix.as_bytes();
             let len = bytes.len() as u32;
-            dbg_data.extend_from_slice(bytes);
+            static_data.extend_from_slice(bytes);
             dbg_sites.push(DbgSite { ptr: cursor, len });
             cursor += len;
         }
-        per_func_dbg_range.insert(func.id, start..dbg_sites.len());
+        per_func_dbg_range.insert(func.id, dbg_start..dbg_sites.len());
+
+        let str_start = str_sites.len();
+        let mut literals: Vec<&str> = Vec::new();
+        collect_str_literals_block(&func.body, &mut literals);
+        for s in literals {
+            let bytes = s.as_bytes();
+            let len = bytes.len() as u32;
+            static_data.extend_from_slice(bytes);
+            str_sites.push(StrSite { ptr: cursor, len });
+            cursor += len;
+        }
+        per_func_str_range.insert(func.id, str_start..str_sites.len());
     }
     let heap_start: i32 = ((cursor + 7) & !7).max(1024) as i32;
 
@@ -439,15 +491,19 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_print_bytes(fd_write_idx));
     for func in &program.functions {
         if func.runtime_binding.is_none() {
-            let range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
-            let dbg_slice = &dbg_sites[range];
+            let dbg_range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
+            let str_range = per_func_str_range.get(&func.id).cloned().unwrap_or(0..0);
+            let dbg_slice = &dbg_sites[dbg_range];
+            let str_slice = &str_sites[str_range];
             let ctx = build_emit_ctx(
+                program,
                 func,
                 &func_map,
                 &runtime_map,
                 &builtins,
                 &struct_layouts,
                 dbg_slice,
+                str_slice,
             );
             codes.function(&emit_user_function(func, &ctx)?);
         }
@@ -478,11 +534,11 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         b"false".iter().copied(),
     );
     data.active(0, &ConstExpr::i32_const(DOT_OFFSET), b".".iter().copied());
-    if !dbg_data.is_empty() {
+    if !static_data.is_empty() {
         data.active(
             0,
-            &ConstExpr::i32_const(DBG_DATA_START as i32),
-            dbg_data.iter().copied(),
+            &ConstExpr::i32_const(STATIC_DATA_START as i32),
+            static_data.iter().copied(),
         );
     }
     module.section(&data);
@@ -490,13 +546,16 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     Ok(module.finish())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_emit_ctx<'a>(
+    program: &'a hir::Program,
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
     runtime_map: &'a HashMap<hir::FuncId, String>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
     dbg_sites: &'a [DbgSite],
+    str_sites: &'a [StrSite],
 ) -> EmitCtx<'a> {
     let mut locals = HashMap::new();
     for (i, param) in func.params.iter().enumerate() {
@@ -509,6 +568,7 @@ fn build_emit_ctx<'a>(
     }
     let scratch_base = param_count + body_locals.len() as u32;
     EmitCtx {
+        program,
         locals,
         funcs: func_map,
         runtime: runtime_map,
@@ -518,6 +578,8 @@ fn build_emit_ctx<'a>(
         scratch_counter: Cell::new(0),
         dbg_sites,
         dbg_counter: Cell::new(0),
+        str_sites,
+        str_counter: Cell::new(0),
     }
 }
 
@@ -604,59 +666,80 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
 // We pre-walk the function body in the same pre-order that emission uses, so
 // per-node counters in `EmitCtx` line up with this collected list.
 
-fn collect_scratch_types_block(block: &hir::Block, out: &mut Vec<ValType>) {
+fn collect_scratch_types_block(
+    block: &hir::Block,
+    runtime: &HashMap<hir::FuncId, String>,
+    out: &mut Vec<ValType>,
+) {
     for stmt in &block.stmts {
-        collect_scratch_types_stmt(stmt, out);
+        collect_scratch_types_stmt(stmt, runtime, out);
     }
     if let Some(expr) = &block.expr {
-        collect_scratch_types_expr(expr, out);
+        collect_scratch_types_expr(expr, runtime, out);
     }
 }
 
-fn collect_scratch_types_stmt(stmt: &hir::Stmt, out: &mut Vec<ValType>) {
+fn collect_scratch_types_stmt(
+    stmt: &hir::Stmt,
+    runtime: &HashMap<hir::FuncId, String>,
+    out: &mut Vec<ValType>,
+) {
     match stmt {
         hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
-            collect_scratch_types_expr(value, out);
+            collect_scratch_types_expr(value, runtime, out);
         }
-        hir::Stmt::Expr(e) => collect_scratch_types_expr(e, out),
-        hir::Stmt::Loop { body, .. } => collect_scratch_types_block(body, out),
+        hir::Stmt::Expr(e) => collect_scratch_types_expr(e, runtime, out),
+        hir::Stmt::Loop { body, .. } => collect_scratch_types_block(body, runtime, out),
         hir::Stmt::While {
             condition, body, ..
         } => {
-            collect_scratch_types_expr(condition, out);
-            collect_scratch_types_block(body, out);
+            collect_scratch_types_expr(condition, runtime, out);
+            collect_scratch_types_block(body, runtime, out);
         }
         hir::Stmt::Break { .. } => {}
     }
 }
 
-fn collect_scratch_types_expr(expr: &hir::Expr, out: &mut Vec<ValType>) {
+fn collect_scratch_types_expr(
+    expr: &hir::Expr,
+    runtime: &HashMap<hir::FuncId, String>,
+    out: &mut Vec<ValType>,
+) {
     match &expr.kind {
         hir::ExprKind::StructLit { fields, .. } => {
             out.push(ValType::I32);
             for (_, val) in fields {
-                collect_scratch_types_expr(val, out);
+                collect_scratch_types_expr(val, runtime, out);
             }
         }
         hir::ExprKind::Dbg { inner, .. } => {
             out.push(hir_type_to_valtype(&inner.ty));
-            collect_scratch_types_expr(inner, out);
+            collect_scratch_types_expr(inner, runtime, out);
+        }
+        hir::ExprKind::Str(_) => {
+            // One scratch i32 holding the bump-allocated String struct ptr.
+            out.push(ValType::I32);
         }
         hir::ExprKind::Binary { left, right, .. } => {
-            collect_scratch_types_expr(left, out);
-            collect_scratch_types_expr(right, out);
+            collect_scratch_types_expr(left, runtime, out);
+            collect_scratch_types_expr(right, runtime, out);
         }
-        hir::ExprKind::Call { args, .. } => {
+        hir::ExprKind::Call { func, args } => {
+            // write(fd, s: String) needs one i32 scratch to duplicate the
+            // String struct ptr across two field loads.
+            if runtime.get(func).map(String::as_str) == Some("prim_rt_write") {
+                out.push(ValType::I32);
+            }
             for a in args {
-                collect_scratch_types_expr(a, out);
+                collect_scratch_types_expr(a, runtime, out);
             }
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
-            collect_scratch_types_expr(base, out);
+            collect_scratch_types_expr(base, runtime, out);
         }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
-                collect_scratch_types_expr(e, out);
+                collect_scratch_types_expr(e, runtime, out);
             }
         }
         hir::ExprKind::If {
@@ -664,13 +747,13 @@ fn collect_scratch_types_expr(expr: &hir::Expr, out: &mut Vec<ValType>) {
             then_branch,
             else_branch,
         } => {
-            collect_scratch_types_expr(condition, out);
-            collect_scratch_types_block(then_branch, out);
+            collect_scratch_types_expr(condition, runtime, out);
+            collect_scratch_types_block(then_branch, runtime, out);
             if let Some(eb) = else_branch {
-                collect_scratch_types_block(eb, out);
+                collect_scratch_types_block(eb, runtime, out);
             }
         }
-        hir::ExprKind::Block(block) => collect_scratch_types_block(block, out),
+        hir::ExprKind::Block(block) => collect_scratch_types_block(block, runtime, out),
         _ => {}
     }
 }
@@ -747,12 +830,82 @@ fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
     }
 }
 
+// --- String literal collection (pre-order, matches emission order) ---
+
+fn collect_str_literals_block<'a>(block: &'a hir::Block, out: &mut Vec<&'a str>) {
+    for stmt in &block.stmts {
+        collect_str_literals_stmt(stmt, out);
+    }
+    if let Some(expr) = &block.expr {
+        collect_str_literals_expr(expr, out);
+    }
+}
+
+fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
+    match stmt {
+        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
+            collect_str_literals_expr(value, out);
+        }
+        hir::Stmt::Expr(e) => collect_str_literals_expr(e, out),
+        hir::Stmt::Loop { body, .. } => collect_str_literals_block(body, out),
+        hir::Stmt::While {
+            condition, body, ..
+        } => {
+            collect_str_literals_expr(condition, out);
+            collect_str_literals_block(body, out);
+        }
+        hir::Stmt::Break { .. } => {}
+    }
+}
+
+fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
+    match &expr.kind {
+        hir::ExprKind::Str(s) => out.push(s.as_str()),
+        hir::ExprKind::Dbg { inner, .. } => collect_str_literals_expr(inner, out),
+        hir::ExprKind::StructLit { fields, .. } => {
+            for (_, val) in fields {
+                collect_str_literals_expr(val, out);
+            }
+        }
+        hir::ExprKind::Binary { left, right, .. } => {
+            collect_str_literals_expr(left, out);
+            collect_str_literals_expr(right, out);
+        }
+        hir::ExprKind::Call { args, .. } => {
+            for a in args {
+                collect_str_literals_expr(a, out);
+            }
+        }
+        hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
+            collect_str_literals_expr(base, out);
+        }
+        hir::ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                collect_str_literals_expr(e, out);
+            }
+        }
+        hir::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_str_literals_expr(condition, out);
+            collect_str_literals_block(then_branch, out);
+            if let Some(eb) = else_branch {
+                collect_str_literals_block(eb, out);
+            }
+        }
+        hir::ExprKind::Block(block) => collect_str_literals_block(block, out),
+        _ => {}
+    }
+}
+
 // --- User function emission ---
 
 fn emit_user_function(func: &hir::Function, ctx: &EmitCtx) -> Result<Function, WasmError> {
     let body_locals = collect_locals(&func.body);
     let mut scratch_types: Vec<ValType> = Vec::new();
-    collect_scratch_types_block(&func.body, &mut scratch_types);
+    collect_scratch_types_block(&func.body, ctx.runtime, &mut scratch_types);
     let mut wasm_locals: Vec<(u32, ValType)> = body_locals.iter().map(|(_, vt)| (1, *vt)).collect();
     for vt in &scratch_types {
         wasm_locals.push((1, *vt));
@@ -942,11 +1095,107 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::Dbg { inner, .. } => {
             emit_dbg(f, inner, ctx)?;
         }
+        hir::ExprKind::Str(_) => {
+            emit_str_lit(f, &expr.ty, ctx);
+        }
         _ => {
             f.instruction(&Instruction::Unreachable);
         }
     }
     Ok(())
+}
+
+/// Emit a string literal: bump-allocate a `String { data, len, cap }` struct
+/// pointing at the literal's bytes (already laid out in static memory by
+/// the program-level pre-walk). `cap == len` since the storage isn't
+/// growable in place.
+fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
+    let scratch_idx = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(scratch_idx + 1);
+    let str_idx = ctx.str_counter.get();
+    ctx.str_counter.set(str_idx + 1);
+    let scratch_local = ctx.scratch_base + scratch_idx;
+
+    let site = match ctx.str_sites.get(str_idx as usize) {
+        Some(s) => *s,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+
+    let struct_id = match ty {
+        hir::Type::Struct(id) => *id,
+        _ => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+
+    let layout = match ctx.struct_layouts.get(&struct_id) {
+        Some(l) => l,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+
+    let data_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "data") {
+        Some(o) => o,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+    let len_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "len") {
+        Some(o) => o,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+    let cap_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "cap") {
+        Some(o) => o,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+
+    // ptr = __alloc(struct_size)
+    f.instruction(&Instruction::I32Const(layout.size as i32));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalSet(scratch_local));
+
+    // store data ptr (static offset)
+    f.instruction(&Instruction::LocalGet(scratch_local));
+    f.instruction(&Instruction::I32Const(site.ptr as i32));
+    f.instruction(&Instruction::I32Store(MemArg {
+        offset: data_off as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // store len
+    f.instruction(&Instruction::LocalGet(scratch_local));
+    f.instruction(&Instruction::I32Const(site.len as i32));
+    f.instruction(&Instruction::I32Store(MemArg {
+        offset: len_off as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // store cap = len
+    f.instruction(&Instruction::LocalGet(scratch_local));
+    f.instruction(&Instruction::I32Const(site.len as i32));
+    f.instruction(&Instruction::I32Store(MemArg {
+        offset: cap_off as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // result: ptr to the struct
+    f.instruction(&Instruction::LocalGet(scratch_local));
 }
 
 fn emit_dbg(f: &mut Function, inner: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
@@ -1102,10 +1351,77 @@ fn emit_runtime_call(
             f.instruction(&Instruction::F64PromoteF32);
             f.instruction(&Instruction::Call(ctx.builtins.println_f64));
         }
+        // write(fd, s: String) — ignore fd for now (always stdout); load
+        // s.data + s.len from the String struct, hand to __print_bytes.
+        "prim_rt_write" => {
+            emit_write(f, args, ctx)?;
+        }
         _ => {
             f.instruction(&Instruction::Unreachable);
         }
     }
+    Ok(())
+}
+
+fn emit_write(f: &mut Function, args: &[hir::Expr], ctx: &EmitCtx) -> Result<(), WasmError> {
+    if args.len() < 2 {
+        f.instruction(&Instruction::Unreachable);
+        return Ok(());
+    }
+
+    // Reserve scratch BEFORE evaluating args, matching the pre-walk in
+    // `collect_scratch_types_expr` which adds this slot at the Call node
+    // before descending into its arguments.
+    let scratch_idx = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(scratch_idx + 1);
+    let tmp_local = ctx.scratch_base + scratch_idx;
+
+    // Evaluate fd, drop it — write always goes to stdout for now.
+    emit_expr(f, &args[0], ctx)?;
+    f.instruction(&Instruction::Drop);
+
+    // Evaluate the String, leaving its struct ptr on stack.
+    emit_expr(f, &args[1], ctx)?;
+
+    let struct_id = match &args[1].ty {
+        hir::Type::Struct(id) => *id,
+        _ => {
+            f.instruction(&Instruction::Drop);
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+    let data_off = struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "data");
+    let len_off = struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "len");
+    let (data_off, len_off) = match (data_off, len_off) {
+        (Some(d), Some(l)) => (d, l),
+        _ => {
+            f.instruction(&Instruction::Drop);
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+
+    //   <struct ptr>                  ;; stack: [p]
+    //   local.tee tmp                 ;; stack: [p], tmp=p
+    //   i32.load offset=data_off      ;; stack: [data_ptr]
+    //   local.get tmp                 ;; stack: [data_ptr, p]
+    //   i32.load offset=len_off       ;; stack: [data_ptr, len]
+    //   call __print_bytes
+    f.instruction(&Instruction::LocalTee(tmp_local));
+    f.instruction(&Instruction::I32Load(MemArg {
+        offset: data_off as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    f.instruction(&Instruction::LocalGet(tmp_local));
+    f.instruction(&Instruction::I32Load(MemArg {
+        offset: len_off as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    f.instruction(&Instruction::Call(ctx.builtins.print_bytes));
+
     Ok(())
 }
 

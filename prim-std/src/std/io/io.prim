@@ -1,9 +1,9 @@
 mod io
 
 @runtime("prim_rt_write")
-fn write(fd: i64, s: Str);
+fn write(fd: i64, s: String);
 
-fn print_str(s: Str) {
+fn print_str(s: String) {
     write(1, s);
     write(1, "\n");
 }

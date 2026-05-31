@@ -143,9 +143,10 @@ impl<'a> ScopeCollector<'a> {
         scope: &mut ModuleScope,
     ) {
         let ast = &file.ast;
+        let interner = self.program.interner.clone();
 
         for s in &ast.structs {
-            let name = ast.resolve(s.name.sym).to_string();
+            let name = interner.resolve(&s.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,
@@ -165,7 +166,7 @@ impl<'a> ScopeCollector<'a> {
         }
 
         for func in &ast.functions {
-            let name = ast.resolve(func.name.sym).to_string();
+            let name = interner.resolve(&func.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,
@@ -185,7 +186,7 @@ impl<'a> ScopeCollector<'a> {
         }
 
         for tr in &ast.traits {
-            let name = ast.resolve(tr.name.sym).to_string();
+            let name = interner.resolve(&tr.name.sym).to_string();
             if scope.contains_key(&name) {
                 self.errors.push(ResolveError::DuplicateSymbol {
                     name,

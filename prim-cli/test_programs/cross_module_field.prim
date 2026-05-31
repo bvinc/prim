@@ -1,0 +1,12 @@
+// Exercises field access on a struct defined in another module.
+// Pre-refactor (per-file interners), this would silently miscompile:
+// the `value` field's InternSymbol from geom.point's parser would not
+// equal the `value` symbol from this file's parser, so the codegen's
+// field-offset lookup would fall through to its unreachable trap.
+import geom.point.{Point, new_point}
+import std.io.println_i32
+
+fn main() {
+    let p = new_point()
+    println_i32(p.value)
+}

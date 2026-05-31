@@ -31,10 +31,7 @@ pub(crate) fn symbol_name(sym: hir::SymbolId, program: &hir::Program) -> String 
         push_len_segment(&mut name, "M", seg);
     }
     push_tag(&mut name, "K", kind_tag(&entry.kind));
-    let entry_name = program
-        .interner
-        .resolve(entry.name)
-        .expect("missing symbol name");
+    let entry_name = program.interner.resolve(&entry.name);
     push_len_segment(&mut name, "N", entry_name);
     name
 }
@@ -74,7 +71,7 @@ mod tests {
     ) -> Program {
         let module_id = ModuleId(0);
         let symbol_id = SymbolId(0);
-        let mut interner = Interner::new();
+        let interner = std::sync::Arc::new(Interner::new());
         let name_sym = interner.get_or_intern(symbol_name);
         let module = Module {
             id: module_id,

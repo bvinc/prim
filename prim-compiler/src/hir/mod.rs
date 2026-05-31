@@ -1,6 +1,7 @@
 pub use prim_parse::{BinaryOp, InternSymbol, Interner};
 pub use prim_tok::{FileId, ModuleId, Span};
 use std::fmt;
+use std::sync::Arc;
 
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
@@ -23,7 +24,10 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<Struct>,
     pub symbols: Vec<Symbol>,
-    pub interner: Interner,
+    /// Shared with the loader and all parsed files in this compilation.
+    /// `Arc` because `ThreadedRodeo` isn't `Clone` (it holds internal state
+    /// that wouldn't make sense to duplicate).
+    pub interner: Arc<Interner>,
     pub main: Option<SymbolId>,
     pub spans: Vec<(FileId, Span)>,
 }

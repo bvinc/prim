@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Resolve the Prim root directory from `PRIM_ROOT` or the current executable location.
 pub fn prim_root() -> Result<PathBuf, LoadError> {
@@ -148,6 +149,7 @@ impl Loader {
                 root: ModuleId(0),
                 module_index: HashMap::new(),
                 symbols: Vec::new(),
+                interner: Arc::new(prim_parse::Interner::new()),
             },
             module_cache: HashMap::new(),
             next_file_id: 0,
@@ -162,13 +164,14 @@ impl Loader {
 
     fn load_single_file(mut self, path: &Path) -> Result<Program, LoadError> {
         let source = std::fs::read_to_string(path)?;
-        let (ast, _diagnostics) = prim_parse::parse(&source);
+        let (ast, _diagnostics) = prim_parse::parse(&source, &self.program.interner);
         let ast = ast?;
 
+        let interner = self.program.interner.clone();
         let module_name = ast
             .module_name
             .as_ref()
-            .map(|ident| ast.resolve(ident.sym).to_string())
+            .map(|ident| interner.resolve(&ident.sym).to_string())
             .unwrap_or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -176,12 +179,8 @@ impl Loader {
                     .to_string()
             });
 
-        let planned = plan_import_requests(
-            &ast.imports,
-            &ast.interner,
-            &self.module_root,
-            &self.std_root,
-        )?;
+        let planned =
+            plan_import_requests(&ast.imports, &interner, &self.module_root, &self.std_root)?;
         let module_name = vec![module_name];
         let mut imports = Vec::new();
         let mut import_index = HashMap::new();
@@ -199,7 +198,7 @@ impl Loader {
 
         let module_files = vec![self.alloc_file(path.to_path_buf(), ast)];
 
-        let exports = collect_exports(&module_files);
+        let exports = collect_exports(&module_files, &self.program.interner);
         let module_id = ModuleId(self.program.modules.len() as u32);
 
         let module = Module {
@@ -245,16 +244,17 @@ impl Loader {
         let mut imports = Vec::new();
         let mut import_index = HashMap::new();
 
+        let interner = self.program.interner.clone();
         for file in &files {
             let source = std::fs::read_to_string(file)?;
-            let (ast, _diagnostics) = prim_parse::parse(&source);
+            let (ast, _diagnostics) = prim_parse::parse(&source, &interner);
             let ast = ast
                 .map_err(|err| LoadError::InvalidModule(format!("{}: {}", file.display(), err)))?;
 
             let this_name = ast
                 .module_name
                 .as_ref()
-                .map(|ident| ast.resolve(ident.sym).to_string())
+                .map(|ident| interner.resolve(&ident.sym).to_string())
                 .ok_or_else(|| {
                     LoadError::InvalidModule(format!(
                         "{}: missing 'mod <name>' declaration at top of file",
@@ -275,12 +275,8 @@ impl Loader {
                 }
             }
 
-            let planned = plan_import_requests(
-                &ast.imports,
-                &ast.interner,
-                &self.module_root,
-                &self.std_root,
-            )?;
+            let planned =
+                plan_import_requests(&ast.imports, &interner, &self.module_root, &self.std_root)?;
             for ImportRequest { module, coverage } in planned {
                 merge_import_request(&mut imports, &mut import_index, module, coverage);
             }
@@ -309,7 +305,7 @@ impl Loader {
             );
         }
 
-        let exports = collect_exports(&module_files);
+        let exports = collect_exports(&module_files, &self.program.interner);
         let module_id = ModuleId(self.program.modules.len() as u32);
 
         let key = ModuleKey::Name(module_segments.clone());
@@ -357,7 +353,7 @@ impl Loader {
 
         self.load_module_entry(module_segments)?;
         let entry = self.module_cache.remove(&module_key).unwrap();
-        let exports = collect_exports(&entry.files);
+        let exports = collect_exports(&entry.files, &self.program.interner);
         let id = ModuleId(self.program.modules.len() as u32);
 
         let module = Module {
@@ -418,9 +414,10 @@ impl Loader {
             let mut import_index = HashMap::new();
             let mut module_files = Vec::new();
 
+            let interner = self.program.interner.clone();
             for file in &files {
                 let source = std::fs::read_to_string(file)?;
-                let (program, _diagnostics) = prim_parse::parse(&source);
+                let (program, _diagnostics) = prim_parse::parse(&source, &interner);
                 let program = program.map_err(|err| {
                     LoadError::InvalidModule(format!("{}: {}", file.display(), err))
                 })?;
@@ -428,7 +425,7 @@ impl Loader {
                 let this_name = program
                     .module_name
                     .as_ref()
-                    .map(|ident| program.resolve(ident.sym).to_string())
+                    .map(|ident| interner.resolve(&ident.sym).to_string())
                     .ok_or_else(|| {
                         LoadError::InvalidModule(format!(
                             "{}: missing 'mod <name>' declaration at top of file",
@@ -451,7 +448,7 @@ impl Loader {
 
                 let planned = plan_import_requests(
                     &program.imports,
-                    &program.interner,
+                    &interner,
                     &self.module_root,
                     &self.std_root,
                 )?;
@@ -520,24 +517,24 @@ fn module_origin(module_segments: &[String]) -> ModuleOrigin {
     }
 }
 
-fn collect_exports(files: &[ModuleFile]) -> ExportTable {
+fn collect_exports(files: &[ModuleFile], interner: &prim_parse::Interner) -> ExportTable {
     let mut exports = ExportTable::default();
     for file in files {
         for s in &file.ast.structs {
-            let name = file.ast.resolve(s.name.sym).to_string();
+            let name = interner.resolve(&s.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Struct);
         }
         for f in &file.ast.functions {
-            let name = file.ast.resolve(f.name.sym).to_string();
+            let name = interner.resolve(&f.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Function);
         }
         for t in &file.ast.traits {
-            let name = file.ast.resolve(t.name.sym).to_string();
+            let name = interner.resolve(&t.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Trait);
         }
         for im in &file.ast.impls {
-            let trait_name = file.ast.resolve(im.trait_name.sym);
-            let struct_name = file.ast.resolve(im.struct_name.sym);
+            let trait_name = interner.resolve(&im.trait_name.sym);
+            let struct_name = interner.resolve(&im.struct_name.sym);
             let name = format!("impl {} for {}", trait_name, struct_name);
             exports.insert(name, ResSymbolKind::Impl);
         }
@@ -588,10 +585,7 @@ fn convert_import_decl(
                         search_path.display()
                     )));
                 }
-                let symbol_name = interner
-                    .resolve(trailing_ident.sym)
-                    .expect("missing interned symbol")
-                    .to_string();
+                let symbol_name = interner.resolve(&trailing_ident.sym).to_string();
                 module_segments.pop();
                 if !module_exists(module_root, std_root, &module_segments) {
                     let module_display = module_segments.join(".");

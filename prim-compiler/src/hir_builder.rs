@@ -8,6 +8,7 @@ use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum LoweringError {
@@ -148,7 +149,7 @@ impl LocalScope {
 struct LoweringContext<'a> {
     program: &'a Program,
     module_scopes: &'a ModuleScopes,
-    interner: Interner,
+    interner: Arc<Interner>,
     spans: Vec<(FileId, Span)>,
     symbols: Vec<Symbol>,
     functions: Vec<Function>,
@@ -160,7 +161,7 @@ struct LoweringContext<'a> {
     func_ids: HashMap<ResSymbolId, FuncId>,
     symbol_map: HashMap<ResSymbolId, SymbolId>,
     symbols_info: &'a [ResSymbolInfo],
-    stdlib_str_struct: Option<StructId>,
+    stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
     /// Path per file, populated up-front from the program. Used to build
@@ -173,12 +174,7 @@ struct LoweringContext<'a> {
 
 impl<'a> LoweringContext<'a> {
     fn new(program: &'a Program, module_scopes: &'a ModuleScopes) -> Self {
-        let root_module = &program.modules[program.root.0 as usize];
-        let interner = root_module
-            .files
-            .first()
-            .map(|f| f.ast.interner.clone())
-            .expect("root module should have at least one file");
+        let interner = program.interner.clone(); // Arc::clone, cheap
 
         let mut file_paths = HashMap::new();
         for module in &program.modules {
@@ -202,7 +198,7 @@ impl<'a> LoweringContext<'a> {
             func_ids: HashMap::new(),
             symbol_map: HashMap::new(),
             symbols_info: &program.symbols,
-            stdlib_str_struct: None,
+            stdlib_string_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
             file_paths,
@@ -232,20 +228,20 @@ impl<'a> LoweringContext<'a> {
 
             for file in &module.files {
                 for s in &file.ast.structs {
-                    let name = file.ast.resolve(s.name.sym).to_string();
+                    let name = self.interner.resolve(&s.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let sym_id = self.ensure_symbol(res_id, Some(module_id));
                     let sid = *self
                         .struct_ids
                         .entry(res_id)
                         .or_insert_with(|| StructId(self.structs.len() as u32));
-                    if self.stdlib_str_struct.is_none()
+                    if self.stdlib_string_struct.is_none()
                         && module.name.len() == 2
                         && module.name[0] == "std"
                         && module.name[1] == "string"
-                        && name == "Str"
+                        && name == "String"
                     {
-                        self.stdlib_str_struct = Some(sid);
+                        self.stdlib_string_struct = Some(sid);
                     }
                     let span = self.span_id(s.span, file.file_id);
                     self.structs.push(Struct {
@@ -258,7 +254,7 @@ impl<'a> LoweringContext<'a> {
                     });
                 }
                 for f in &file.ast.functions {
-                    let name = file.ast.resolve(f.name.sym).to_string();
+                    let name = self.interner.resolve(&f.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let sym_id = self.ensure_symbol(res_id, Some(module_id));
                     if self.main.is_none() && module_id == self.root_module && name == "main" {
@@ -297,7 +293,7 @@ impl<'a> LoweringContext<'a> {
             for file in &module.files {
                 let ast = &file.ast;
                 for s in &ast.structs {
-                    let name = ast.resolve(s.name.sym).to_string();
+                    let name = self.interner.resolve(&s.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
                     let fields = s
@@ -305,7 +301,7 @@ impl<'a> LoweringContext<'a> {
                         .iter()
                         .map(|f| Field {
                             name: f.name.sym,
-                            ty: self.lower_type(&f.field_type, ast, module_scope),
+                            ty: self.lower_type(&f.field_type, module_scope),
                             span: self.span_id(f.name.span, file.file_id),
                         })
                         .collect();
@@ -315,7 +311,7 @@ impl<'a> LoweringContext<'a> {
                 }
 
                 for f in &ast.functions {
-                    let name = ast.resolve(f.name.sym).to_string();
+                    let name = self.interner.resolve(&f.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let fid = *self.func_ids.get(&res_id).expect("missing function id");
 
@@ -326,7 +322,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|p| {
                             let sym = self.insert_symbol(module_id, p.name.sym, SymbolKind::Param);
                             self.local_scope.insert(
-                                ast.resolve(p.name.sym).to_string(),
+                                self.interner.resolve(&p.name.sym).to_string(),
                                 LocalBinding {
                                     symbol: sym,
                                     mutable: false,
@@ -334,7 +330,7 @@ impl<'a> LoweringContext<'a> {
                             );
                             Param {
                                 name: sym,
-                                ty: self.lower_type(&p.type_annotation, ast, module_scope),
+                                ty: self.lower_type(&p.type_annotation, module_scope),
                                 span: self.span_id(p.name.span, file.file_id),
                             }
                         })
@@ -342,7 +338,7 @@ impl<'a> LoweringContext<'a> {
                     let ret = f
                         .return_type
                         .as_ref()
-                        .map(|t| self.lower_type(t, ast, module_scope));
+                        .map(|t| self.lower_type(t, module_scope));
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
@@ -410,7 +406,7 @@ impl<'a> LoweringContext<'a> {
                 let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
                 let sym = self.insert_symbol(module, name.sym, SymbolKind::Local);
                 self.local_scope.insert(
-                    ast.resolve(name.sym).to_string(),
+                    self.interner.resolve(&name.sym).to_string(),
                     LocalBinding {
                         symbol: sym,
                         mutable: *mutable,
@@ -421,7 +417,6 @@ impl<'a> LoweringContext<'a> {
                     mutable: *mutable,
                     ty: self.lower_type(
                         type_annotation.as_ref().unwrap_or(&Type::Undetermined),
-                        ast,
                         module_scope,
                     ),
                     value: value_hir,
@@ -429,7 +424,7 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             Stmt::Assign { target, value } => {
-                let target_name = ast.resolve(target.sym);
+                let target_name = self.interner.resolve(&target.sym);
                 let binding = self.local_scope.get(target_name).copied();
                 match binding {
                     Some(binding) => {
@@ -542,28 +537,28 @@ impl<'a> LoweringContext<'a> {
         let (kind, ty) = match &expr.kind {
             ExprKind::Int(value) => (
                 hir::ExprKind::Int(*value),
-                self.lower_int_type(&expr.ty, ast, module_scope),
+                self.lower_int_type(&expr.ty, module_scope),
             ),
             ExprKind::Float(value) => (
                 hir::ExprKind::Float(*value),
-                self.lower_float_type(&expr.ty, ast, module_scope),
+                self.lower_float_type(&expr.ty, module_scope),
             ),
             ExprKind::Bool(value) => (
                 hir::ExprKind::Bool(*value),
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::String(value) => (
                 hir::ExprKind::Str(value.clone()),
-                self.stdlib_str_struct
+                self.stdlib_string_struct
                     .map(hir::Type::Struct)
                     .unwrap_or(hir::Type::Undetermined),
             ),
             ExprKind::Ident(ident) => {
-                let name_str = ast.resolve(ident.sym);
-                match self.resolve_name(name_str, module, file_id, ident.span, module_scope) {
+                let name_str = self.interner.resolve(&ident.sym).to_string();
+                match self.resolve_name(&name_str, module, file_id, ident.span, module_scope) {
                     Some(sym) => (
                         hir::ExprKind::Ident(sym),
-                        self.lower_type(&expr.ty, ast, module_scope),
+                        self.lower_type(&expr.ty, module_scope),
                     ),
                     None => return error(),
                 }
@@ -574,7 +569,7 @@ impl<'a> LoweringContext<'a> {
                     left: Box::new(self.lower_expr(left, module, file_id, ast, module_scope)),
                     right: Box::new(self.lower_expr(right, module, file_id, ast, module_scope)),
                 },
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::FunctionCall { path, args } => {
                 let call_span = path.segments.last().expect("empty path").span;
@@ -591,7 +586,7 @@ impl<'a> LoweringContext<'a> {
                                     .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
                                     .collect(),
                             },
-                            ty: self.lower_type(&expr.ty, ast, module_scope),
+                            ty: self.lower_type(&expr.ty, module_scope),
                             span: self.span_id(call_span, file_id),
                         };
                     }
@@ -599,7 +594,7 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             ExprKind::StructLiteral { name, fields } => {
-                let struct_name = ast.resolve(name.sym);
+                let struct_name = self.interner.resolve(&name.sym);
                 let struct_id = module_scope
                     .get(struct_name)
                     .and_then(|res_id| self.struct_ids.get(res_id).copied());
@@ -623,7 +618,7 @@ impl<'a> LoweringContext<'a> {
                                 })
                                 .collect(),
                         },
-                        self.lower_type(&expr.ty, ast, module_scope),
+                        self.lower_type(&expr.ty, module_scope),
                     ),
                     None => {
                         self.errors.push(LoweringError::UnknownStruct {
@@ -640,7 +635,7 @@ impl<'a> LoweringContext<'a> {
                     base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
                     field: field.sym,
                 },
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::Dereference(operand) => (
                 hir::ExprKind::Deref(Box::new(self.lower_expr(
@@ -650,7 +645,7 @@ impl<'a> LoweringContext<'a> {
                     ast,
                     module_scope,
                 ))),
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::Array(elements) => (
                 hir::ExprKind::ArrayLit(
@@ -659,7 +654,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|e| self.lower_expr(e, module, file_id, ast, module_scope))
                         .collect(),
                 ),
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::If {
                 condition,
@@ -679,11 +674,11 @@ impl<'a> LoweringContext<'a> {
                         .as_ref()
                         .map(|b| self.lower_block(b, module, file_id, ast, module_scope)),
                 },
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::Block(block) => (
                 hir::ExprKind::Block(self.lower_block(block, module, file_id, ast, module_scope)),
-                self.lower_type(&expr.ty, ast, module_scope),
+                self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::Dbg(inner) => {
                 let inner_span = inner.span;
@@ -744,11 +739,11 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         path: &prim_parse::NamePath,
         file_id: FileId,
-        ast: &prim_parse::Program,
+        _ast: &prim_parse::Program,
         module_scope: &ModuleScope,
     ) -> Option<ResSymbolId> {
         let name_ident = path.segments.last().expect("empty path");
-        let name = ast.resolve(name_ident.sym);
+        let name = self.interner.resolve(&name_ident.sym);
 
         if path.segments.len() == 1 {
             // Simple name - look up in module scope
@@ -768,7 +763,7 @@ impl<'a> LoweringContext<'a> {
                 .segments
                 .iter()
                 .take(path.segments.len() - 1)
-                .map(|ident| ast.resolve(ident.sym).to_string())
+                .map(|ident| self.interner.resolve(&ident.sym).to_string())
                 .collect();
             let key = crate::program::ModuleKey::Name(module_path.clone());
             let first_seg = &path.segments[0];
@@ -797,15 +792,10 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn lower_type(
-        &self,
-        ty: &Type,
-        ast: &prim_parse::Program,
-        module_scope: &ModuleScope,
-    ) -> hir::Type {
+    fn lower_type(&self, ty: &Type, module_scope: &ModuleScope) -> hir::Type {
         match ty {
             Type::Struct(name) => {
-                let name_str = ast.resolve(*name);
+                let name_str = self.interner.resolve(name);
                 // The resolver validates all type names; this expect indicates a resolver bug.
                 let res_id = *module_scope.get(name_str).unwrap_or_else(|| {
                     panic!("resolver should have caught unknown type '{name_str}'")
@@ -816,12 +806,10 @@ impl<'a> LoweringContext<'a> {
                     .unwrap_or_else(|| panic!("missing struct id for resolved type '{name_str}'"));
                 hir::Type::Struct(sid)
             }
-            Type::Array(inner) => {
-                hir::Type::Array(Box::new(self.lower_type(inner, ast, module_scope)))
-            }
+            Type::Array(inner) => hir::Type::Array(Box::new(self.lower_type(inner, module_scope))),
             Type::Pointer { mutable, pointee } => hir::Type::Pointer {
                 mutable: *mutable,
-                pointee: Box::new(self.lower_type(pointee, ast, module_scope)),
+                pointee: Box::new(self.lower_type(pointee, module_scope)),
             },
             Type::Undetermined => hir::Type::Undetermined,
             Type::U8 => hir::Type::U8,
@@ -840,27 +828,17 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn lower_int_type(
-        &self,
-        ty: &Type,
-        ast: &prim_parse::Program,
-        module_scope: &ModuleScope,
-    ) -> hir::Type {
+    fn lower_int_type(&self, ty: &Type, module_scope: &ModuleScope) -> hir::Type {
         match ty {
             Type::Undetermined => hir::Type::IntVar,
-            _ => self.lower_type(ty, ast, module_scope),
+            _ => self.lower_type(ty, module_scope),
         }
     }
 
-    fn lower_float_type(
-        &self,
-        ty: &Type,
-        ast: &prim_parse::Program,
-        module_scope: &ModuleScope,
-    ) -> hir::Type {
+    fn lower_float_type(&self, ty: &Type, module_scope: &ModuleScope) -> hir::Type {
         match ty {
             Type::Undetermined => hir::Type::FloatVar,
-            _ => self.lower_type(ty, ast, module_scope),
+            _ => self.lower_type(ty, module_scope),
         }
     }
 

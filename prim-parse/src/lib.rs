@@ -6,11 +6,15 @@ pub use error::{Diagnostic, ParseError, Severity};
 pub use prim_tok::Span;
 
 /// Interned symbol handle for names. Cheap to copy and compare.
-pub type InternSymbol = string_interner::symbol::SymbolU32;
+pub type InternSymbol = lasso::Spur;
 
 /// String interner for name deduplication.
-pub type Interner =
-    string_interner::StringInterner<string_interner::backend::BufferBackend<InternSymbol>>;
+///
+/// Uses `lasso::ThreadedRodeo` so a single shared interner can be passed by
+/// shared reference (`&Interner`) into parallel parses without locking on
+/// reads. All `InternSymbol`s across a compilation come from this one
+/// interner, which makes them universally comparable.
+pub type Interner = lasso::ThreadedRodeo<InternSymbol>;
 
 mod number;
 mod parser;
@@ -193,6 +197,11 @@ pub struct Parameter {
     pub type_annotation: Type,
 }
 
+/// Parsed AST for a single source file.
+///
+/// The interner is NOT carried here — there's a single program-wide one held
+/// by the loader and threaded into every `parse` call. Call
+/// `interner.resolve(sym)` to look up identifier text.
 #[derive(Debug, Clone)]
 pub struct Program {
     pub module_name: Option<Ident>,
@@ -201,15 +210,6 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub traits: Vec<TraitDefinition>,
     pub impls: Vec<ImplDefinition>,
-    pub interner: Interner,
-}
-
-impl Program {
-    pub fn resolve(&self, symbol: InternSymbol) -> &str {
-        self.interner
-            .resolve(symbol)
-            .expect("missing interned symbol")
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,12 +231,7 @@ impl ImportDecl {
         self.raw_path
             .segments
             .iter()
-            .map(|ident| {
-                interner
-                    .resolve(ident.sym)
-                    .expect("missing interned symbol")
-                    .to_string()
-            })
+            .map(|ident| interner.resolve(&ident.sym).to_string())
             .collect()
     }
 
@@ -247,27 +242,28 @@ impl ImportDecl {
             ImportSelector::Named(names) => Some(
                 names
                     .iter()
-                    .map(|ident| {
-                        interner
-                            .resolve(ident.sym)
-                            .expect("missing interned symbol")
-                            .to_string()
-                    })
+                    .map(|ident| interner.resolve(&ident.sym).to_string())
                     .collect(),
             ),
         }
     }
 }
 
-/// Parse a Prim source file into an AST.
-/// Returns (Result, diagnostics) - diagnostics are returned on both success and failure.
-pub fn parse(input: &str) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
+/// Parse a Prim source file into an AST, interning identifiers into the
+/// caller-provided shared interner.
+///
+/// Returns (Result, diagnostics) - diagnostics are returned on both success
+/// and failure.
+pub fn parse<'a>(
+    input: &'a str,
+    interner: &'a Interner,
+) -> (Result<Program, ParseError>, Vec<Diagnostic>) {
     let mut tokenizer = Tokenizer::new(input);
     let tokens = match tokenizer.tokenize() {
         Ok(tokens) => tokens,
         Err(e) => return (Err(e.into()), Vec::new()),
     };
-    let mut parser = Parser::new(tokens, input);
+    let mut parser = Parser::new(tokens, input, interner);
     parser.parse()
 }
 

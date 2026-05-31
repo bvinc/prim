@@ -1,14 +1,18 @@
-use prim_parse::{BinaryOp, ExprKind, ImportSelector, ParseError, Stmt, Type, parse};
+use prim_parse::{BinaryOp, ExprKind, ImportSelector, Interner, ParseError, Stmt, Type, parse};
 use prim_tok::TokenKind;
+use std::sync::Arc;
 
-fn parse_ok(source: &str) -> prim_parse::Program {
-    parse(source).0.unwrap()
+fn parse_ok(source: &str) -> (prim_parse::Program, Arc<Interner>) {
+    let interner = Arc::new(Interner::new());
+    let program = parse(source, &interner).0.unwrap();
+    (program, interner)
 }
 
 #[test]
 fn test_error_same_line_statements() {
     let source = "fn main() { let x = 1 let y = 2 }";
-    let (result, diagnostics) = parse(source);
+    let interner = Interner::new();
+    let (result, diagnostics) = parse(source, &interner);
 
     // Should fail to parse
     assert!(result.is_err());
@@ -26,11 +30,11 @@ fn test_error_same_line_statements() {
 #[test]
 fn test_parse_let_statement() {
     let source = "fn main() { let x: u32 = 42 }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     assert_eq!(program.functions.len(), 1);
     let main_func = &program.functions[0];
-    assert_eq!(program.resolve(main_func.name.sym), "main");
+    assert_eq!(interner.resolve(&main_func.name.sym), "main");
     assert_eq!(main_func.body.stmts.len(), 1);
     match &main_func.body.stmts[0] {
         Stmt::Let {
@@ -40,7 +44,7 @@ fn test_parse_let_statement() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(name.sym), "x");
+            assert_eq!(interner.resolve(&name.sym), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &Some(Type::U32));
             match &value.kind {
@@ -55,7 +59,7 @@ fn test_parse_let_statement() {
 #[test]
 fn test_parse_loop_with_break() {
     let source = "fn main() { loop { break } }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
     let main_func = &program.functions[0];
     assert_eq!(main_func.body.stmts.len(), 1);
     match &main_func.body.stmts[0] {
@@ -71,7 +75,7 @@ fn test_parse_loop_with_break() {
 #[test]
 fn test_parse_nested_loops_preserve_spans() {
     let source = "fn main() {\n    loop {\n        loop {\n            break\n        }\n        break\n    }\n}";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
         Stmt::Loop { body, .. } => {
@@ -91,7 +95,7 @@ fn test_parse_nested_loops_preserve_spans() {
 #[test]
 fn test_parse_let_without_type() {
     let source = "fn main() { let x = 42 }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -102,7 +106,7 @@ fn test_parse_let_without_type() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(name.sym), "x");
+            assert_eq!(interner.resolve(&name.sym), "x");
             assert!(!mutable);
             assert_eq!(type_annotation, &None);
             match &value.kind {
@@ -117,7 +121,7 @@ fn test_parse_let_without_type() {
 #[test]
 fn test_parse_arithmetic_expression() {
     let source = "fn main() { let result = x + 5 * 2 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -152,7 +156,7 @@ fn test_parse_arithmetic_expression() {
 #[test]
 fn test_parse_arithmetic_expression_2() {
     let source = "fn main() { let result = x * 5 + 2 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -187,14 +191,14 @@ fn test_parse_arithmetic_expression_2() {
 #[test]
 fn test_parse_println() {
     let source = "fn main() { println(42) }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
     let expr = main_func.body.expr.as_deref().unwrap();
     match &expr.kind {
         ExprKind::FunctionCall { path, args } => {
-            assert_eq!(program.resolve(path.segments[0].sym), "println");
+            assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             match &args[0].kind {
                 ExprKind::Int(_) => assert_eq!(args[0].span.text(source), "42"),
@@ -211,14 +215,14 @@ fn test_parse_println() {
 #[test]
 fn test_parse_println_with_expression() {
     let source = "fn main() { println(x + 5) }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
     let expr = main_func.body.expr.as_deref().unwrap();
     match &expr.kind {
         ExprKind::FunctionCall { path, args } => {
-            assert_eq!(program.resolve(path.segments[0].sym), "println");
+            assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             match &args[0].kind {
                 ExprKind::Binary { left, op, right } => {
@@ -244,7 +248,8 @@ fn test_parse_println_with_expression() {
 
 #[test]
 fn test_parse_error_unexpected_token() {
-    let result = parse("fn main() { let = 42 }").0;
+    let interner = Interner::new();
+    let result = parse("fn main() { let = 42 }", &interner).0;
 
     match result {
         Err(ParseError::UnexpectedToken {
@@ -260,7 +265,8 @@ fn test_parse_error_unexpected_token() {
 #[test]
 fn test_parse_error_unknown_expression_attribute() {
     // Only @dbg is allowed at expression position; anything else is an error.
-    let result = parse("fn main() { let x = @foo(1) }").0;
+    let interner = Interner::new();
+    let result = parse("fn main() { let x = @foo(1) }", &interner).0;
 
     match result {
         Err(ParseError::InvalidAttributeUsage { message, .. }) => {
@@ -275,7 +281,8 @@ fn test_parse_error_unknown_expression_attribute() {
 
 #[test]
 fn test_parse_error_statements_outside_function() {
-    let result = parse("let x = 42").0;
+    let interner = Interner::new();
+    let result = parse("let x = 42", &interner).0;
 
     match result {
         Err(ParseError::StatementsOutsideFunction { .. }) => {}
@@ -286,7 +293,7 @@ fn test_parse_error_statements_outside_function() {
 #[test]
 fn test_parse_parentheses_basic() {
     let source = "fn main() { let result = (2 + 3) * 4 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -329,26 +336,26 @@ fn test_parse_trait_and_impl_syntax() {
             fn main() {}
         "#;
 
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     assert!(
         program
             .structs
             .iter()
-            .any(|s| program.resolve(s.name.sym).trim() == "Point")
+            .any(|s| interner.resolve(&s.name.sym).trim() == "Point")
     );
     assert!(
         program
             .traits
             .iter()
-            .any(|t| program.resolve(t.name.sym).trim() == "Marker")
+            .any(|t| interner.resolve(&t.name.sym).trim() == "Marker")
     );
     assert!(
         program
             .impls
             .iter()
-            .any(|im| program.resolve(im.trait_name.sym).trim() == "Marker"
-                && program.resolve(im.struct_name.sym).trim() == "Point")
+            .any(|im| interner.resolve(&im.trait_name.sym).trim() == "Marker"
+                && interner.resolve(&im.struct_name.sym).trim() == "Point")
     );
 }
 
@@ -360,28 +367,27 @@ fn test_parse_trait_with_method_and_impl_body() {
             impl Greeter for Point { fn hello(a: i32) -> i32 { a } }
             fn main() {}
         "#;
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
     let tr = program
         .traits
         .iter()
-        .find(|t| program.resolve(t.name.sym).trim() == "Greeter")
+        .find(|t| interner.resolve(&t.name.sym).trim() == "Greeter")
         .expect("trait Greeter present");
     assert_eq!(tr.methods.len(), 1);
-    assert_eq!(program.resolve(tr.methods[0].name.sym), "hello");
+    assert_eq!(interner.resolve(&tr.methods[0].name.sym), "hello");
     assert!(
-        program
-            .impls
-            .iter()
-            .any(|im| program.resolve(im.trait_name.sym).trim() == "Greeter"
-                && program.resolve(im.struct_name.sym).trim() == "Point"
-                && !im.methods.is_empty())
+        program.impls.iter().any(
+            |im| interner.resolve(&im.trait_name.sym).trim() == "Greeter"
+                && interner.resolve(&im.struct_name.sym).trim() == "Point"
+                && !im.methods.is_empty()
+        )
     );
 }
 
 #[test]
 fn test_parse_parentheses_nested() {
     let source = "fn main() { let result = ((2 + 3) * 4) + 5 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -438,7 +444,7 @@ fn test_parse_parentheses_nested() {
 #[test]
 fn test_parse_parentheses_with_all_operators() {
     let source = "fn main() { let result = (x + y) * (a - b) }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -485,7 +491,7 @@ fn test_parse_parentheses_with_all_operators() {
 #[test]
 fn test_parse_parentheses_function_call_args() {
     let source = "fn main() { println((2 + 3) * 4) }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
@@ -496,7 +502,7 @@ fn test_parse_parentheses_function_call_args() {
         .expect("Expected println call");
     match &expr.kind {
         ExprKind::FunctionCall { path, args } => {
-            assert_eq!(program.resolve(path.segments[0].sym), "println");
+            assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             // Argument should be (2 + 3) * 4
             match &args[0].kind {
@@ -534,7 +540,8 @@ fn test_parse_parentheses_function_call_args() {
 
 #[test]
 fn test_parse_error_mismatched_parentheses_missing_close() {
-    let result = parse("fn main() { let x = (2 + 3 }").0;
+    let interner = Interner::new();
+    let result = parse("fn main() { let x = (2 + 3 }", &interner).0;
 
     match result {
         Err(ParseError::UnexpectedToken {
@@ -553,7 +560,8 @@ fn test_parse_error_mismatched_parentheses_missing_close() {
 #[test]
 fn test_parse_error_mismatched_parentheses_missing_open() {
     let source = "fn main() { let x = 2 + 3) }";
-    let (result, diagnostics) = parse(source);
+    let interner = Interner::new();
+    let (result, diagnostics) = parse(source, &interner);
 
     // Should emit diagnostic about same-line statements (because ) is on same line)
     assert_eq!(diagnostics.len(), 1);
@@ -569,7 +577,8 @@ fn test_parse_error_mismatched_parentheses_missing_open() {
 
 #[test]
 fn test_parse_empty_parentheses_error() {
-    let result = parse("fn main() { let x = () }").0;
+    let interner = Interner::new();
+    let result = parse("fn main() { let x = () }", &interner).0;
 
     match result {
         Err(ParseError::UnexpectedToken { expected, .. }) => {
@@ -585,7 +594,7 @@ fn test_parse_empty_parentheses_error() {
 #[test]
 fn test_parse_subtraction_basic() {
     let source = "fn main() { let result = 10 - 3 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
     let debug_str = format!("{:#?}", program);
 
     assert!(debug_str.contains("Subtract"));
@@ -595,7 +604,7 @@ fn test_parse_subtraction_basic() {
 #[test]
 fn test_parse_subtraction_with_identifiers() {
     let source = "fn main() { let result = x - y }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -620,7 +629,7 @@ fn test_parse_subtraction_with_identifiers() {
 #[test]
 fn test_parse_subtraction_precedence() {
     let source = "fn main() { let result = 10 - 3 * 2 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -656,7 +665,7 @@ fn test_parse_subtraction_precedence() {
 #[test]
 fn test_parse_subtraction_chained() {
     let source = "fn main() { let result = 20 - 5 - 3 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -694,7 +703,7 @@ fn test_parse_subtraction_chained() {
 #[test]
 fn test_parse_subtraction_with_parentheses() {
     let source = "fn main() { let result = 20 - (5 + 3) }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -730,7 +739,7 @@ fn test_parse_subtraction_with_parentheses() {
 #[test]
 fn test_parse_division_basic() {
     let source = "fn main() { let result = 20 / 4 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -755,7 +764,7 @@ fn test_parse_division_basic() {
 #[test]
 fn test_parse_division_with_identifiers() {
     let source = "fn main() { let result = numerator / denominator }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -782,7 +791,7 @@ fn test_parse_division_with_identifiers() {
 #[test]
 fn test_parse_division_precedence_with_addition() {
     let source = "fn main() { let result = 10 + 20 / 4 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -820,7 +829,7 @@ fn test_parse_division_precedence_with_addition() {
 #[test]
 fn test_parse_division_chained() {
     let source = "fn main() { let result = 100 / 5 / 2 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -858,7 +867,7 @@ fn test_parse_division_chained() {
 #[test]
 fn test_parse_division_with_multiplication() {
     let source = "fn main() { let result = 8 * 6 / 3 }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -894,7 +903,7 @@ fn test_parse_division_with_multiplication() {
 #[test]
 fn test_parse_division_with_parentheses() {
     let source = "fn main() { let result = 100 / (10 + 5) }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -964,7 +973,7 @@ fn main() {
     println(final_result)
 }
 "#;
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     // Check that we have all 5 functions
     assert_eq!(program.functions.len(), 5);
@@ -973,7 +982,7 @@ fn main() {
     let function_names: Vec<&str> = program
         .functions
         .iter()
-        .map(|f| program.resolve(f.name.sym))
+        .map(|f| interner.resolve(&f.name.sym))
         .collect();
     assert!(function_names.contains(&"level4"));
     assert!(function_names.contains(&"level3"));
@@ -985,7 +994,7 @@ fn main() {
     let main_func = program
         .functions
         .iter()
-        .find(|f| program.resolve(f.name.sym) == "main")
+        .find(|f| interner.resolve(&f.name.sym) == "main")
         .expect("main function should exist");
 
     // Verify main has statements
@@ -999,14 +1008,14 @@ fn main() {
     let level1_func = program
         .functions
         .iter()
-        .find(|f| program.resolve(f.name.sym) == "level1")
+        .find(|f| interner.resolve(&f.name.sym) == "level1")
         .expect("level1 function should exist");
 
     // Find the function call to level2 in level1
     let has_level2_call = level1_func.body.stmts.iter().any(|stmt| match stmt {
         Stmt::Let { value, .. } => matches!(
             &value.kind,
-            ExprKind::FunctionCall { path, .. } if path.segments.len() == 1 && program.resolve(path.segments[0].sym) == "level2"
+            ExprKind::FunctionCall { path, .. } if path.segments.len() == 1 && interner.resolve(&path.segments[0].sym) == "level2"
         ),
         _ => false,
     });
@@ -1018,11 +1027,11 @@ fn test_both_parsers_produce_same_result() {
     let source = "fn main() { let result = 2 + 3 * 4\nprintln(result) }";
 
     // Parse with the unified parser
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     // Basic structure check
     assert_eq!(program.functions.len(), 1);
-    assert_eq!(program.resolve(program.functions[0].name.sym), "main");
+    assert_eq!(interner.resolve(&program.functions[0].name.sym), "main");
 }
 
 #[test]
@@ -1031,18 +1040,18 @@ fn test_whitespace_ignored() {
     let messy_input = "fn   main (  )   {   let   x :  i32   =   2   +   3   *   4   }";
     let clean_input = "fn main() { let x: i32 = 2 + 3 * 4 }";
 
-    let messy_program = parse_ok(messy_input);
-    let clean_program = parse_ok(clean_input);
+    let (messy_program, messy_interner) = parse_ok(messy_input);
+    let (clean_program, clean_interner) = parse_ok(clean_input);
 
     // Both should produce structurally identical ASTs (spans will differ due to whitespace)
     assert_eq!(messy_program.functions.len(), clean_program.functions.len());
     assert_eq!(messy_program.functions.len(), 1);
     assert_eq!(
-        messy_program.resolve(messy_program.functions[0].name.sym),
+        messy_interner.resolve(&messy_program.functions[0].name.sym),
         "main"
     );
     assert_eq!(
-        clean_program.resolve(clean_program.functions[0].name.sym),
+        clean_interner.resolve(&clean_program.functions[0].name.sym),
         "main"
     );
 
@@ -1084,7 +1093,7 @@ fn main() {
     println(p.x)
 }
 "#;
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     // Check that we have one struct and one function
     assert_eq!(program.structs.len(), 1);
@@ -1092,15 +1101,15 @@ fn main() {
 
     // Check struct definition
     let point_struct = &program.structs[0];
-    assert_eq!(program.resolve(point_struct.name.sym), "Point");
+    assert_eq!(interner.resolve(&point_struct.name.sym), "Point");
     assert_eq!(point_struct.fields.len(), 2);
 
     // Check first field
-    assert_eq!(program.resolve(point_struct.fields[0].name.sym), "x");
+    assert_eq!(interner.resolve(&point_struct.fields[0].name.sym), "x");
     assert_eq!(point_struct.fields[0].field_type, Type::I32);
 
     // Check second field
-    assert_eq!(program.resolve(point_struct.fields[1].name.sym), "y");
+    assert_eq!(interner.resolve(&point_struct.fields[1].name.sym), "y");
     assert_eq!(point_struct.fields[1].field_type, Type::I32);
 
     // Check main function has struct literal and field access
@@ -1111,10 +1120,10 @@ fn main() {
     // Check struct literal in let statement
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
         if let ExprKind::StructLiteral { name, fields } = &value.kind {
-            assert_eq!(program.resolve(name.sym), "Point");
+            assert_eq!(interner.resolve(&name.sym), "Point");
             assert_eq!(fields.len(), 2);
-            assert_eq!(program.resolve(fields[0].name.sym), "x");
-            assert_eq!(program.resolve(fields[1].name.sym), "y");
+            assert_eq!(interner.resolve(&fields[0].name.sym), "x");
+            assert_eq!(interner.resolve(&fields[1].name.sym), "y");
         } else {
             panic!("Expected struct literal in let statement");
         }
@@ -1126,9 +1135,9 @@ fn main() {
     if let Some(expr) = main_func.body.expr.as_deref() {
         if let ExprKind::FunctionCall { args, .. } = &expr.kind {
             if let ExprKind::FieldAccess { object, field } = &args[0].kind {
-                assert_eq!(program.resolve(field.sym), "x");
+                assert_eq!(interner.resolve(&field.sym), "x");
                 if let ExprKind::Ident(id) = &object.kind {
-                    assert_eq!(program.resolve(id.sym), "p");
+                    assert_eq!(interner.resolve(&id.sym), "p");
                 } else {
                     panic!("Expected identifier in field access");
                 }
@@ -1146,14 +1155,14 @@ fn main() {
 #[test]
 fn test_parse_field_access() {
     let source = "fn main() { let x = point.x }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
         if let ExprKind::FieldAccess { object, field } = &value.kind {
-            assert_eq!(program.resolve(field.sym), "x");
+            assert_eq!(interner.resolve(&field.sym), "x");
             if let ExprKind::Ident(obj_name) = &object.kind {
-                assert_eq!(program.resolve(obj_name.sym), "point");
+                assert_eq!(interner.resolve(&obj_name.sym), "point");
             } else {
                 panic!("Expected identifier in field access object");
             }
@@ -1168,16 +1177,16 @@ fn test_parse_field_access() {
 #[test]
 fn test_parse_struct_literal() {
     let source = r#"fn main() { let p = Point { x = 10, y = 20 } }"#;
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
         if let ExprKind::StructLiteral { name, fields } = &value.kind {
-            assert_eq!(program.resolve(name.sym), "Point");
+            assert_eq!(interner.resolve(&name.sym), "Point");
             assert_eq!(fields.len(), 2);
 
             // Check first field
-            assert_eq!(program.resolve(fields[0].name.sym), "x");
+            assert_eq!(interner.resolve(&fields[0].name.sym), "x");
             if let ExprKind::Int(_) = &fields[0].value.kind {
                 assert_eq!(fields[0].value.span.text(source), "10");
             } else {
@@ -1185,7 +1194,7 @@ fn test_parse_struct_literal() {
             }
 
             // Check second field
-            assert_eq!(program.resolve(fields[1].name.sym), "y");
+            assert_eq!(interner.resolve(&fields[1].name.sym), "y");
             if let ExprKind::Int(_) = &fields[1].value.kind {
                 assert_eq!(fields[1].value.span.text(source), "20");
             } else {
@@ -1202,7 +1211,7 @@ fn test_parse_struct_literal() {
 #[test]
 fn test_parse_struct_type_annotation() {
     let source = "fn main() { let p: Point = get_point() }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
@@ -1210,7 +1219,7 @@ fn test_parse_struct_type_annotation() {
         ..
     } = &main_func.body.stmts[0]
     {
-        assert_eq!(program.resolve(*name), "Point");
+        assert_eq!(interner.resolve(name), "Point");
     } else {
         panic!("Expected struct type annotation");
     }
@@ -1220,7 +1229,7 @@ fn test_parse_struct_type_annotation() {
 fn test_parse_pointer_types() {
     // Test const pointer
     let source = "fn main() { let ptr: *const u8 = get_ptr() }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
@@ -1236,7 +1245,7 @@ fn test_parse_pointer_types() {
 
     // Test mutable pointer
     let source_mut = "fn main() { let ptr: *mut i32 = get_ptr() }";
-    let program_mut = parse_ok(source_mut);
+    let (program_mut, _) = parse_ok(source_mut);
 
     let main_func_mut = &program_mut.functions[0];
     if let Stmt::Let {
@@ -1254,13 +1263,13 @@ fn test_parse_pointer_types() {
 #[test]
 fn test_parse_dereference() {
     let source = "fn main() { let value = *ptr }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
         if let ExprKind::Dereference(operand) = &value.kind {
             if let ExprKind::Ident(name) = &operand.kind {
-                assert_eq!(program.resolve(name.sym), "ptr");
+                assert_eq!(interner.resolve(&name.sym), "ptr");
             } else {
                 panic!("Expected identifier in dereference operand");
             }
@@ -1275,12 +1284,12 @@ fn test_parse_dereference() {
 #[test]
 fn test_import_decl_variants() {
     let source = "import foo.bar\nimport foo.bar.Baz\nimport foo.bar.{Baz, Quux}\nfn main() {}";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
     assert_eq!(program.imports.len(), 3);
 
     let module_import = &program.imports[0];
     assert_eq!(
-        module_import.module_segments(&program.interner),
+        module_import.module_segments(&interner),
         vec!["foo".to_string(), "bar".to_string()]
     );
     assert!(matches!(module_import.selector, ImportSelector::All));
@@ -1288,13 +1297,13 @@ fn test_import_decl_variants() {
         module_import
             .trailing_symbol
             .as_ref()
-            .map(|ident| program.resolve(ident.sym)),
+            .map(|ident| interner.resolve(&ident.sym)),
         Some("bar")
     );
 
     let trailing_symbol_import = &program.imports[1];
     assert_eq!(
-        trailing_symbol_import.module_segments(&program.interner),
+        trailing_symbol_import.module_segments(&interner),
         vec!["foo".to_string(), "bar".to_string(), "Baz".to_string()]
     );
     assert!(matches!(
@@ -1305,20 +1314,20 @@ fn test_import_decl_variants() {
         trailing_symbol_import
             .trailing_symbol
             .as_ref()
-            .map(|ident| program.resolve(ident.sym)),
+            .map(|ident| interner.resolve(&ident.sym)),
         Some("Baz")
     );
 
     let brace_import = &program.imports[2];
     assert_eq!(
-        brace_import.module_segments(&program.interner),
+        brace_import.module_segments(&interner),
         vec!["foo".to_string(), "bar".to_string()]
     );
     match &brace_import.selector {
         ImportSelector::Named(names) => {
             let texts: Vec<_> = names
                 .iter()
-                .map(|ident| program.resolve(ident.sym))
+                .map(|ident| interner.resolve(&ident.sym))
                 .collect();
             assert_eq!(texts, vec!["Baz", "Quux"]);
         }
@@ -1330,12 +1339,12 @@ fn test_import_decl_variants() {
 #[test]
 fn test_definition_spans_include_attributes() {
     let struct_source = "@repr(\"C\")\nstruct Foo { }";
-    let struct_program = parse_ok(struct_source);
+    let (struct_program, _) = parse_ok(struct_source);
     let def = &struct_program.structs[0];
     assert_eq!(def.span.text(struct_source), "@repr(\"C\")\nstruct Foo { }");
 
     let func_source = "@runtime(\"puts\")\nfn print(message: Str);";
-    let func_program = parse_ok(func_source);
+    let (func_program, _) = parse_ok(func_source);
     let func = &func_program.functions[0];
     assert_eq!(
         func.span.text(func_source),
@@ -1346,7 +1355,7 @@ fn test_definition_spans_include_attributes() {
 #[test]
 fn test_trait_and_impl_spans() {
     let source = "trait Greeter { fn greet(person: Person); }\n\nimpl Greeter for Person {\n    fn greet(person: Person) {}\n}\n";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
     assert_eq!(program.traits.len(), 1);
     assert_eq!(program.impls.len(), 1);
     let trait_def = &program.traits[0];
@@ -1364,7 +1373,7 @@ fn test_trait_and_impl_spans() {
 #[test]
 fn test_parse_let_mut() {
     let source = "fn main() { let mut x: i32 = 42 }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     assert_eq!(main_func.body.stmts.len(), 1);
@@ -1376,7 +1385,7 @@ fn test_parse_let_mut() {
             value,
             ..
         } => {
-            assert_eq!(program.resolve(name.sym), "x");
+            assert_eq!(interner.resolve(&name.sym), "x");
             assert!(*mutable);
             assert_eq!(type_annotation, &Some(Type::I32));
             match &value.kind {
@@ -1391,7 +1400,7 @@ fn test_parse_let_mut() {
 #[test]
 fn test_parse_let_mut_without_type() {
     let source = "fn main() { let mut counter = 0 }";
-    let program = parse_ok(source);
+    let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
     match &main_func.body.stmts[0] {
@@ -1401,7 +1410,7 @@ fn test_parse_let_mut_without_type() {
             type_annotation,
             ..
         } => {
-            assert_eq!(program.resolve(name.sym), "counter");
+            assert_eq!(interner.resolve(&name.sym), "counter");
             assert!(*mutable);
             assert_eq!(type_annotation, &None);
         }
@@ -1413,7 +1422,7 @@ fn test_parse_let_mut_without_type() {
 fn test_if_condition_no_struct_literal_ambiguity() {
     // `if x { }` should parse as: if (x) { }, not if (x { }) which would be a struct literal
     let source = "fn main() { if x { } }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     // The if is a trailing expression (no semicolon), so it ends up in body.expr
@@ -1447,7 +1456,7 @@ fn test_if_condition_no_struct_literal_ambiguity() {
 fn test_while_condition_no_struct_literal_ambiguity() {
     // `while x { }` should parse as: while (x) { }, not while (x { }) which would be a struct literal
     let source = "fn main() { while x { } }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     assert_eq!(main_func.body.stmts.len(), 1);
@@ -1475,7 +1484,7 @@ fn test_while_condition_no_struct_literal_ambiguity() {
 fn test_while_condition_with_comparison() {
     // `while x < y { }` should parse the full comparison as the condition
     let source = "fn main() { while x < y { } }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     assert_eq!(main_func.body.stmts.len(), 1);
@@ -1513,7 +1522,7 @@ fn test_while_condition_with_comparison() {
 fn test_if_condition_with_comparison() {
     // `if x < y { }` should parse the full comparison as the condition
     let source = "fn main() { if x < y { } }";
-    let program = parse_ok(source);
+    let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
     // The if is a trailing expression (no semicolon), so it ends up in body.expr

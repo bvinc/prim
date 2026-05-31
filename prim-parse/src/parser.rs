@@ -25,7 +25,7 @@ pub struct Parser<'a> {
     current: usize,
     source: &'a str,
     module_name: Option<Ident>,
-    interner: Interner,
+    interner: &'a Interner,
     diagnostics: Vec<Diagnostic>,
     /// Whether struct literals are allowed in the current expression context.
     /// Disabled when parsing if/while conditions to avoid ambiguity with block braces.
@@ -33,7 +33,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token>, source: &'a str) -> Self {
+    pub fn new(tokens: Vec<Token>, source: &'a str, interner: &'a Interner) -> Self {
         // Filter out comment tokens so the parser never sees them
         let tokens = tokens
             .into_iter()
@@ -45,7 +45,7 @@ impl<'a> Parser<'a> {
             current: 0,
             source,
             module_name: None,
-            interner: Interner::new(),
+            interner,
             diagnostics: Vec::new(),
             allow_struct_literal: true,
         }
@@ -79,13 +79,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Intern a string from a span, returning just the symbol.
-    fn intern(&mut self, span: Span) -> crate::InternSymbol {
+    fn intern(&self, span: Span) -> crate::InternSymbol {
         let text = span.text(self.source);
         self.interner.get_or_intern(text)
     }
 
     /// Create an identifier from a span.
-    fn ident(&mut self, span: Span) -> Ident {
+    fn ident(&self, span: Span) -> Ident {
         Ident {
             sym: self.intern(span),
             span,
@@ -218,7 +218,6 @@ impl<'a> Parser<'a> {
             functions,
             traits,
             impls,
-            interner: std::mem::replace(&mut self.interner, Interner::new()),
         })
     }
 
@@ -1430,7 +1429,8 @@ mod tests {
     fn parse_expr(input: &str) -> Expr {
         let mut tokenizer = Tokenizer::new(input);
         let tokens = tokenizer.tokenize().unwrap();
-        let mut parser = Parser::new(tokens, input);
+        let interner = Interner::new();
+        let mut parser = Parser::new(tokens, input, &interner);
         parser.parse_expression(Precedence::NONE).unwrap()
     }
 
