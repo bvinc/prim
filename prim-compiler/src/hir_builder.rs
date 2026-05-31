@@ -2,7 +2,7 @@ use crate::hir::{
     self, Field, FuncId, Function, InternSymbol, Interner, Module, Param, SpanId, Struct, StructId,
     Symbol, SymbolId, SymbolKind,
 };
-use crate::program::{Program, ResSymbolId, ResSymbolInfo, ResSymbolKind};
+use crate::program::{Program, ResSymbolId, ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
@@ -157,6 +157,10 @@ struct LoweringContext<'a> {
     /// build the `[path:line:col] expr_text = ` prefix; otherwise unused.
     source_map: Arc<crate::SourceMap>,
     spans: Vec<(FileId, Span)>,
+    /// HIR symbols. For every resolver-side `ResSymbolId(k)` (`k < N`),
+    /// `symbols[k]` is the corresponding HIR symbol — built eagerly during
+    /// `declare_modules_and_items`. Local/param symbols added during body
+    /// lowering append at indices `>= N`.
     symbols: Vec<Symbol>,
     functions: Vec<Function>,
     structs: Vec<Struct>,
@@ -165,8 +169,6 @@ struct LoweringContext<'a> {
     main: Option<SymbolId>,
     struct_ids: HashMap<ResSymbolId, StructId>,
     func_ids: HashMap<ResSymbolId, FuncId>,
-    symbol_map: HashMap<ResSymbolId, SymbolId>,
-    symbols_info: &'a [ResSymbolInfo],
     stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
@@ -192,8 +194,6 @@ impl<'a> LoweringContext<'a> {
             main: None,
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
-            symbol_map: HashMap::new(),
-            symbols_info: &program.symbols,
             stdlib_string_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
@@ -201,6 +201,11 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn declare_modules_and_items(&mut self) {
+        // Pass 1: walk the program assigning FuncId / StructId to each
+        // top-level function and struct, and pushing their shells (with
+        // empty fields/body) into self.structs / self.functions. Symbol
+        // creation is deferred to pass 2 so it can use the IDs assigned
+        // here.
         for module in &self.program.modules {
             let module_id = module.id;
             self.modules.push(Module {
@@ -212,7 +217,6 @@ impl<'a> LoweringContext<'a> {
                 for s in &file.ast.structs {
                     let name = self.interner.resolve(&s.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
-                    let sym_id = self.ensure_symbol(res_id, Some(module_id));
                     let sid = *self
                         .struct_ids
                         .entry(res_id)
@@ -228,7 +232,9 @@ impl<'a> LoweringContext<'a> {
                     let span = self.span_id(s.span, file.file_id);
                     self.structs.push(Struct {
                         id: sid,
-                        name: sym_id,
+                        // SymbolId(res_id.0) — see pass 2 below for why this
+                        // identity holds.
+                        name: SymbolId(res_id.0),
                         module: module_id,
                         file: file.file_id,
                         fields: Vec::new(),
@@ -238,9 +244,8 @@ impl<'a> LoweringContext<'a> {
                 for f in &file.ast.functions {
                     let name = self.interner.resolve(&f.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
-                    let sym_id = self.ensure_symbol(res_id, Some(module_id));
                     if self.main.is_none() && module_id == self.root_module && name == "main" {
-                        self.main = Some(sym_id);
+                        self.main = Some(SymbolId(res_id.0));
                     }
                     let fid = *self
                         .func_ids
@@ -249,7 +254,7 @@ impl<'a> LoweringContext<'a> {
                     let span = self.span_id(f.span, file.file_id);
                     self.functions.push(Function {
                         id: fid,
-                        name: sym_id,
+                        name: SymbolId(res_id.0),
                         module: module_id,
                         file: file.file_id,
                         params: Vec::new(),
@@ -263,6 +268,21 @@ impl<'a> LoweringContext<'a> {
                     });
                 }
             }
+        }
+
+        // Pass 2: build one hir::Symbol per ResSymbol, in resolver order, so
+        // `SymbolId(k) == ResSymbolId(k)` for every top-level symbol. Local
+        // and param symbols added later append at indices `>= N`.
+        for (idx, info) in self.program.symbols.iter().enumerate() {
+            let module = info.module.unwrap_or(self.root_module);
+            let kind = self.convert_kind(info.kind, ResSymbolId(idx as u32));
+            let name_sym = self.interner.get_or_intern(&info.name);
+            self.symbols.push(Symbol {
+                id: SymbolId(idx as u32),
+                module,
+                name: name_sym,
+                kind,
+            });
         }
     }
 
@@ -694,7 +714,7 @@ impl<'a> LoweringContext<'a> {
     fn resolve_name(
         &mut self,
         name: &str,
-        module: ModuleId,
+        _module: ModuleId,
         file: FileId,
         span: Span,
         module_scope: &ModuleScope,
@@ -705,7 +725,7 @@ impl<'a> LoweringContext<'a> {
         }
         // Then check module scope
         if let Some(&res_id) = module_scope.get(name) {
-            return Some(self.ensure_symbol(res_id, Some(module)));
+            return Some(self.hir_symbol(res_id));
         }
         self.errors.push(LoweringError::UnknownName {
             name: name.to_string(),
@@ -828,20 +848,12 @@ impl<'a> LoweringContext<'a> {
         id
     }
 
-    fn ensure_symbol(&mut self, res_id: ResSymbolId, module_hint: Option<ModuleId>) -> SymbolId {
-        if let Some(sym) = self.symbol_map.get(&res_id) {
-            return *sym;
-        }
-        let info = &self.symbols_info[res_id.0 as usize];
-        let module = info
-            .module
-            .or(module_hint)
-            .expect("missing module for symbol");
-        let kind = self.convert_kind(info.kind, res_id);
-        let name_sym = self.interner.get_or_intern(&info.name);
-        let sym = self.insert_symbol(module, name_sym, kind);
-        self.symbol_map.insert(res_id, sym);
-        sym
+    /// Convert a resolver-side symbol id to its HIR counterpart. The numbering
+    /// is shared (`SymbolId(k) == ResSymbolId(k)` for all top-level symbols)
+    /// because `declare_modules_and_items` eagerly creates the `Symbol`
+    /// entries in resolver order.
+    fn hir_symbol(&self, res_id: ResSymbolId) -> SymbolId {
+        SymbolId(res_id.0)
     }
 
     fn convert_kind(&mut self, kind: ResSymbolKind, res_id: ResSymbolId) -> SymbolKind {
