@@ -7,7 +7,6 @@ use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -86,11 +85,15 @@ impl LoweringError {
 }
 
 /// Lower a loaded [`Program`] into [`hir::Program`].
+///
+/// `source_map` is consulted only by `@dbg` lowering (to build the
+/// `[path:line:col] expr_text = ` prefix); other call sites don't need it.
 pub fn lower_to_hir(
     program: &Program,
     module_scopes: &ModuleScopes,
+    source_map: Arc<crate::SourceMap>,
 ) -> Result<hir::Program, Vec<LoweringError>> {
-    let mut ctx = LoweringContext::new(program, module_scopes);
+    let mut ctx = LoweringContext::new(program, module_scopes, source_map);
     ctx.declare_modules_and_items();
     ctx.populate_items();
     if ctx.errors.is_empty() {
@@ -150,6 +153,9 @@ struct LoweringContext<'a> {
     program: &'a Program,
     module_scopes: &'a ModuleScopes,
     interner: Arc<Interner>,
+    /// File paths + lazily-cached source bytes. Used by `@dbg` lowering to
+    /// build the `[path:line:col] expr_text = ` prefix; otherwise unused.
+    source_map: Arc<crate::SourceMap>,
     spans: Vec<(FileId, Span)>,
     symbols: Vec<Symbol>,
     functions: Vec<Function>,
@@ -164,29 +170,19 @@ struct LoweringContext<'a> {
     stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
-    /// Path per file, populated up-front from the program. Used to build
-    /// `@dbg` prefix strings.
-    file_paths: HashMap<FileId, PathBuf>,
-    /// Lazily-read source bytes keyed by FileId. Populated on first `@dbg`
-    /// lowering for a given file.
-    source_cache: HashMap<FileId, String>,
 }
 
 impl<'a> LoweringContext<'a> {
-    fn new(program: &'a Program, module_scopes: &'a ModuleScopes) -> Self {
-        let interner = program.interner.clone(); // Arc::clone, cheap
-
-        let mut file_paths = HashMap::new();
-        for module in &program.modules {
-            for file in &module.files {
-                file_paths.insert(file.file_id, file.path.clone());
-            }
-        }
-
+    fn new(
+        program: &'a Program,
+        module_scopes: &'a ModuleScopes,
+        source_map: Arc<crate::SourceMap>,
+    ) -> Self {
         Self {
             program,
             module_scopes,
-            interner,
+            interner: program.interner.clone(),
+            source_map,
             spans: Vec::new(),
             symbols: Vec::new(),
             functions: Vec::new(),
@@ -201,21 +197,7 @@ impl<'a> LoweringContext<'a> {
             stdlib_string_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
-            file_paths,
-            source_cache: HashMap::new(),
         }
-    }
-
-    /// Read (lazily, cached) the source text for the given file.
-    /// Returns an empty string if reading fails — `@dbg` is best-effort and
-    /// shouldn't break the build if a file is gone.
-    fn source_for(&mut self, file_id: FileId) -> &str {
-        self.source_cache.entry(file_id).or_insert_with(|| {
-            self.file_paths
-                .get(&file_id)
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .unwrap_or_default()
-        })
     }
 
     fn declare_modules_and_items(&mut self) {
@@ -682,21 +664,19 @@ impl<'a> LoweringContext<'a> {
             ),
             ExprKind::Dbg(inner) => {
                 let inner_span = inner.span;
-                // Take path as an owned String now so the &self.file_paths
-                // borrow is released before we call source_for(&mut self).
                 // Use only the basename so output is portable across machines.
                 let path_str = self
-                    .file_paths
-                    .get(&file_id)
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
+                    .source_map
+                    .get_path(file_id)
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                     .unwrap_or_default();
-                let prefix = {
-                    let source = self.source_for(file_id);
-                    let (line, col) = inner_span.line_col(source);
-                    let expr_text = inner_span.text(source);
-                    format!("[{path_str}:{line}:{col}] {expr_text} = ")
-                };
+                let source = self
+                    .source_map
+                    .read_source(file_id)
+                    .unwrap_or(Arc::from(""));
+                let (line, col) = inner_span.line_col(&source);
+                let expr_text = inner_span.text(&source);
+                let prefix = format!("[{path_str}:{line}:{col}] {expr_text} = ");
                 let lowered_inner = self.lower_expr(inner, module, file_id, ast, module_scope);
                 let dbg_ty = lowered_inner.ty.clone();
                 (

@@ -148,7 +148,10 @@ fn format_error_with_file(
 ) -> String {
     let (path, source) = match source_map.get_path(file_id) {
         Some(p) => {
-            let source = source_map.read_source(file_id).unwrap_or_default();
+            let source = source_map
+                .read_source(file_id)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             (p.to_string_lossy().into_owned(), source)
         }
         None => {

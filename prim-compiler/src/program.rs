@@ -39,7 +39,6 @@ pub(crate) struct Module {
 #[derive(Clone, Debug)]
 pub(crate) struct ModuleFile {
     pub file_id: FileId,
-    pub path: PathBuf,
     pub ast: ast::Program,
 }
 

@@ -1,6 +1,6 @@
 use crate::program::{
-    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleKey, ModuleOrigin,
-    Program, ResSymbolKind,
+    ExportTable, ImportCoverage, ImportRequest, Module, ModuleFile, ModuleKey, Program,
+    ResSymbolKind,
 };
 use prim_parse::{self, ImportDecl, ImportSelector};
 use prim_tok::{FileId, ModuleId};
@@ -67,34 +67,11 @@ impl Default for LoadOptions {
     }
 }
 
-fn inject_prelude_imports(
-    imports: &mut Vec<ImportRequest>,
-    import_index: &mut HashMap<String, usize>,
-    module_segments: &[String],
-    origin: ModuleOrigin,
-) {
-    if module_segments != ["std", "string"] {
-        merge_import_request(
-            imports,
-            import_index,
-            vec!["std".into(), "string".into()],
-            ImportCoverage::All,
-        );
-    }
-
-    if matches!(origin, ModuleOrigin::User) && module_segments != ["std", "io"] {
-        merge_import_request(
-            imports,
-            import_index,
-            vec!["std".into(), "io".into()],
-            ImportCoverage::All,
-        );
-    }
-}
-
 pub fn load_program(
     entry_path: impl AsRef<Path>,
     options: LoadOptions,
+    extra_modules: &[Vec<String>],
+    source_map: Arc<crate::SourceMap>,
 ) -> Result<Program, LoadError> {
     let entry_path = entry_path.as_ref();
     let prim_root = match &options.prim_root {
@@ -113,23 +90,23 @@ pub fn load_program(
         } else {
             entry_path.to_path_buf()
         };
-        Loader::new(module_root, std_root, options).load_directory(entry_path)
+        Loader::new(module_root, std_root, source_map).load_directory(entry_path, extra_modules)
     } else {
         let module_root = entry_path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        Loader::new(module_root, std_root, options).load_single_file(entry_path)
+        Loader::new(module_root, std_root, source_map).load_single_file(entry_path, extra_modules)
     }
 }
 
 struct Loader {
     module_root: PathBuf,
     std_root: PathBuf,
-    options: LoadOptions,
     program: Program,
     module_cache: HashMap<String, ModuleCacheEntry>,
     next_file_id: u32,
+    source_map: Arc<crate::SourceMap>,
 }
 
 #[derive(Debug)]
@@ -139,11 +116,10 @@ struct ModuleCacheEntry {
 }
 
 impl Loader {
-    fn new(module_root: PathBuf, std_root: PathBuf, options: LoadOptions) -> Self {
+    fn new(module_root: PathBuf, std_root: PathBuf, source_map: Arc<crate::SourceMap>) -> Self {
         Self {
             module_root,
             std_root,
-            options,
             program: Program {
                 modules: Vec::new(),
                 root: ModuleId(0),
@@ -153,17 +129,31 @@ impl Loader {
             },
             module_cache: HashMap::new(),
             next_file_id: 0,
+            source_map,
         }
     }
 
-    fn alloc_file(&mut self, path: PathBuf, ast: prim_parse::Program) -> ModuleFile {
+    /// Allocate a fresh `FileId`, register the path + source bytes in the
+    /// shared `SourceMap`, and produce the `ModuleFile` to be stored in the
+    /// module tree.
+    fn alloc_file(
+        &mut self,
+        path: PathBuf,
+        source: Arc<str>,
+        ast: prim_parse::Program,
+    ) -> ModuleFile {
         let file_id = FileId(self.next_file_id);
         self.next_file_id += 1;
-        ModuleFile { file_id, path, ast }
+        self.source_map.add_file(file_id, path, source);
+        ModuleFile { file_id, ast }
     }
 
-    fn load_single_file(mut self, path: &Path) -> Result<Program, LoadError> {
-        let source = std::fs::read_to_string(path)?;
+    fn load_single_file(
+        mut self,
+        path: &Path,
+        extra_modules: &[Vec<String>],
+    ) -> Result<Program, LoadError> {
+        let source: Arc<str> = Arc::from(std::fs::read_to_string(path)?);
         let (ast, _diagnostics) = prim_parse::parse(&source, &self.program.interner);
         let ast = ast?;
 
@@ -187,16 +177,8 @@ impl Loader {
         for ImportRequest { module, coverage } in planned {
             merge_import_request(&mut imports, &mut import_index, module, coverage);
         }
-        if self.options.include_prelude {
-            inject_prelude_imports(
-                &mut imports,
-                &mut import_index,
-                &module_name,
-                ModuleOrigin::User,
-            );
-        }
 
-        let module_files = vec![self.alloc_file(path.to_path_buf(), ast)];
+        let module_files = vec![self.alloc_file(path.to_path_buf(), source, ast)];
 
         let exports = collect_exports(&module_files, &self.program.interner);
         let module_id = ModuleId(self.program.modules.len() as u32);
@@ -219,12 +201,19 @@ impl Loader {
         for ImportRequest { module, .. } in &imports {
             self.ensure_module(module, &mut stack)?;
         }
+        for extra in extra_modules {
+            self.ensure_module(extra, &mut stack)?;
+        }
         self.validate_module_imports(module_id)?;
 
         Ok(self.program)
     }
 
-    fn load_directory(mut self, dir: &Path) -> Result<Program, LoadError> {
+    fn load_directory(
+        mut self,
+        dir: &Path,
+        extra_modules: &[Vec<String>],
+    ) -> Result<Program, LoadError> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -246,7 +235,7 @@ impl Loader {
 
         let interner = self.program.interner.clone();
         for file in &files {
-            let source = std::fs::read_to_string(file)?;
+            let source: Arc<str> = Arc::from(std::fs::read_to_string(file)?);
             let (ast, _diagnostics) = prim_parse::parse(&source, &interner);
             let ast = ast
                 .map_err(|err| LoadError::InvalidModule(format!("{}: {}", file.display(), err)))?;
@@ -281,7 +270,7 @@ impl Loader {
                 merge_import_request(&mut imports, &mut import_index, module, coverage);
             }
 
-            module_files.push(self.alloc_file(file.clone(), ast));
+            module_files.push(self.alloc_file(file.clone(), source, ast));
         }
 
         let module_name = module_name.ok_or_else(|| {
@@ -295,15 +284,6 @@ impl Loader {
         }
 
         let module_segments = vec![module_name];
-
-        if self.options.include_prelude {
-            inject_prelude_imports(
-                &mut imports,
-                &mut import_index,
-                &module_segments,
-                ModuleOrigin::User,
-            );
-        }
 
         let exports = collect_exports(&module_files, &self.program.interner);
         let module_id = ModuleId(self.program.modules.len() as u32);
@@ -323,6 +303,9 @@ impl Loader {
         let mut stack = Vec::new();
         for ImportRequest { module, .. } in &imports {
             self.ensure_module(module, &mut stack)?;
+        }
+        for extra in extra_modules {
+            self.ensure_module(extra, &mut stack)?;
         }
         self.validate_module_imports(module_id)?;
 
@@ -416,7 +399,7 @@ impl Loader {
 
             let interner = self.program.interner.clone();
             for file in &files {
-                let source = std::fs::read_to_string(file)?;
+                let source: Arc<str> = Arc::from(std::fs::read_to_string(file)?);
                 let (program, _diagnostics) = prim_parse::parse(&source, &interner);
                 let program = program.map_err(|err| {
                     LoadError::InvalidModule(format!("{}: {}", file.display(), err))
@@ -456,16 +439,7 @@ impl Loader {
                     merge_import_request(&mut imports, &mut import_index, module, coverage);
                 }
 
-                module_files.push(self.alloc_file(file.clone(), program));
-            }
-
-            if self.options.include_prelude {
-                inject_prelude_imports(
-                    &mut imports,
-                    &mut import_index,
-                    module_segments,
-                    module_origin(module_segments),
-                );
+                module_files.push(self.alloc_file(file.clone(), source, program));
             }
 
             self.module_cache.insert(
@@ -506,14 +480,6 @@ impl Loader {
             }
         }
         Ok(())
-    }
-}
-
-fn module_origin(module_segments: &[String]) -> ModuleOrigin {
-    if module_segments.first().is_some_and(|s| s == "std") {
-        ModuleOrigin::Stdlib
-    } else {
-        ModuleOrigin::User
     }
 }
 

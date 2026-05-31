@@ -1,6 +1,7 @@
 pub mod hir;
 mod hir_builder;
 mod loader;
+mod prelude;
 mod program;
 mod resolver;
 
@@ -11,30 +12,63 @@ pub use prim_tok::FileId;
 pub use resolver::ResolveError;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
-/// Maps file IDs to their paths for error reporting.
+/// Single source-of-truth for file metadata in a compilation: paths and
+/// (lazily-cached) source bytes, keyed by `FileId`.
+///
+/// The loader registers each file as it's read, calling `add_file` with the
+/// source it already has in hand so subsequent reads (e.g., for `@dbg` prefix
+/// generation) hit the cache rather than disk. All methods take `&self` so
+/// the map can be shared via `Arc<SourceMap>` across the rest of the
+/// compilation (and, eventually, parallel workers).
 #[derive(Debug, Default)]
 pub struct SourceMap {
-    files: HashMap<FileId, PathBuf>,
+    paths: RwLock<HashMap<FileId, PathBuf>>,
+    sources: RwLock<HashMap<FileId, Arc<str>>>,
 }
 
 impl SourceMap {
-    /// Get the path for a file ID.
-    pub fn get_path(&self, id: FileId) -> Option<&Path> {
-        self.files.get(&id).map(|p| p.as_path())
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Read the source content for a file ID.
-    pub fn read_source(&self, id: FileId) -> std::io::Result<String> {
-        match self.files.get(&id) {
-            Some(path) => std::fs::read_to_string(path),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Unknown file ID: {:?}", id),
-            )),
+    /// Register a file's path and its source bytes. Called by the loader as
+    /// each file is read so the source isn't re-read from disk later.
+    pub fn add_file(&self, id: FileId, path: PathBuf, source: Arc<str>) {
+        self.paths.write().unwrap().insert(id, path);
+        self.sources.write().unwrap().insert(id, source);
+    }
+
+    /// Look up a file's path. Returns an owned `PathBuf` because the internal
+    /// map is behind a lock; callers wanting the path live for longer should
+    /// hold the returned value.
+    pub fn get_path(&self, id: FileId) -> Option<PathBuf> {
+        self.paths.read().unwrap().get(&id).cloned()
+    }
+
+    /// Get source bytes for a file. Returns the cached copy if present,
+    /// otherwise reads from disk and caches the result.
+    pub fn read_source(&self, id: FileId) -> std::io::Result<Arc<str>> {
+        if let Some(cached) = self.sources.read().unwrap().get(&id).cloned() {
+            return Ok(cached);
         }
+        let path = self
+            .paths
+            .read()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Unknown file ID: {:?}", id),
+                )
+            })?;
+        let source: Arc<str> = Arc::from(std::fs::read_to_string(&path)?);
+        self.sources.write().unwrap().insert(id, source.clone());
+        Ok(source)
     }
 }
 
@@ -108,29 +142,30 @@ pub fn compile(
     path: &str,
     options: LoadOptions,
 ) -> (Arc<SourceMap>, Result<hir::Program, CompileError>) {
-    let mut program = match loader::load_program(path, options) {
-        Ok(p) => p,
-        Err(e) => return (Arc::new(SourceMap::default()), Err(e.into())),
+    let source_map = Arc::new(SourceMap::new());
+    let include_prelude = options.include_prelude;
+    let extra_modules = if include_prelude {
+        prelude::extra_modules()
+    } else {
+        Vec::new()
     };
 
-    let source_map = build_source_map(&program);
+    let mut program = match loader::load_program(path, options, &extra_modules, source_map.clone())
+    {
+        Ok(p) => p,
+        Err(e) => return (source_map, Err(e.into())),
+    };
+
+    if include_prelude {
+        prelude::inject(&mut program);
+    }
 
     let result = (|| {
         let module_scopes = resolver::collect_scopes(&mut program)?;
-        let mut hir = hir_builder::lower_to_hir(&program, &module_scopes)?;
+        let mut hir = hir_builder::lower_to_hir(&program, &module_scopes, source_map.clone())?;
         hir::type_check(&mut hir)?;
         Ok(hir)
     })();
 
     (source_map, result)
-}
-
-fn build_source_map(program: &program::Program) -> Arc<SourceMap> {
-    let mut files = HashMap::new();
-    for module in &program.modules {
-        for file in &module.files {
-            files.insert(file.file_id, file.path.clone());
-        }
-    }
-    Arc::new(SourceMap { files })
 }
