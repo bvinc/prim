@@ -47,24 +47,12 @@ impl From<prim_parse::ParseError> for LoadError {
 }
 
 /// Options that control how the loader resolves a program.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LoadOptions {
-    /// Automatically include the standard prelude when compiling a single file.
-    pub include_prelude: bool,
     /// Optional override for the prim root directory. Defaults to `PRIM_ROOT` env var or exe-relative discovery.
     pub prim_root: Option<PathBuf>,
     /// Optional override for the std root. Defaults to `<prim_root>/src` (or `<prim_root>/prim-std/src` as a fallback).
     pub std_root: Option<PathBuf>,
-}
-
-impl Default for LoadOptions {
-    fn default() -> Self {
-        Self {
-            include_prelude: true,
-            prim_root: None,
-            std_root: None,
-        }
-    }
 }
 
 pub fn load_program(

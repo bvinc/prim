@@ -143,12 +143,7 @@ pub fn compile(
     options: LoadOptions,
 ) -> (Arc<SourceMap>, Result<hir::Program, CompileError>) {
     let source_map = Arc::new(SourceMap::new());
-    let include_prelude = options.include_prelude;
-    let extra_modules = if include_prelude {
-        prelude::extra_modules()
-    } else {
-        Vec::new()
-    };
+    let extra_modules = prelude::extra_modules();
 
     let mut program = match loader::load_program(path, options, &extra_modules, source_map.clone())
     {
@@ -156,9 +151,7 @@ pub fn compile(
         Err(e) => return (source_map, Err(e.into())),
     };
 
-    if include_prelude {
-        prelude::inject(&mut program);
-    }
+    prelude::inject(&mut program);
 
     let result = (|| {
         let module_scopes = resolver::collect_scopes(&mut program)?;
