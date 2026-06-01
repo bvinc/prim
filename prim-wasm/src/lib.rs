@@ -11,18 +11,12 @@ use wasm_encoder::{
 #[derive(Debug)]
 pub enum WasmError {
     MissingMain,
-    UnsupportedRuntimeBinding(String),
-    UndefinedFunction(hir::FuncId),
 }
 
 impl fmt::Display for WasmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WasmError::MissingMain => write!(f, "main function not found"),
-            WasmError::UnsupportedRuntimeBinding(name) => {
-                write!(f, "unsupported runtime binding: {name}")
-            }
-            WasmError::UndefinedFunction(id) => write!(f, "undefined function {id:?}"),
         }
     }
 }

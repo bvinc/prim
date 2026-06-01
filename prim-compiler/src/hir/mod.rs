@@ -42,8 +42,6 @@ pub struct Module {
 pub struct Function {
     pub id: FuncId,
     pub name: SymbolId,
-    pub module: ModuleId,
-    pub file: FileId,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub body: Block,
@@ -55,8 +53,6 @@ pub struct Function {
 pub struct Struct {
     pub id: StructId,
     pub name: SymbolId,
-    pub module: ModuleId,
-    pub file: FileId,
     pub fields: Vec<Field>,
     pub span: SpanId,
 }
@@ -175,7 +171,6 @@ pub enum SymbolKind {
     Struct(StructId),
     Param,
     Local,
-    Field,
     Trait,
     Unknown,
 }

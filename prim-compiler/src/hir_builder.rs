@@ -235,8 +235,6 @@ impl<'a> LoweringContext<'a> {
                         // SymbolId(res_id.0) — see pass 2 below for why this
                         // identity holds.
                         name: SymbolId(res_id.0),
-                        module: module_id,
-                        file: file.file_id,
                         fields: Vec::new(),
                         span,
                     });
@@ -255,8 +253,6 @@ impl<'a> LoweringContext<'a> {
                     self.functions.push(Function {
                         id: fid,
                         name: SymbolId(res_id.0),
-                        module: module_id,
-                        file: file.file_id,
                         params: Vec::new(),
                         ret: None,
                         body: hir::Block {
