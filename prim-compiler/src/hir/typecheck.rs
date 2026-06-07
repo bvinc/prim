@@ -139,6 +139,40 @@ struct CheckedField {
     actual: Type,
 }
 
+struct MatchCoverage {
+    covered: Vec<bool>,
+    covered_count: u32,
+    has_wildcard: bool,
+}
+
+impl MatchCoverage {
+    fn new(variant_count: u32) -> Self {
+        Self {
+            covered: vec![false; variant_count as usize],
+            covered_count: 0,
+            has_wildcard: false,
+        }
+    }
+
+    fn cover_wildcard(&mut self) {
+        self.has_wildcard = true;
+    }
+
+    fn cover_variant(&mut self, variant_idx: u32) {
+        let Some(slot) = self.covered.get_mut(variant_idx as usize) else {
+            return;
+        };
+        if !*slot {
+            *slot = true;
+            self.covered_count += 1;
+        }
+    }
+
+    fn is_exhaustive(&self) -> bool {
+        self.has_wildcard || self.covered_count == self.covered.len() as u32
+    }
+}
+
 #[derive(Clone, Copy)]
 enum BoundCheckMode {
     ConcreteOnly,
@@ -431,6 +465,74 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|field| Self::substitute_params(&field.expected, pins))
             .collect()
+    }
+
+    fn check_match_pattern(
+        &mut self,
+        pattern: &mut crate::hir::Pattern,
+        enum_id: crate::hir::EnumId,
+        enum_args: &[Type],
+        variant_count: u32,
+        coverage: &mut MatchCoverage,
+        span: SpanId,
+        locals: &mut HashMap<SymbolId, Type>,
+    ) -> Result<Vec<SymbolId>, TypeCheckError> {
+        match pattern {
+            crate::hir::Pattern::Wildcard { .. } => {
+                coverage.cover_wildcard();
+                Ok(Vec::new())
+            }
+            crate::hir::Pattern::Variant {
+                enum_id: pattern_enum,
+                variant_idx,
+                bindings,
+                ..
+            } => {
+                if *pattern_enum != enum_id {
+                    return Err(self.error(
+                        span,
+                        TypeCheckKind::Legacy(
+                            "pattern's enum does not match scrutinee's enum".to_string(),
+                        ),
+                    ));
+                }
+                if *variant_idx >= variant_count {
+                    return Err(self.error(
+                        span,
+                        TypeCheckKind::Legacy("variant index out of range".to_string()),
+                    ));
+                }
+
+                coverage.cover_variant(*variant_idx);
+                let field_map = self
+                    .enum_variant_fields
+                    .get(&(enum_id, *variant_idx))
+                    .cloned()
+                    .ok_or_else(|| {
+                        self.error(
+                            span,
+                            TypeCheckKind::Legacy("variant fields not found".to_string()),
+                        )
+                    })?;
+                let mut arm_bindings = Vec::with_capacity(bindings.len());
+                for (field_sym, binding_sym, binding_ty) in bindings.iter_mut() {
+                    let declared = field_map.get(field_sym).cloned().ok_or_else(|| {
+                        self.error(
+                            span,
+                            TypeCheckKind::Legacy(format!(
+                                "no field '{}' on variant",
+                                self.program.interner.resolve(field_sym)
+                            )),
+                        )
+                    })?;
+                    let resolved = Self::substitute_params_with_slice(&declared, enum_args);
+                    *binding_ty = resolved.clone();
+                    locals.insert(*binding_sym, resolved);
+                    arm_bindings.push(*binding_sym);
+                }
+                Ok(arm_bindings)
+            }
+        }
     }
 
     /// If `got` is a struct that implements the trait `expected`, wrap
@@ -1676,65 +1778,18 @@ impl<'a> Checker<'a> {
                     .get(eid.0 as usize)
                     .map(|e| e.variants.len() as u32)
                     .unwrap_or(0);
-                let mut covered = vec![false; variant_count as usize];
-                let mut has_wildcard = false;
+                let mut coverage = MatchCoverage::new(variant_count);
                 let mut result_ty: Option<Type> = None;
                 for arm in arms.iter_mut() {
-                    let mut arm_bindings = Vec::new();
-                    match &mut arm.pattern {
-                        crate::hir::Pattern::Wildcard { .. } => {
-                            has_wildcard = true;
-                        }
-                        crate::hir::Pattern::Variant {
-                            enum_id,
-                            variant_idx,
-                            bindings,
-                            ..
-                        } => {
-                            if *enum_id != eid {
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(
-                                        "pattern's enum does not match scrutinee's enum"
-                                            .to_string(),
-                                    ),
-                                ));
-                            }
-                            if *variant_idx >= variant_count {
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy("variant index out of range".to_string()),
-                                ));
-                            }
-                            if let Some(slot) = covered.get_mut(*variant_idx as usize) {
-                                *slot = true;
-                            }
-                            // Substitute the carrier's type args into
-                            // each binding's declared type and install
-                            // it as a local for the arm body.
-                            let field_map =
-                                self.enum_variant_fields.get(&(eid, *variant_idx)).cloned();
-                            if let Some(field_map) = field_map {
-                                for (field_sym, binding_sym, binding_ty) in bindings.iter_mut() {
-                                    let declared =
-                                        field_map.get(field_sym).cloned().ok_or_else(|| {
-                                            self.error(
-                                                *span,
-                                                TypeCheckKind::Legacy(format!(
-                                                    "no field '{}' on variant",
-                                                    self.program.interner.resolve(field_sym)
-                                                )),
-                                            )
-                                        })?;
-                                    let resolved =
-                                        Self::substitute_params_with_slice(&declared, &eargs);
-                                    *binding_ty = resolved.clone();
-                                    locals.insert(*binding_sym, resolved);
-                                    arm_bindings.push(*binding_sym);
-                                }
-                            }
-                        }
-                    }
+                    let arm_bindings = self.check_match_pattern(
+                        &mut arm.pattern,
+                        eid,
+                        &eargs,
+                        variant_count,
+                        &mut coverage,
+                        *span,
+                        locals,
+                    )?;
                     let body_ty = self.check_expr(&mut arm.body, locals)?;
                     for binding in arm_bindings {
                         locals.remove(&binding);
@@ -1759,7 +1814,7 @@ impl<'a> Checker<'a> {
                 }
                 // Exhaustiveness: every variant must be covered, or a
                 // wildcard must be present.
-                if !has_wildcard && covered.iter().any(|is_covered| !is_covered) {
+                if !coverage.is_exhaustive() {
                     return Err(self.error(
                         *span,
                         TypeCheckKind::Legacy(
