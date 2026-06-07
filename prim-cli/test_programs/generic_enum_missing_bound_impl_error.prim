@@ -1,0 +1,14 @@
+struct NotOrd { n: i32 }
+
+trait Ord {
+    fn lt(self: Ord, other: Ord) -> bool;
+}
+
+enum Slot<T: Ord> {
+    Empty,
+    Full { value: T },
+}
+
+fn main() {
+    let bad = Slot.Full { value = NotOrd { n = 1 } }
+}

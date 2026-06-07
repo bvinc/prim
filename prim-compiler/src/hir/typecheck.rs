@@ -139,6 +139,12 @@ struct CheckedField {
     actual: Type,
 }
 
+#[derive(Clone, Copy)]
+enum BoundCheckMode {
+    ConcreteOnly,
+    AllowForwardedParam,
+}
+
 impl<'a> Checker<'a> {
     fn new(program: &'a mut Program) -> Self {
         Self {
@@ -310,6 +316,121 @@ impl<'a> Checker<'a> {
             ),
             _ => ty.clone(),
         }
+    }
+
+    fn type_param_name(&self, param: &crate::hir::TypeParam) -> String {
+        self.program
+            .interner
+            .resolve(&self.program.symbols[param.name.0 as usize].name)
+            .to_string()
+    }
+
+    fn check_type_arg_bound(
+        &self,
+        ty: &Type,
+        bound: crate::hir::TraitId,
+        mode: BoundCheckMode,
+        span: SpanId,
+    ) -> Result<(), TypeCheckError> {
+        match ty {
+            Type::Struct(sid, _) if self.program.impls.contains_key(&(bound, *sid)) => Ok(()),
+            Type::Param(id) if matches!(mode, BoundCheckMode::AllowForwardedParam) => {
+                let caller_bound = self
+                    .current_type_params
+                    .get(id.0 as usize)
+                    .and_then(|p| p.bound);
+                if caller_bound == Some(bound) {
+                    return Ok(());
+                }
+                let bound_name = self.type_name(&Type::Trait(bound));
+                Err(self.error(
+                    span,
+                    TypeCheckKind::Legacy(format!(
+                        "forwarded type parameter must carry bound {}",
+                        bound_name
+                    )),
+                ))
+            }
+            other => {
+                let type_name = self.type_name(other);
+                let bound_name = self.type_name(&Type::Trait(bound));
+                Err(self.error(
+                    span,
+                    TypeCheckKind::Legacy(format!(
+                        "type {} does not implement trait {}",
+                        type_name, bound_name
+                    )),
+                ))
+            }
+        }
+    }
+
+    fn resolve_type_args(
+        &self,
+        type_params: &[crate::hir::TypeParam],
+        pins: &HashMap<crate::hir::TypeParamId, Type>,
+        span: SpanId,
+        mode: BoundCheckMode,
+        cannot_infer_prefix: &str,
+    ) -> Result<Vec<Type>, TypeCheckError> {
+        let mut resolved = Vec::with_capacity(type_params.len());
+        for (i, param) in type_params.iter().enumerate() {
+            let id = crate::hir::TypeParamId(i as u32);
+            let pinned = pins.get(&id).cloned().ok_or_else(|| {
+                self.error(
+                    span,
+                    TypeCheckKind::Legacy(format!(
+                        "{}'{}'",
+                        cannot_infer_prefix,
+                        self.type_param_name(param)
+                    )),
+                )
+            })?;
+            if let Some(bound) = param.bound {
+                self.check_type_arg_bound(&pinned, bound, mode, span)?;
+            }
+            resolved.push(pinned);
+        }
+        Ok(resolved)
+    }
+
+    fn pin_type_args(pins: &mut HashMap<crate::hir::TypeParamId, Type>, type_args: &[Type]) {
+        for (i, arg) in type_args.iter().enumerate() {
+            pins.insert(crate::hir::TypeParamId(i as u32), arg.clone());
+        }
+    }
+
+    fn infer_field_pins(
+        &self,
+        fields: &[CheckedField],
+        pins: &mut HashMap<crate::hir::TypeParamId, Type>,
+        span: SpanId,
+        aggregate_name: &str,
+    ) -> Result<(), TypeCheckError> {
+        for field in fields {
+            if !Self::infer_pins(&field.expected, &field.actual, pins) {
+                let expected = self.type_name(&field.expected);
+                let actual = self.type_name(&field.actual);
+                return Err(self.error(
+                    span,
+                    TypeCheckKind::Legacy(format!(
+                        "conflicting inferences for {} type parameter (expected {}, got {})",
+                        aggregate_name, expected, actual
+                    )),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn substitute_checked_fields(
+        fields: &[CheckedField],
+        pins: &HashMap<crate::hir::TypeParamId, Type>,
+    ) -> Vec<Type> {
+        fields
+            .iter()
+            .map(|field| Self::substitute_params(&field.expected, pins))
+            .collect()
     }
 
     /// If `got` is a struct that implements the trait `expected`, wrap
@@ -1161,77 +1282,13 @@ impl<'a> Checker<'a> {
                         }
                         arg_types.push(got);
                     }
-                    // Build the type-arg list. A type param that was never
-                    // pinned by any formal stays Undetermined, which the
-                    // bound check below will flag.
-                    let mut inferred: Vec<Type> = Vec::with_capacity(tparams.len());
-                    for (i, tp) in tparams.iter().enumerate() {
-                        let id = crate::hir::TypeParamId(i as u32);
-                        let pinned = match pins.get(&id) {
-                            Some(t) => t.clone(),
-                            None => {
-                                let name = self
-                                    .program
-                                    .interner
-                                    .resolve(&self.program.symbols[tp.name.0 as usize].name);
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(format!(
-                                        "cannot infer type parameter '{}'",
-                                        name
-                                    )),
-                                ));
-                            }
-                        };
-                        // Bound check: a Struct argument must impl the
-                        // bound; a forwarded Type::Param must share the
-                        // same bound on the caller's side.
-                        if let Some(bound_tid) = tp.bound {
-                            match &pinned {
-                                Type::Struct(sid, _) => {
-                                    if !self.program.impls.contains_key(&(bound_tid, *sid)) {
-                                        let tname = self.type_name(&pinned);
-                                        let bname = self.type_name(&Type::Trait(bound_tid));
-                                        return Err(self.error(
-                                            *span,
-                                            TypeCheckKind::Legacy(format!(
-                                                "type {} does not implement trait {}",
-                                                tname, bname
-                                            )),
-                                        ));
-                                    }
-                                }
-                                Type::Param(j) => {
-                                    let caller_bound = self
-                                        .current_type_params
-                                        .get(j.0 as usize)
-                                        .and_then(|p| p.bound);
-                                    if caller_bound != Some(bound_tid) {
-                                        let bname = self.type_name(&Type::Trait(bound_tid));
-                                        return Err(self.error(
-                                            *span,
-                                            TypeCheckKind::Legacy(format!(
-                                                "forwarded type parameter must carry bound {}",
-                                                bname
-                                            )),
-                                        ));
-                                    }
-                                }
-                                other => {
-                                    let tname = self.type_name(other);
-                                    let bname = self.type_name(&Type::Trait(bound_tid));
-                                    return Err(self.error(
-                                        *span,
-                                        TypeCheckKind::Legacy(format!(
-                                            "type {} does not implement trait {}",
-                                            tname, bname
-                                        )),
-                                    ));
-                                }
-                            }
-                        }
-                        inferred.push(pinned);
-                    }
+                    let inferred = self.resolve_type_args(
+                        &tparams,
+                        &pins,
+                        *span,
+                        BoundCheckMode::AllowForwardedParam,
+                        "cannot infer type parameter ",
+                    )?;
                     // Substitute pins into formals and unify against the
                     // already-checked actual types.
                     for (i, (arg, formal)) in args.iter_mut().zip(params.iter()).enumerate() {
@@ -1314,55 +1371,15 @@ impl<'a> Checker<'a> {
                         // (formal, actual) pair, build the type-arg list,
                         // and substitute formals before unify.
                         let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
-                        for field in &checked_fields {
-                            if !Self::infer_pins(&field.expected, &field.actual, &mut pins) {
-                                let efmt = self.type_name(&field.expected);
-                                let gfmt = self.type_name(&field.actual);
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(format!(
-                                        "conflicting inferences for struct type parameter (expected {}, got {})",
-                                        efmt, gfmt
-                                    )),
-                                ));
-                            }
-                        }
-                        let mut inferred = Vec::with_capacity(tparams.len());
-                        for (i, tp) in tparams.iter().enumerate() {
-                            let id = crate::hir::TypeParamId(i as u32);
-                            let pinned = pins.get(&id).cloned().ok_or_else(|| {
-                                let name = self
-                                    .program
-                                    .interner
-                                    .resolve(&self.program.symbols[tp.name.0 as usize].name);
-                                self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(format!(
-                                        "cannot infer type parameter '{}'",
-                                        name
-                                    )),
-                                )
-                            })?;
-                            if let Some(bound_tid) = tp.bound {
-                                if !matches!(&pinned, Type::Struct(s, _) if self.program.impls.contains_key(&(bound_tid, *s)))
-                                {
-                                    let tname = self.type_name(&pinned);
-                                    let bname = self.type_name(&Type::Trait(bound_tid));
-                                    return Err(self.error(
-                                        *span,
-                                        TypeCheckKind::Legacy(format!(
-                                            "type {} does not implement trait {}",
-                                            tname, bname
-                                        )),
-                                    ));
-                                }
-                            }
-                            inferred.push(pinned);
-                        }
-                        let substituted = checked_fields
-                            .iter()
-                            .map(|field| Self::substitute_params(&field.expected, &pins))
-                            .collect();
+                        self.infer_field_pins(&checked_fields, &mut pins, *span, "struct")?;
+                        let inferred = self.resolve_type_args(
+                            tparams,
+                            &pins,
+                            *span,
+                            BoundCheckMode::ConcreteOnly,
+                            "cannot infer type parameter ",
+                        )?;
+                        let substituted = Self::substitute_checked_fields(&checked_fields, &pins);
                         (inferred, substituted)
                     } else {
                         (
@@ -1594,47 +1611,17 @@ impl<'a> Checker<'a> {
                 let (resolved_type_args, expected_after_subst): (Vec<Type>, Vec<Type>) =
                     if let Some(tparams) = generic.as_ref() {
                         let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
-                        for (i, arg) in contextual_type_args.iter().enumerate() {
-                            pins.insert(crate::hir::TypeParamId(i as u32), arg.clone());
-                        }
-                        for (i, arg) in type_args.iter().enumerate() {
-                            pins.insert(crate::hir::TypeParamId(i as u32), arg.clone());
-                        }
-                        for field in &checked_fields {
-                            if !Self::infer_pins(&field.expected, &field.actual, &mut pins) {
-                                let efmt = self.type_name(&field.expected);
-                                let gfmt = self.type_name(&field.actual);
-                                return Err(self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(format!(
-                                        "conflicting inferences for enum type parameter (expected {}, got {})",
-                                        efmt, gfmt
-                                    )),
-                                ));
-                            }
-                        }
-                        let mut inferred = Vec::with_capacity(tparams.len());
-                        for (i, tp) in tparams.iter().enumerate() {
-                            let id = crate::hir::TypeParamId(i as u32);
-                            let pinned = pins.get(&id).cloned().ok_or_else(|| {
-                                let name = self
-                                    .program
-                                    .interner
-                                    .resolve(&self.program.symbols[tp.name.0 as usize].name);
-                                self.error(
-                                    *span,
-                                    TypeCheckKind::Legacy(format!(
-                                        "cannot infer enum type parameter '{}'",
-                                        name
-                                    )),
-                                )
-                            })?;
-                            inferred.push(pinned);
-                        }
-                        let substituted = checked_fields
-                            .iter()
-                            .map(|field| Self::substitute_params(&field.expected, &pins))
-                            .collect();
+                        Self::pin_type_args(&mut pins, &contextual_type_args);
+                        Self::pin_type_args(&mut pins, type_args);
+                        self.infer_field_pins(&checked_fields, &mut pins, *span, "enum")?;
+                        let inferred = self.resolve_type_args(
+                            tparams,
+                            &pins,
+                            *span,
+                            BoundCheckMode::ConcreteOnly,
+                            "cannot infer enum type parameter ",
+                        )?;
+                        let substituted = Self::substitute_checked_fields(&checked_fields, &pins);
                         (inferred, substituted)
                     } else {
                         (
