@@ -197,7 +197,7 @@ fn test_parse_println() {
     // The function call is a trailing expression (no semicolon)
     let expr = main_func.body.expr.as_deref().unwrap();
     match &expr.kind {
-        ExprKind::FunctionCall { path, args } => {
+        ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             match &args[0].kind {
@@ -221,7 +221,7 @@ fn test_parse_println_with_expression() {
     // The function call is a trailing expression (no semicolon)
     let expr = main_func.body.expr.as_deref().unwrap();
     match &expr.kind {
-        ExprKind::FunctionCall { path, args } => {
+        ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             match &args[0].kind {
@@ -504,7 +504,7 @@ fn test_parse_parentheses_function_call_args() {
         .as_deref()
         .expect("Expected println call");
     match &expr.kind {
-        ExprKind::FunctionCall { path, args } => {
+        ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
             assert_eq!(args.len(), 1);
             // Argument should be (2 + 3) * 4

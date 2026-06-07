@@ -1,5 +1,7 @@
 mod ptr
 
+import std.mem.size_of
+
 // Pointer primitives. Without generics, each pointer type needs its own
 // concrete API surface. Currently shipped: *mut u8 and *mut u32 — enough
 // to implement an allocator. *const variants and other pointee types will
@@ -95,3 +97,33 @@ fn ptr_byte_offset_mut_usize(p: *mut usize, n: isize) -> *mut usize;
 
 @runtime("prim_rt_ptr_addr_mut_usize")
 fn ptr_addr_mut_usize(p: *mut usize) -> usize;
+
+// ---- generic *mut T ----
+// One API for every pointee, superseding the per-type functions above. The
+// raw intrinsics are type-independent (a pointer is a machine address);
+// element scaling is expressed in Prim via `size_of[T]()`, which folds to a
+// constant per instantiation. `add[u32]` compiles to exactly the same code
+// as the hand-written `ptr_add_mut_u32`.
+
+@runtime("prim_rt_null")
+fn null[T]() -> *mut T;
+
+@runtime("prim_rt_ptr_byte_add")
+fn byte_add[T](p: *mut T, n: usize) -> *mut T;
+
+@runtime("prim_rt_ptr_byte_sub")
+fn byte_sub[T](p: *mut T, n: usize) -> *mut T;
+
+@runtime("prim_rt_ptr_byte_offset")
+fn byte_offset[T](p: *mut T, n: isize) -> *mut T;
+
+@runtime("prim_rt_ptr_addr")
+fn addr[T](p: *mut T) -> usize;
+
+fn add[T](p: *mut T, n: usize) -> *mut T {
+    byte_add[T](p, n * size_of[T]())
+}
+
+fn sub[T](p: *mut T, n: usize) -> *mut T {
+    byte_sub[T](p, n * size_of[T]())
+}

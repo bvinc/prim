@@ -137,12 +137,29 @@ pub enum RuntimeAbi {
     ClzU64,
     CtzU64,
     PopcntU64,
+    /// `size_of[T]()` — folded to a constant byte count in monomorphization;
+    /// never reaches codegen.
+    SizeOf,
+    /// Generic pointer primitives over `*mut T`. Type-independent at the wasm
+    /// level (a pointer is an `i32` address), so one intrinsic each serves
+    /// every `T`; element scaling is done in Prim via `size_of[T]()`.
+    Null,
+    PtrByteAdd,
+    PtrByteSub,
+    PtrByteOffset,
+    PtrAddr,
 }
 
 impl RuntimeAbi {
     pub fn from_symbol(symbol: &str) -> Option<Self> {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
+            "prim_rt_size_of" => Some(Self::SizeOf),
+            "prim_rt_null" => Some(Self::Null),
+            "prim_rt_ptr_byte_add" => Some(Self::PtrByteAdd),
+            "prim_rt_ptr_byte_sub" => Some(Self::PtrByteSub),
+            "prim_rt_ptr_byte_offset" => Some(Self::PtrByteOffset),
+            "prim_rt_ptr_addr" => Some(Self::PtrAddr),
             "prim_rt_yield" => Some(Self::Yield),
             "prim_rt_println_i64" => Some(Self::PrintlnI64),
             "prim_rt_println_i32" => Some(Self::PrintlnI32),
@@ -542,6 +559,19 @@ impl Type {
         match self {
             Type::Struct(id, _) => Some(*id),
             _ => None,
+        }
+    }
+
+    /// In-memory size of a value of this type, in bytes. Structs, enums,
+    /// arrays, traits, and pointers are all 4-byte heap addresses; scalars
+    /// use their natural width. Single source of truth shared by struct
+    /// layout, `size_of`, and pointer arithmetic.
+    pub fn size_bytes(&self) -> u32 {
+        match self {
+            Type::Bool | Type::I8 | Type::U8 => 1,
+            Type::I16 | Type::U16 => 2,
+            Type::I64 | Type::U64 | Type::F64 | Type::FloatVar => 8,
+            _ => 4,
         }
     }
 }

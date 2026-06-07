@@ -1,0 +1,14 @@
+import std.io.println_i32
+import std.io.println_i64
+
+// Explicit type arguments on a call (turbofish) for an ordinary generic
+// function — the same f[T](args) syntax used by size_of, here pinning T
+// directly instead of relying on inference.
+fn identity[T](x: T) -> T {
+    x
+}
+
+fn main() {
+    println_i32(identity[i32](7))
+    println_i64(identity[i64](9000000000i64))
+}

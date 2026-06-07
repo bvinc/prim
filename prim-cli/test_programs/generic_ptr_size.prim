@@ -1,0 +1,22 @@
+import std.io.println_usize
+import std.ptr.null
+import std.ptr.add
+import std.ptr.sub
+import std.ptr.addr
+
+// One generic `add[T]` scales by size_of[T]() — folded to a constant per
+// instantiation. Stepping 5 elements lands at 5, 20, and 40 bytes for u8,
+// u32, and u64 respectively, proving the per-type scaling.
+fn main() {
+    let a = add[u8](null[u8](), 5usize)
+    println_usize(addr[u8](a))            // 5
+
+    let b = add[u32](null[u32](), 5usize)
+    println_usize(addr[u32](b))           // 20
+
+    let c = add[u64](null[u64](), 5usize)
+    println_usize(addr[u64](c))           // 40
+
+    let d = sub[u32](b, 2usize)
+    println_usize(addr[u32](d))           // 12
+}

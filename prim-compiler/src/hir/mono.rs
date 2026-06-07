@@ -217,6 +217,16 @@ impl Mono<'_> {
                 for a in args.iter_mut() {
                     self.rewrite_expr(a, subst);
                 }
+                // `size_of[T]()` is an intrinsic, not a real function to
+                // specialize: fold it to its concrete byte count.
+                if self.program.functions[func.0 as usize].runtime
+                    == Some(super::RuntimeAbi::SizeOf)
+                {
+                    let concrete = self.substitute_type(&type_args[0], subst);
+                    expr.kind = ExprKind::Int(concrete.size_bytes() as i64);
+                    expr.ty = Type::Usize;
+                    return;
+                }
                 if !type_args.is_empty() {
                     let concrete: Vec<Type> = type_args
                         .iter()

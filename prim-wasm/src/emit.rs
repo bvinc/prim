@@ -992,6 +992,27 @@ fn emit_runtime_call(
             emit_expr(f, &args[0], ctx)?;
             f.instruction(&Instruction::I64Popcnt);
         }
+        // `size_of[T]()` is folded to a constant during monomorphization, so
+        // no call to it ever reaches codegen.
+        hir::RuntimeAbi::SizeOf => unreachable!("size_of is folded in monomorphization"),
+        // Generic `*mut T` primitives. A pointer is an i32 address, so these
+        // are type-independent; element scaling happens in Prim via size_of.
+        hir::RuntimeAbi::Null => {
+            f.instruction(&Instruction::I32Const(0));
+        }
+        hir::RuntimeAbi::PtrByteAdd | hir::RuntimeAbi::PtrByteOffset => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Add);
+        }
+        hir::RuntimeAbi::PtrByteSub => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Sub);
+        }
+        hir::RuntimeAbi::PtrAddr => {
+            emit_expr(f, &args[0], ctx)?;
+        }
     }
     Ok(())
 }

@@ -337,6 +337,7 @@ impl<'a> Parser<'a> {
                         kind: ExprKind::FunctionCall {
                             path: NamePath::from_single(ident),
                             args,
+                            type_args: Vec::new(),
                         },
                     })
                 } else if self.allow_struct_literal
@@ -527,7 +528,36 @@ impl<'a> Parser<'a> {
                 Ok(Expr {
                     span,
                     ty: Type::Undetermined,
-                    kind: ExprKind::FunctionCall { path, args },
+                    kind: ExprKind::FunctionCall {
+                        path,
+                        args,
+                        type_args: Vec::new(),
+                    },
+                })
+            }
+            // Turbofish call: `path[T1, T2](args)`. Only a path can carry
+            // type arguments; the bracket list must be followed by a call.
+            TokenKind::LeftBracket => {
+                let Some(path) = Self::expr_to_path(&left) else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "a function name before '['".to_string(),
+                        found: kind,
+                        span: self.current_span(),
+                    });
+                };
+                self.advance(); // consume '['
+                let type_args = self.parse_type_arg_list()?;
+                self.consume(TokenKind::LeftParen, "Expected '(' after type arguments")?;
+                let args = self.parse_argument_list()?;
+                let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
+                Ok(Expr {
+                    span: left.span.cover(end_span.span),
+                    ty: Type::Undetermined,
+                    kind: ExprKind::FunctionCall {
+                        path,
+                        args,
+                        type_args,
+                    },
                 })
             }
             TokenKind::Dot => {
@@ -551,7 +581,11 @@ impl<'a> Parser<'a> {
                         return Ok(Expr {
                             span,
                             ty: Type::Undetermined,
-                            kind: ExprKind::FunctionCall { path, args },
+                            kind: ExprKind::FunctionCall {
+                                path,
+                                args,
+                                type_args: Vec::new(),
+                            },
                         });
                     }
                     Ok(Expr {
@@ -1868,6 +1902,7 @@ fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
         TokenKind::Plus | TokenKind::Minus => Precedence::ADDITION,
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::MULTIPLICATION,
         TokenKind::LeftParen => Precedence::CALL,
+        TokenKind::LeftBracket => Precedence::CALL, // turbofish call f[T](...)
         TokenKind::Dot => Precedence::CALL, // Field access has same precedence as function calls
         _ => Precedence::NONE,
     }

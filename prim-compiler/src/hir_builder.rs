@@ -1158,7 +1158,11 @@ impl<'a> LoweringContext<'a> {
                 },
                 self.lower_type(&expr.ty, module_scope),
             ),
-            ExprKind::FunctionCall { path, args } => {
+            ExprKind::FunctionCall {
+                path,
+                args,
+                type_args,
+            } => {
                 if let Some(receiver) = self.lower_path_call_receiver(path, file_id) {
                     let method = *path.segments.last().expect("method segment");
                     return hir::Expr {
@@ -1183,7 +1187,10 @@ impl<'a> LoweringContext<'a> {
                         return hir::Expr {
                             kind: hir::ExprKind::Call {
                                 func: fid,
-                                type_args: Vec::new(),
+                                type_args: type_args
+                                    .iter()
+                                    .map(|t| self.lower_type(t, module_scope))
+                                    .collect(),
                                 args: args
                                     .iter()
                                     .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))

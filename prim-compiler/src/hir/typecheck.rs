@@ -1378,11 +1378,18 @@ impl<'a> Checker<'a> {
                 if let Some(tparams) = callee_type_params {
                     // Generic callee: infer one type-arg per type param by
                     // matching the formal/actual structure, then substitute
-                    // before unifying.
+                    // before unifying. Explicit turbofish args seed the pins
+                    // first; value-argument inference then refines and is
+                    // checked for consistency against them.
                     let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
+                    Self::pin_type_args(&mut pins, type_args);
                     let mut arg_types: Vec<Type> = Vec::with_capacity(args.len());
                     for (arg, formal) in args.iter_mut().zip(params.iter()) {
-                        self.apply_expected(arg, formal);
+                        // Apply the formal with any already-known pins
+                        // substituted in, so turbofish-supplied types steer
+                        // literal coercion (e.g. `identity[i32](7)`).
+                        let expected = Self::substitute_params(formal, &pins);
+                        self.apply_expected(arg, &expected);
                         let got = self.check_expr(arg, locals)?;
                         if !Self::infer_pins(formal, &got, &mut pins) {
                             return Err(self.error(

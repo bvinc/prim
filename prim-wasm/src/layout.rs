@@ -72,12 +72,7 @@ pub(crate) struct EnumLayout {
 
 /// Byte size of a field of the given type in linear memory.
 fn field_size(ty: &hir::Type) -> u32 {
-    match ty {
-        hir::Type::Bool | hir::Type::I8 | hir::Type::U8 => 1,
-        hir::Type::I16 | hir::Type::U16 => 2,
-        hir::Type::I64 | hir::Type::U64 | hir::Type::F64 | hir::Type::FloatVar => 8,
-        _ => 4,
-    }
+    ty.size_bytes()
 }
 
 fn align_up(offset: u32, align: u32) -> u32 {

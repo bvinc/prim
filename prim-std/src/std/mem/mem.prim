@@ -1,6 +1,7 @@
 mod mem
 
-// std.mem intrinsics are provided by the runtime.
-// Use as: std.mem.copy(dst, src, n), std.mem.move(dst, src, n),
-//         std.mem.set(dst, val, n), std.mem.len(ptr)
-
+// size_of[T]() — the in-memory size of T in bytes. Resolved to a constant
+// during monomorphization once T is concrete, so it costs nothing at
+// runtime. Backs generic pointer arithmetic and allocation sizing.
+@runtime("prim_rt_size_of")
+fn size_of[T]() -> usize;

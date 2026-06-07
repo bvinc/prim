@@ -82,6 +82,10 @@ pub enum ExprKind {
     FunctionCall {
         path: NamePath,
         args: Vec<Expr>,
+        /// Explicit type arguments from a turbofish call `f[T](args)`.
+        /// Empty when omitted; the type checker infers them from value
+        /// arguments in that case.
+        type_args: Vec<Type>,
     },
     StructLiteral {
         name: Ident,

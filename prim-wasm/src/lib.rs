@@ -153,6 +153,11 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut main_func_type: Option<u32> = None;
 
     for func in &program.functions {
+        // Uninstantiated generic templates are never called (only their
+        // monomorphized clones are); they get no wasm function.
+        if !func.type_params.is_empty() {
+            continue;
+        }
         if let Some(runtime) = func.runtime {
             runtime_map.insert(func.id, runtime);
         } else {
@@ -201,7 +206,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut per_func_str_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
     let mut cursor: u32 = STATIC_DATA_START;
     for func in &program.functions {
-        if func.runtime.is_some() {
+        if func.runtime.is_some() || !func.type_params.is_empty() {
             continue;
         }
         let dbg_start = dbg_sites.len();
@@ -435,7 +440,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_alloc());
     codes.function(&emit_print_bytes(fd_write_idx));
     for func in &program.functions {
-        if func.runtime.is_none() {
+        if func.runtime.is_none() && func.type_params.is_empty() {
             let dbg_range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
             let str_range = per_func_str_range.get(&func.id).cloned().unwrap_or(0..0);
             let dbg_slice = &dbg_sites[dbg_range];
