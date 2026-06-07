@@ -1,8 +1,7 @@
 struct Point {
     x: i32,
-    y: i32
 }
 
 fn main() {
-    let p1 = Point { x = 10 }
+    let p = Point { x = 1i32, x = 2i32 }
 }

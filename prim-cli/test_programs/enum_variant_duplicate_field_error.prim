@@ -1,0 +1,7 @@
+enum Maybe {
+    Some { value: i32 },
+}
+
+fn main() {
+    let x = Maybe.Some { value = 1i32, value = 2i32 }
+}

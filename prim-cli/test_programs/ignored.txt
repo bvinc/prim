@@ -2,5 +2,4 @@ byte_array_literal
 float_ops
 literal_errors
 numeric_min_max
-struct_errors
 struct_type_checking

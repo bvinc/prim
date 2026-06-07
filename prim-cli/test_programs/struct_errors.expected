@@ -1,1 +1,1 @@
-IGNORED
+ERROR: missing field 'y' in struct literal
