@@ -1,0 +1,25 @@
+import std.io.println_usize
+import std.ptr.null_mut_u8
+import std.ptr.ptr_add_mut_u8
+import std.ptr.ptr_sub_mut_u8
+import std.ptr.ptr_offset_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+import std.ptr.ptr_byte_sub_mut_u8
+import std.ptr.ptr_byte_offset_mut_u8
+import std.ptr.ptr_addr_mut_u8
+
+fn main() {
+    let base = ptr_byte_add_mut_u8(null_mut_u8(), 1000usize)
+    println_usize(ptr_addr_mut_u8(base))                           // 1000
+
+    // For *mut u8, add/byte_add are equivalent (sizeof = 1).
+    println_usize(ptr_addr_mut_u8(ptr_add_mut_u8(base, 16usize)))  // 1016
+    println_usize(ptr_addr_mut_u8(ptr_byte_add_mut_u8(base, 16usize))) // 1016
+
+    println_usize(ptr_addr_mut_u8(ptr_sub_mut_u8(base, 100usize)))      // 900
+    println_usize(ptr_addr_mut_u8(ptr_byte_sub_mut_u8(base, 100usize))) // 900
+
+    // Offset accepts signed (negative).
+    println_usize(ptr_addr_mut_u8(ptr_offset_mut_u8(base, -50isize)))      // 950
+    println_usize(ptr_addr_mut_u8(ptr_byte_offset_mut_u8(base, 50isize)))  // 1050
+}

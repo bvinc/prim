@@ -6,11 +6,26 @@ use std::sync::Arc;
 pub mod typecheck;
 pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
 
+pub mod mono;
+pub use mono::monomorphize;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StructId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GlobalId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TraitId(pub u32);
+
+/// Position of a generic function's type parameter within its
+/// `type_params` vec. `Type::Param(TypeParamId(i))` refers to the i-th
+/// parameter of the enclosing function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TypeParamId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SymbolId(pub u32);
@@ -23,6 +38,15 @@ pub struct Program {
     pub modules: Vec<Module>,
     pub functions: Vec<Function>,
     pub structs: Vec<Struct>,
+    pub globals: Vec<Global>,
+    pub traits: Vec<Trait>,
+    /// `(receiver struct, method name)` → impl method's FuncId. Populated
+    /// by lowering each `impl Trait for Struct { fn ... }` block. Method
+    /// calls in expressions look up here at typecheck time.
+    pub impl_methods: std::collections::HashMap<(StructId, InternSymbol), FuncId>,
+    /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
+    /// Used to generate vtables and to dispatch dynamic method calls.
+    pub impls: std::collections::HashMap<(TraitId, StructId), Vec<FuncId>>,
     pub symbols: Vec<Symbol>,
     /// Shared with the loader and all parsed files in this compilation.
     /// `Arc` because `ThreadedRodeo` isn't `Clone` (it holds internal state
@@ -42,6 +66,7 @@ pub struct Module {
 pub struct Function {
     pub id: FuncId,
     pub name: SymbolId,
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub body: Block,
@@ -49,12 +74,69 @@ pub struct Function {
     pub runtime_binding: Option<String>,
 }
 
+/// A type parameter in a generic function's signature. `bound`, if
+/// present, restricts which concrete types may be substituted in and
+/// permits calling that trait's methods on values of this type within
+/// the body.
+#[derive(Clone, Debug)]
+pub struct TypeParam {
+    pub name: SymbolId,
+    pub bound: Option<TraitId>,
+    pub span: SpanId,
+}
+
 #[derive(Clone, Debug)]
 pub struct Struct {
     pub id: StructId,
     pub name: SymbolId,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<Field>,
     pub span: SpanId,
+}
+
+/// A trait: a set of method signatures. Trait values are fat pointers
+/// `{vtable_addr: i32, data_addr: i32}` at the wasm level.
+#[derive(Clone, Debug)]
+pub struct Trait {
+    pub id: TraitId,
+    pub name: SymbolId,
+    pub methods: Vec<TraitMethodSig>,
+    /// Method name → position in `methods`. Lets typecheck resolve a
+    /// `receiver.method()` call in O(1) instead of scanning.
+    pub method_idx: std::collections::HashMap<InternSymbol, u32>,
+    pub span: SpanId,
+}
+
+/// Trait method signature. The method's index in `Trait::methods` is its
+/// vtable slot. `params` includes the receiver position (always the trait's
+/// own type at trait-declaration time).
+#[derive(Clone, Debug)]
+pub struct TraitMethodSig {
+    pub name: InternSymbol,
+    pub params: Vec<Type>,
+    pub ret: Option<Type>,
+    pub span: SpanId,
+}
+
+/// A module-level mutable or immutable global. The initializer is a
+/// constant value (numeric or bool literal) — wasm only permits constant
+/// expressions in global initializers.
+#[derive(Clone, Debug)]
+pub struct Global {
+    pub id: GlobalId,
+    pub name: SymbolId,
+    pub mutable: bool,
+    pub ty: Type,
+    pub init: GlobalInit,
+    pub span: SpanId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GlobalInit {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +174,11 @@ pub enum Stmt {
         value: Expr,
         span: SpanId,
     },
+    DerefAssign {
+        ptr: Expr,
+        value: Expr,
+        span: SpanId,
+    },
     Expr(Expr),
     Loop {
         body: Block,
@@ -103,6 +190,10 @@ pub enum Stmt {
         span: SpanId,
     },
     Break {
+        span: SpanId,
+    },
+    Return {
+        value: Option<Expr>,
         span: SpanId,
     },
 }
@@ -128,10 +219,19 @@ pub enum ExprKind {
     },
     Call {
         func: FuncId,
+        /// Concrete types substituted for the callee's type parameters in
+        /// declaration order. Empty for non-generic callees. Populated by
+        /// typecheck via call-site inference; consumed by monomorphization
+        /// to dispatch the call to the right specialization.
+        type_args: Vec<Type>,
         args: Vec<Expr>,
     },
     StructLit {
         struct_id: StructId,
+        /// Concrete types substituted for the struct's type parameters
+        /// in declaration order. Empty for non-generic structs.
+        /// Populated by typecheck inference, consumed by mono.
+        type_args: Vec<Type>,
         fields: Vec<(InternSymbol, Expr)>,
     },
     Field {
@@ -139,6 +239,45 @@ pub enum ExprKind {
         field: InternSymbol,
     },
     Deref(Box<Expr>),
+    /// `receiver.method(args)` — kept in HIR until typecheck, which either
+    /// rewrites to `Call` (concrete receiver) or to `DynCall` (trait
+    /// receiver).
+    MethodCall {
+        receiver: Box<Expr>,
+        method: InternSymbol,
+        args: Vec<Expr>,
+    },
+    /// Dynamic method dispatch through a trait fat pointer. Emitted by
+    /// typecheck when the receiver type is `Type::Trait(tid)`. `method_idx`
+    /// is the position of the method in the trait's declaration order
+    /// (i.e. the vtable slot).
+    DynCall {
+        receiver: Box<Expr>,
+        trait_id: TraitId,
+        method_idx: u32,
+        args: Vec<Expr>,
+    },
+    /// A method call on a value whose type is `Type::Param(i)` with a
+    /// declared bound. Resolved at monomorphization: after `T` is
+    /// substituted to a concrete struct `S`, this is rewritten to a
+    /// direct `Call` via `impl_methods[(S, method)]`.
+    TraitBoundCall {
+        receiver: Box<Expr>,
+        type_param: TypeParamId,
+        bound: TraitId,
+        method: InternSymbol,
+        args: Vec<Expr>,
+    },
+    /// Box a concrete-typed value into a trait fat pointer. Emitted by
+    /// typecheck when a `Type::Struct(sid)` value flows into a
+    /// `Type::Trait(tid)` slot. Codegen materializes the fat pointer struct
+    /// `{vtable_addr, data_addr}` on the heap.
+    Coerce {
+        value: Box<Expr>,
+        source_struct: StructId,
+        target_trait: TraitId,
+    },
+    BitNot(Box<Expr>),
     ArrayLit(Vec<Expr>),
     Dbg {
         /// Pre-rendered `[path:line:col] expr_text = ` prefix string,
@@ -169,13 +308,14 @@ pub enum SymbolKind {
     Module,
     Function(FuncId),
     Struct(StructId),
+    Global(GlobalId),
     Param,
     Local,
     Trait,
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     U8,
     I8,
@@ -191,7 +331,17 @@ pub enum Type {
     F64,
     Bool,
     Array(Box<Type>),
-    Struct(StructId),
+    /// A struct type with optional concrete type arguments. Empty
+    /// `Vec<Type>` means a non-generic struct or an as-yet-uninstantiated
+    /// generic; non-empty means a specific instantiation that mono will
+    /// turn into a fresh concrete `StructId`.
+    Struct(StructId, Vec<Type>),
+    /// A trait type — at the wasm level a pointer to an 8-byte fat pointer
+    /// struct `{vtable_addr, data_addr}`.
+    Trait(TraitId),
+    /// A type parameter `T` within a generic function's signature or body.
+    /// Substituted to a concrete type by monomorphization before codegen.
+    Param(TypeParamId),
     Pointer {
         mutable: bool,
         pointee: Box<Type>,
@@ -206,7 +356,7 @@ pub enum Type {
 impl Type {
     pub fn as_struct(&self) -> Option<StructId> {
         match self {
-            Type::Struct(id) => Some(*id),
+            Type::Struct(id, _) => Some(*id),
             _ => None,
         }
     }
@@ -229,7 +379,22 @@ impl fmt::Display for Type {
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::Array(elem) => write!(f, "[{elem}]"),
-            Type::Struct(id) => write!(f, "struct {:?}", id),
+            Type::Struct(id, args) => {
+                if args.is_empty() {
+                    write!(f, "struct {:?}", id)
+                } else {
+                    write!(f, "struct {:?}<", id)?;
+                    for (i, t) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ">")
+                }
+            }
+            Type::Trait(id) => write!(f, "trait {:?}", id),
+            Type::Param(id) => write!(f, "T#{}", id.0),
             Type::Pointer { mutable, pointee } => {
                 if *mutable {
                     write!(f, "*mut {pointee}")

@@ -43,8 +43,15 @@ pub enum Type {
     F64,
     Bool,
     Array(Box<Type>),
-    Struct(InternSymbol),
-    Pointer { mutable: bool, pointee: Box<Type> },
+    /// Named type — either a struct or a trait. The optional type
+    /// argument list lets generic instantiations like `Pair<i32>` appear
+    /// in type positions (function params, return, let bindings). Empty
+    /// vec means a plain name with no generic args.
+    Struct(InternSymbol, Vec<Type>),
+    Pointer {
+        mutable: bool,
+        pointee: Box<Type>,
+    },
     Undetermined, // Type not yet determined during parsing
 }
 
@@ -80,7 +87,15 @@ pub enum ExprKind {
         object: Box<Expr>,
         field: Ident,
     },
+    /// `receiver.method(args)` — resolved to a concrete impl method at
+    /// typecheck time based on the receiver's type.
+    MethodCall {
+        receiver: Box<Expr>,
+        method: Ident,
+        args: Vec<Expr>,
+    },
     Dereference(Box<Expr>),
+    BitNot(Box<Expr>),
     Array(Vec<Expr>),
     Dbg(Box<Expr>),
     If {
@@ -104,6 +119,11 @@ pub enum BinaryOp {
     GreaterEquals,
     Less,
     LessEquals,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }
 
 impl std::fmt::Display for BinaryOp {
@@ -120,6 +140,11 @@ impl std::fmt::Display for BinaryOp {
             BinaryOp::GreaterEquals => ">=",
             BinaryOp::Less => "<",
             BinaryOp::LessEquals => "<=",
+            BinaryOp::BitAnd => "&",
+            BinaryOp::BitOr => "|",
+            BinaryOp::BitXor => "^",
+            BinaryOp::ShiftLeft => "<<",
+            BinaryOp::ShiftRight => ">>",
         };
         write!(f, "{symbol}")
     }
@@ -134,6 +159,7 @@ pub struct StructField {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
     pub name: Ident,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
     pub span: Span,
@@ -143,6 +169,18 @@ pub struct StructDefinition {
 pub struct StructFieldDefinition {
     pub name: Ident,
     pub field_type: Type,
+}
+
+/// A module-level `let` (or `let mut`) declaration. The initializer is
+/// restricted to a literal at lower time, since wasm globals can only be
+/// initialized with a constant expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlobalDecl {
+    pub name: Ident,
+    pub mutable: bool,
+    pub type_annotation: Type,
+    pub value: Expr,
+    pub span: Span,
 }
 
 /// A block of statements with an optional trailing expression.
@@ -166,6 +204,11 @@ pub enum Stmt {
         target: Ident,
         value: Expr,
     },
+    /// `*ptr_expr = value` — write through a pointer.
+    DerefAssign {
+        ptr: Expr,
+        value: Expr,
+    },
     Expr(Expr),
     Loop {
         body: Vec<Stmt>,
@@ -179,16 +222,31 @@ pub enum Stmt {
     Break {
         span: Span,
     },
+    /// `return` or `return expr` — early exit from the enclosing function.
+    Return {
+        value: Option<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: Ident,
+    pub type_params: Vec<TypeParam>,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Block,
     pub runtime_binding: Option<String>,
     pub span: Span,
+}
+
+/// A generic function's type parameter, e.g. `T` in `fn min<T: Ord>(...)`.
+/// `bound` is the optional trait the parameter is constrained by; without
+/// a bound, the body may only use values of this type opaquely.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: Ident,
+    pub bound: Option<Ident>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +268,7 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub traits: Vec<TraitDefinition>,
     pub impls: Vec<ImplDefinition>,
+    pub globals: Vec<GlobalDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,7 +353,7 @@ pub struct ImplMethod {
     pub name: Ident,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
-    pub body: Vec<Stmt>,
+    pub body: Block,
 }
 
 /// A path of name segments (e.g., `module.submodule.function`).

@@ -63,6 +63,7 @@ pub(crate) enum ResSymbolKind {
     Struct,
     Trait,
     Impl,
+    Global,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

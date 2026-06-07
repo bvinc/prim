@@ -33,8 +33,9 @@ use prim_compiler::hir;
 use std::collections::HashMap;
 use std::fmt;
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataSection, ExportKind, ExportSection, FunctionSection, GlobalSection,
-    GlobalType, ImportSection, MemorySection, MemoryType, Module, ValType,
+    CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind, ExportSection,
+    FunctionSection, GlobalSection, GlobalType, ImportSection, MemorySection, MemoryType, Module,
+    RefType, TableSection, TableType, TagKind, TagSection, TagType, ValType,
 };
 
 #[derive(Debug)]
@@ -95,6 +96,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         println_f64: 4,
         alloc: 5,
         print_bytes: 6,
+        yield_tag: 0,
     };
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
@@ -103,15 +105,13 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut user_func_types: Vec<u32> = Vec::new();
     let mut next_idx: u32 = 7;
     let mut main_wasm_idx = None;
+    let mut main_func_type: Option<u32> = None;
 
     for func in &program.functions {
         if let Some(binding) = &func.runtime_binding {
             runtime_map.insert(func.id, binding.clone());
         } else {
             func_map.insert(func.id, next_idx);
-            if program.main == Some(func.name) {
-                main_wasm_idx = Some(next_idx);
-            }
             let params: Vec<ValType> = func
                 .params
                 .iter()
@@ -124,6 +124,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 .unwrap_or_default();
             let type_idx = types.register(params, results);
             user_func_types.push(type_idx);
+            if program.main == Some(func.name) {
+                main_wasm_idx = Some(next_idx);
+                main_func_type = Some(type_idx);
+            }
             next_idx += 1;
         }
     }
@@ -131,6 +135,14 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let start_idx = next_idx;
     let start_type = types.register(vec![], vec![]);
     let main_wasm_idx = main_wasm_idx.ok_or(WasmError::MissingMain)?;
+    let main_func_type = main_func_type.ok_or(WasmError::MissingMain)?;
+
+    // WasmFX: continuation type wrapping main's function signature; the
+    // scheduler in `_start` uses this for `cont.new` and `resume`. The
+    // `yield` tag has the empty function-type signature so suspend/resume
+    // carry no values — yield is "I want to reschedule," nothing else.
+    let main_cont_type = types.register_cont(main_func_type);
+    let yield_tag_idx: u32 = 0;
 
     // First pass: walk every user function in the same order they'll be
     // emitted, collect dbg prefix strings AND string literal bytes, lay them
@@ -171,6 +183,84 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         }
         per_func_str_range.insert(func.id, str_start..str_sites.len());
     }
+
+    // Trait dispatch: every impl method that may be invoked through a
+    // trait fat pointer gets a stable slot in wasm table 0. The vtables
+    // (one per (TraitId, StructId) impl) live in static memory and store
+    // the table slot index for each method in trait declaration order.
+    //
+    // method_table_idx: FuncId -> wasm table slot
+    // table_entries:    wasm function indices in slot order (for the
+    //                   active element segment)
+    // vtable_addr:      (TraitId, StructId) -> static-memory address
+    let mut impl_keys: Vec<(hir::TraitId, hir::StructId)> = program.impls.keys().copied().collect();
+    impl_keys.sort_by_key(|(t, s)| (t.0, s.0));
+
+    let mut method_table_idx: HashMap<hir::FuncId, u32> = HashMap::new();
+    let mut table_entries: Vec<u32> = Vec::new();
+    for key in &impl_keys {
+        for fid in &program.impls[key] {
+            if fid.0 == u32::MAX || method_table_idx.contains_key(fid) {
+                continue;
+            }
+            let wasm_fn = *func_map.get(fid).expect("impl method missing in func_map");
+            let slot = table_entries.len() as u32;
+            method_table_idx.insert(*fid, slot);
+            table_entries.push(wasm_fn);
+        }
+    }
+
+    // Lay out vtables in static memory, 4 bytes per slot. Each slot holds
+    // a wasm table index (i32). Pad static_data once up to the aligned
+    // cursor, then append vtable bytes contiguously.
+    cursor = (cursor + 3) & !3;
+    let pad_to = (cursor - STATIC_DATA_START) as usize;
+    if static_data.len() < pad_to {
+        static_data.resize(pad_to, 0);
+    }
+    let mut vtable_addr: HashMap<(hir::TraitId, hir::StructId), u32> = HashMap::new();
+    for key in &impl_keys {
+        vtable_addr.insert(*key, cursor);
+        for fid in &program.impls[key] {
+            let slot = if fid.0 == u32::MAX {
+                // Missing impl method — sentinel slot 0 traps via the
+                // null-funcref check (or wrong-signature trap) on dispatch.
+                0u32
+            } else {
+                *method_table_idx.get(fid).expect("missing table slot")
+            };
+            static_data.extend_from_slice(&slot.to_le_bytes());
+            cursor += 4;
+        }
+    }
+
+    // Register a wasm type-index for each trait method's signature so
+    // call_indirect at dispatch sites can reference it. The dispatched
+    // function's wasm signature is (i32 receiver-data-ptr, ...remaining
+    // params) → return type — uniform across all impls of a given trait
+    // method since pointer types all lower to i32.
+    let mut dyn_call_types: HashMap<(hir::TraitId, u32), u32> = HashMap::new();
+    for t in &program.traits {
+        for (mi, sig) in t.methods.iter().enumerate() {
+            let mut params: Vec<ValType> = Vec::with_capacity(sig.params.len().max(1));
+            if sig.params.is_empty() {
+                params.push(ValType::I32);
+            } else {
+                params.push(ValType::I32);
+                for p in &sig.params[1..] {
+                    params.push(hir_type_to_valtype(p));
+                }
+            }
+            let results: Vec<ValType> = sig
+                .ret
+                .as_ref()
+                .map(|r| vec![hir_type_to_valtype(r)])
+                .unwrap_or_default();
+            let type_idx = types.register(params, results);
+            dyn_call_types.insert((t.id, mi as u32), type_idx);
+        }
+    }
+
     let heap_start: i32 = ((cursor + 7) & !7).max(1024) as i32;
 
     let mut module = Module::new();
@@ -201,6 +291,21 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     functions.function(start_type); // _start
     module.section(&functions);
 
+    // Table section: a funcref table holding every impl method that may
+    // be invoked through a trait fat pointer. Table 0 is the dispatch
+    // table; if there are no impls, we still emit an empty table so a
+    // call_indirect against table 0 is always well-formed.
+    let mut tables = TableSection::new();
+    let table_size = table_entries.len() as u64;
+    tables.table(TableType {
+        element_type: RefType::FUNCREF,
+        minimum: table_size,
+        maximum: Some(table_size),
+        table64: false,
+        shared: false,
+    });
+    module.section(&tables);
+
     // Memory section
     let mut memories = MemorySection::new();
     memories.memory(MemoryType {
@@ -212,7 +317,18 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     });
     module.section(&memories);
 
-    // Global section: heap pointer
+    // Tag section: declare the `yield` tag used by the scheduler's resume
+    // handler. Stack-switching tags use the same binary encoding as
+    // exception tags (attribute byte 0); `TagKind::Exception` is just the
+    // name wasm-encoder gives that encoding.
+    let mut tags = TagSection::new();
+    tags.tag(TagType {
+        kind: TagKind::Exception,
+        func_type_idx: start_type,
+    });
+    module.section(&tags);
+
+    // Global section: heap pointer first (wasm index 0), then user globals.
     let mut globals = GlobalSection::new();
     globals.global(
         GlobalType {
@@ -222,6 +338,26 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         },
         &ConstExpr::i32_const(heap_start),
     );
+    let mut global_wasm_idx: HashMap<hir::GlobalId, u32> = HashMap::new();
+    for (i, g) in program.globals.iter().enumerate() {
+        let val_type = hir_type_to_valtype(&g.ty);
+        let init = match g.init {
+            hir::GlobalInit::I32(v) => ConstExpr::i32_const(v),
+            hir::GlobalInit::I64(v) => ConstExpr::i64_const(v),
+            hir::GlobalInit::F32(v) => ConstExpr::f32_const(v.into()),
+            hir::GlobalInit::F64(v) => ConstExpr::f64_const(v.into()),
+        };
+        globals.global(
+            GlobalType {
+                val_type,
+                mutable: g.mutable,
+                shared: false,
+            },
+            &init,
+        );
+        // wasm global index: heap_ptr is at 0, user globals start at 1.
+        global_wasm_idx.insert(g.id, 1 + i as u32);
+    }
     module.section(&globals);
 
     // Export section
@@ -229,6 +365,21 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     exports.export("_start", ExportKind::Func, start_idx);
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
+
+    // Element section: an active segment populates the dispatch table at
+    // offset 0 with each impl method's wasm function index, plus a
+    // declared segment for `ref.func $main` (the scheduler in `_start`
+    // uses ref.func, which requires the target to be declared ref-able).
+    let mut elements = ElementSection::new();
+    if !table_entries.is_empty() {
+        elements.active(
+            Some(0),
+            &ConstExpr::i32_const(0),
+            Elements::Functions(table_entries.clone().into()),
+        );
+    }
+    elements.declared(Elements::Functions(vec![main_wasm_idx].into()));
+    module.section(&elements);
 
     // Code section
     let mut codes = CodeSection::new();
@@ -251,6 +402,9 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 &runtime_map,
                 &builtins,
                 &struct_layouts,
+                &global_wasm_idx,
+                &dyn_call_types,
+                &vtable_addr,
                 dbg_slice,
                 str_slice,
             );
@@ -262,7 +416,12 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         .iter()
         .find(|f| program.main == Some(f.name))
         .unwrap();
-    codes.function(&emit_start(main_wasm_idx, main_func.ret.is_some()));
+    codes.function(&emit_start(
+        main_wasm_idx,
+        main_cont_type,
+        yield_tag_idx,
+        main_func.ret.is_some(),
+    ));
     module.section(&codes);
 
     // Data section

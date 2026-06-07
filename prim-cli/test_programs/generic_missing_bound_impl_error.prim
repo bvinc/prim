@@ -1,0 +1,18 @@
+// Negative test: passing a type that doesn't impl the bound trait must
+// fail typecheck, not silently succeed.
+
+struct NotOrd { n: i32 }
+
+trait Ord {
+    fn lt(self: Ord, other: Ord) -> bool;
+}
+
+fn min<T: Ord>(a: T, b: T) -> T {
+    if a.lt(b) { a } else { b }
+}
+
+fn main() {
+    let x = NotOrd { n = 1 }
+    let y = NotOrd { n = 2 }
+    min(x, y);
+}

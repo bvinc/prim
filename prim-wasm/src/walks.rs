@@ -38,6 +38,10 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
             collect_locals_expr(value, locals);
         }
         hir::Stmt::Assign { value, .. } => collect_locals_expr(value, locals),
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            collect_locals_expr(ptr, locals);
+            collect_locals_expr(value, locals);
+        }
         hir::Stmt::Expr(e) => collect_locals_expr(e, locals),
         hir::Stmt::Loop { body, .. } => collect_locals_block(body, locals),
         hir::Stmt::While {
@@ -47,6 +51,11 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
             collect_locals_block(body, locals);
         }
         hir::Stmt::Break { .. } => {}
+        hir::Stmt::Return { value, .. } => {
+            if let Some(v) = value {
+                collect_locals_expr(v, locals);
+            }
+        }
     }
 }
 
@@ -80,6 +89,19 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
         }
         hir::ExprKind::Field { base, .. } => collect_locals_expr(base, locals),
         hir::ExprKind::Deref(base) => collect_locals_expr(base, locals),
+        hir::ExprKind::Coerce { value, .. } => collect_locals_expr(value, locals),
+        hir::ExprKind::DynCall { receiver, args, .. } => {
+            collect_locals_expr(receiver, locals);
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
+        hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
+            collect_locals_expr(receiver, locals);
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
                 collect_locals_expr(e, locals);
@@ -118,6 +140,10 @@ fn collect_scratch_types_stmt(
         hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
             collect_scratch_types_expr(value, runtime, out);
         }
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            collect_scratch_types_expr(ptr, runtime, out);
+            collect_scratch_types_expr(value, runtime, out);
+        }
         hir::Stmt::Expr(e) => collect_scratch_types_expr(e, runtime, out),
         hir::Stmt::Loop { body, .. } => collect_scratch_types_block(body, runtime, out),
         hir::Stmt::While {
@@ -127,6 +153,11 @@ fn collect_scratch_types_stmt(
             collect_scratch_types_block(body, runtime, out);
         }
         hir::Stmt::Break { .. } => {}
+        hir::Stmt::Return { value, .. } => {
+            if let Some(v) = value {
+                collect_scratch_types_expr(v, runtime, out);
+            }
+        }
     }
 }
 
@@ -154,7 +185,7 @@ fn collect_scratch_types_expr(
             collect_scratch_types_expr(left, runtime, out);
             collect_scratch_types_expr(right, runtime, out);
         }
-        hir::ExprKind::Call { func, args } => {
+        hir::ExprKind::Call { func, args, .. } => {
             // write(fd, s: String) needs one i32 scratch to duplicate the
             // String struct ptr across two field loads.
             if runtime.get(func).map(String::as_str) == Some("prim_rt_write") {
@@ -166,6 +197,29 @@ fn collect_scratch_types_expr(
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
             collect_scratch_types_expr(base, runtime, out);
+        }
+        hir::ExprKind::Coerce { value, .. } => {
+            // Two i32 scratch slots: data_ptr stash and fat pointer base.
+            out.push(ValType::I32);
+            out.push(ValType::I32);
+            collect_scratch_types_expr(value, runtime, out);
+        }
+        hir::ExprKind::DynCall { receiver, args, .. } => {
+            // One i32 scratch slot for the fat pointer.
+            out.push(ValType::I32);
+            collect_scratch_types_expr(receiver, runtime, out);
+            for a in args {
+                collect_scratch_types_expr(a, runtime, out);
+            }
+        }
+        hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
+            // Should be rewritten to Call by monomorphization before
+            // codegen; recurse so any nested generic expression's scratch
+            // needs are still counted if this leaks through.
+            collect_scratch_types_expr(receiver, runtime, out);
+            for a in args {
+                collect_scratch_types_expr(a, runtime, out);
+            }
         }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
@@ -207,6 +261,10 @@ fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
         hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
             collect_dbg_prefixes_expr(value, out);
         }
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            collect_dbg_prefixes_expr(ptr, out);
+            collect_dbg_prefixes_expr(value, out);
+        }
         hir::Stmt::Expr(e) => collect_dbg_prefixes_expr(e, out),
         hir::Stmt::Loop { body, .. } => collect_dbg_prefixes_block(body, out),
         hir::Stmt::While {
@@ -216,6 +274,11 @@ fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
             collect_dbg_prefixes_block(body, out);
         }
         hir::Stmt::Break { .. } => {}
+        hir::Stmt::Return { value, .. } => {
+            if let Some(v) = value {
+                collect_dbg_prefixes_expr(v, out);
+            }
+        }
     }
 }
 
@@ -241,6 +304,19 @@ fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
             collect_dbg_prefixes_expr(base, out);
+        }
+        hir::ExprKind::Coerce { value, .. } => collect_dbg_prefixes_expr(value, out),
+        hir::ExprKind::DynCall { receiver, args, .. } => {
+            collect_dbg_prefixes_expr(receiver, out);
+            for a in args {
+                collect_dbg_prefixes_expr(a, out);
+            }
+        }
+        hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
+            collect_dbg_prefixes_expr(receiver, out);
+            for a in args {
+                collect_dbg_prefixes_expr(a, out);
+            }
         }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
@@ -281,6 +357,10 @@ fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
         hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
             collect_str_literals_expr(value, out);
         }
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            collect_str_literals_expr(ptr, out);
+            collect_str_literals_expr(value, out);
+        }
         hir::Stmt::Expr(e) => collect_str_literals_expr(e, out),
         hir::Stmt::Loop { body, .. } => collect_str_literals_block(body, out),
         hir::Stmt::While {
@@ -290,6 +370,11 @@ fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
             collect_str_literals_block(body, out);
         }
         hir::Stmt::Break { .. } => {}
+        hir::Stmt::Return { value, .. } => {
+            if let Some(v) = value {
+                collect_str_literals_expr(v, out);
+            }
+        }
     }
 }
 
@@ -313,6 +398,19 @@ fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
             collect_str_literals_expr(base, out);
+        }
+        hir::ExprKind::Coerce { value, .. } => collect_str_literals_expr(value, out),
+        hir::ExprKind::DynCall { receiver, args, .. } => {
+            collect_str_literals_expr(receiver, out);
+            for a in args {
+                collect_str_literals_expr(a, out);
+            }
+        }
+        hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
+            collect_str_literals_expr(receiver, out);
+            for a in args {
+                collect_str_literals_expr(a, out);
+            }
         }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {

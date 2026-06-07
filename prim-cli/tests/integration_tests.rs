@@ -53,6 +53,9 @@ fn test_cli_build_command() {
 
     let run_output = Command::new("wasmtime")
         .arg("run")
+        .args(["-W", "stack-switching=y"])
+        .args(["-W", "function-references=y"])
+        .args(["-W", "exceptions=y"])
         .arg(&wasm_path)
         .output()
         .expect("Failed to run generated wasm");

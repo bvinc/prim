@@ -204,6 +204,26 @@ impl<'a> ScopeCollector<'a> {
             );
             scope.insert(name, sym);
         }
+
+        for g in &ast.globals {
+            let name = interner.resolve(&g.name.sym).to_string();
+            if scope.contains_key(&name) {
+                self.errors.push(ResolveError::DuplicateSymbol {
+                    name,
+                    file: file.file_id,
+                    span: g.span,
+                });
+                continue;
+            }
+            let sym = self.add_symbol(
+                name.clone(),
+                ResSymbolKind::Global,
+                Some(module_id),
+                file.file_id,
+                g.span,
+            );
+            scope.insert(name, sym);
+        }
     }
 
     fn apply_imports(&self, mut scope: ModuleScope, imports: &[ImportRequest]) -> ModuleScope {

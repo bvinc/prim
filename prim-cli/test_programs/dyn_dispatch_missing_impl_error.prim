@@ -1,0 +1,17 @@
+// Negative test: passing a struct that does NOT implement the trait
+// must fail typecheck — not silently coerce.
+
+struct NotAGreeter { n: i32 }
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+fn use_it(g: Greeter) -> i32 {
+    g.greet()
+}
+
+fn main() {
+    let x = NotAGreeter { n = 1 }
+    use_it(x);
+}

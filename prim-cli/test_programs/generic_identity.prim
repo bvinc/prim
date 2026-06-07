@@ -1,0 +1,12 @@
+import std.io.println_i32
+
+// Simplest generic: pass-through. The compiler stamps out a separate
+// `identity<i32>` after monomorphization.
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let n = identity(42i32)
+    println_i32(n)
+}

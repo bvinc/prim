@@ -1,0 +1,13 @@
+// Negative test: calling a method on an unbounded type parameter must
+// fail typecheck — there's no trait to look up the method in.
+
+trait Ord {
+    fn lt(self: Ord, other: Ord) -> bool;
+}
+
+fn bad<T>(a: T, b: T) -> bool {
+    a.lt(b)
+}
+
+fn main() {
+}

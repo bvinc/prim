@@ -1,6 +1,9 @@
-import geom.point.{Point, new_point, HasValue, announce}
+import geom.point.{Point, new_point}
+import std.io.println_i32
 
 fn main() {
-    let _p: Point = new_point();
-    announce();
+    let p: Point = new_point()
+    // Method call on a concrete struct, resolved at typecheck time to the
+    // impl method's FuncId and lowered to a direct call.
+    println_i32(p.get())
 }

@@ -1,0 +1,16 @@
+import std.io.println_i64
+
+let mut COUNTER: i64 = 100;
+
+fn bump() {
+    COUNTER = COUNTER + 1
+}
+
+fn main() {
+    println_i64(COUNTER)
+    bump()
+    println_i64(COUNTER)
+    bump()
+    bump()
+    println_i64(COUNTER)
+}

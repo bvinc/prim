@@ -1,0 +1,97 @@
+mod ptr
+
+// Pointer primitives. Without generics, each pointer type needs its own
+// concrete API surface. Currently shipped: *mut u8 and *mut u32 — enough
+// to implement an allocator. *const variants and other pointee types will
+// follow generics.
+//
+// Conventions:
+//   ptr_add(p, n)        — advance by n elements (n * sizeof(T) bytes)
+//   ptr_sub(p, n)        — retreat by n elements
+//   ptr_offset(p, n)     — signed element offset
+//   ptr_byte_add(p, n)   — advance by n bytes regardless of pointee size
+//   ptr_byte_sub(p, n)   — retreat by n bytes
+//   ptr_byte_offset(p, n)— signed byte offset
+//   ptr_addr(p)          — pointer as a numeric address
+//   null_*()             — null pointer of the named type
+
+// ---- *mut u8 ----
+
+@runtime("prim_rt_null_mut_u8")
+fn null_mut_u8() -> *mut u8;
+
+@runtime("prim_rt_ptr_add_mut_u8")
+fn ptr_add_mut_u8(p: *mut u8, n: usize) -> *mut u8;
+
+@runtime("prim_rt_ptr_sub_mut_u8")
+fn ptr_sub_mut_u8(p: *mut u8, n: usize) -> *mut u8;
+
+@runtime("prim_rt_ptr_offset_mut_u8")
+fn ptr_offset_mut_u8(p: *mut u8, n: isize) -> *mut u8;
+
+@runtime("prim_rt_ptr_byte_add_mut_u8")
+fn ptr_byte_add_mut_u8(p: *mut u8, n: usize) -> *mut u8;
+
+@runtime("prim_rt_ptr_byte_sub_mut_u8")
+fn ptr_byte_sub_mut_u8(p: *mut u8, n: usize) -> *mut u8;
+
+@runtime("prim_rt_ptr_byte_offset_mut_u8")
+fn ptr_byte_offset_mut_u8(p: *mut u8, n: isize) -> *mut u8;
+
+@runtime("prim_rt_ptr_addr_mut_u8")
+fn ptr_addr_mut_u8(p: *mut u8) -> usize;
+
+// ---- *mut u32 ----
+
+@runtime("prim_rt_null_mut_u32")
+fn null_mut_u32() -> *mut u32;
+
+@runtime("prim_rt_ptr_add_mut_u32")
+fn ptr_add_mut_u32(p: *mut u32, n: usize) -> *mut u32;
+
+@runtime("prim_rt_ptr_sub_mut_u32")
+fn ptr_sub_mut_u32(p: *mut u32, n: usize) -> *mut u32;
+
+@runtime("prim_rt_ptr_offset_mut_u32")
+fn ptr_offset_mut_u32(p: *mut u32, n: isize) -> *mut u32;
+
+@runtime("prim_rt_ptr_byte_add_mut_u32")
+fn ptr_byte_add_mut_u32(p: *mut u32, n: usize) -> *mut u32;
+
+@runtime("prim_rt_ptr_byte_sub_mut_u32")
+fn ptr_byte_sub_mut_u32(p: *mut u32, n: usize) -> *mut u32;
+
+@runtime("prim_rt_ptr_byte_offset_mut_u32")
+fn ptr_byte_offset_mut_u32(p: *mut u32, n: isize) -> *mut u32;
+
+@runtime("prim_rt_ptr_addr_mut_u32")
+fn ptr_addr_mut_u32(p: *mut u32) -> usize;
+
+// ---- *mut usize ----
+// Identical wasm representation to *mut u32 on wasm32, but distinct in the
+// type system. Use this when "machine word" is the right semantic — e.g.,
+// allocator code that reasons in usize throughout.
+
+@runtime("prim_rt_null_mut_usize")
+fn null_mut_usize() -> *mut usize;
+
+@runtime("prim_rt_ptr_add_mut_usize")
+fn ptr_add_mut_usize(p: *mut usize, n: usize) -> *mut usize;
+
+@runtime("prim_rt_ptr_sub_mut_usize")
+fn ptr_sub_mut_usize(p: *mut usize, n: usize) -> *mut usize;
+
+@runtime("prim_rt_ptr_offset_mut_usize")
+fn ptr_offset_mut_usize(p: *mut usize, n: isize) -> *mut usize;
+
+@runtime("prim_rt_ptr_byte_add_mut_usize")
+fn ptr_byte_add_mut_usize(p: *mut usize, n: usize) -> *mut usize;
+
+@runtime("prim_rt_ptr_byte_sub_mut_usize")
+fn ptr_byte_sub_mut_usize(p: *mut usize, n: usize) -> *mut usize;
+
+@runtime("prim_rt_ptr_byte_offset_mut_usize")
+fn ptr_byte_offset_mut_usize(p: *mut usize, n: isize) -> *mut usize;
+
+@runtime("prim_rt_ptr_addr_mut_usize")
+fn ptr_addr_mut_usize(p: *mut usize) -> usize;

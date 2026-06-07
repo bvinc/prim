@@ -1,0 +1,13 @@
+import std.io.println_i32
+import std.io.println_u32
+
+struct Entry<K, V> {
+    key: K,
+    value: V,
+}
+
+fn main() {
+    let e = Entry { key = 42i32, value = 100u32 }
+    println_i32(e.key)
+    println_u32(e.value)
+}

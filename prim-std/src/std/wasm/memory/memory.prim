@@ -1,0 +1,49 @@
+mod memory
+
+// Direct wasm intrinsics. Do not call from normal code — these are the
+// substrate that the allocator and higher-level memory ops build on.
+//
+// Names mirror the wasm instructions:
+//   memory.grow   → grow
+//   memory.copy   → copy
+//   memory.fill   → fill
+//   i32.clz/ctz/popcnt → clz_u32/ctz_u32/popcnt_u32
+//   i64.clz/ctz/popcnt → clz_u64/ctz_u64/popcnt_u64
+
+// Grow linear memory by `pages` (each page is 64 KiB).
+// Returns the previous page count, or -1 on failure.
+@runtime("prim_rt_memory_grow")
+fn grow(pages: usize) -> isize;
+
+// Copy `n` bytes from `src` to `dst`. Behaves like memmove (handles
+// overlap). The wasm runtime typically inlines this to native memcpy.
+@runtime("prim_rt_memory_copy")
+fn copy(dst: *mut u8, src: *mut u8, n: usize);
+
+// Fill `n` bytes at `dst` with the byte value `val`.
+@runtime("prim_rt_memory_fill")
+fn fill(dst: *mut u8, val: u8, n: usize);
+
+// Count leading zeros — number of zero bits at the most-significant end.
+// Returns 32/64 if `x` is 0.
+@runtime("prim_rt_clz_u32")
+fn clz_u32(x: u32) -> u32;
+
+// Count trailing zeros — number of zero bits at the least-significant end.
+// Returns 32/64 if `x` is 0. Useful for finding the lowest set bit, which
+// allocators use to pick the smallest free-list bin.
+@runtime("prim_rt_ctz_u32")
+fn ctz_u32(x: u32) -> u32;
+
+// Population count — number of 1 bits.
+@runtime("prim_rt_popcnt_u32")
+fn popcnt_u32(x: u32) -> u32;
+
+@runtime("prim_rt_clz_u64")
+fn clz_u64(x: u64) -> u64;
+
+@runtime("prim_rt_ctz_u64")
+fn ctz_u64(x: u64) -> u64;
+
+@runtime("prim_rt_popcnt_u64")
+fn popcnt_u64(x: u64) -> u64;

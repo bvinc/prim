@@ -1,0 +1,18 @@
+import std.io.println_usize
+import std.ptr.null_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+import std.ptr.ptr_addr_mut_u8
+
+fn main() {
+    let base = null_mut_u8()
+    println_usize(ptr_addr_mut_u8(base))                          // 0
+
+    let p1 = ptr_byte_add_mut_u8(base, 100usize)
+    println_usize(ptr_addr_mut_u8(p1))                            // 100
+
+    let p2 = ptr_byte_add_mut_u8(p1, 28usize)
+    println_usize(ptr_addr_mut_u8(p2))                            // 128
+
+    let p3 = ptr_byte_add_mut_u8(p2, 0usize)
+    println_usize(ptr_addr_mut_u8(p3))                            // 128
+}

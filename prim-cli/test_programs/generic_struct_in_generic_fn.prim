@@ -1,0 +1,15 @@
+import std.io.println_i32
+
+struct Wrap<T> {
+    inner: T,
+}
+
+// Generic function that constructs a generic struct using its own T.
+fn wrap<T>(x: T) -> Wrap<T> {
+    Wrap { inner = x }
+}
+
+fn main() {
+    let a = wrap(42i32)
+    println_i32(a.inner)
+}

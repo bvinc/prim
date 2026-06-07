@@ -1,0 +1,27 @@
+import std.io.println_usize
+import std.ptr.null_mut_u32
+import std.ptr.ptr_add_mut_u32
+import std.ptr.ptr_sub_mut_u32
+import std.ptr.ptr_offset_mut_u32
+import std.ptr.ptr_byte_add_mut_u32
+import std.ptr.ptr_byte_sub_mut_u32
+import std.ptr.ptr_byte_offset_mut_u32
+import std.ptr.ptr_addr_mut_u32
+
+fn main() {
+    // null and addr
+    println_usize(ptr_addr_mut_u32(null_mut_u32()))                    // 0
+
+    let base = ptr_byte_add_mut_u32(null_mut_u32(), 2000usize)
+    println_usize(ptr_addr_mut_u32(base))                              // 2000
+
+    // For *mut u32, ptr_add scales by 4.
+    println_usize(ptr_addr_mut_u32(ptr_add_mut_u32(base, 10usize)))    // 2040
+    println_usize(ptr_addr_mut_u32(ptr_byte_add_mut_u32(base, 10usize))) // 2010
+
+    println_usize(ptr_addr_mut_u32(ptr_sub_mut_u32(base, 5usize)))     // 1980
+    println_usize(ptr_addr_mut_u32(ptr_byte_sub_mut_u32(base, 5usize))) // 1995
+
+    println_usize(ptr_addr_mut_u32(ptr_offset_mut_u32(base, -3isize)))    // 1988
+    println_usize(ptr_addr_mut_u32(ptr_byte_offset_mut_u32(base, -3isize))) // 1997
+}

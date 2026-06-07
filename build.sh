@@ -5,8 +5,8 @@ usage() {
   cat <<'EOF'
 Usage: build.sh [--release]
 
-Build the prim toolchain and stage a runnable tree under target/{debug,release}/dist:
-  bin/prim       - compiled binary
+Build the prim toolchain and stage a shippable tree under target/{debug,release}/dist:
+  bin/prim       - compiled CLI binary (copied, not symlinked)
   src/std/...    - standard library sources
 
 The staged tree is self-contained: run with PRIM_ROOT pointing at the dist directory.
@@ -45,21 +45,19 @@ echo ">> Preparing dist at $DIST"
 rm -rf "$DIST"
 mkdir -p "$DIST/bin" "$DIST/src"
 
-# Copy binary
+# Copy binary (real copy, not a symlink — this tree must be shippable).
 cp "$TARGET/prim" "$DIST/bin/" 2>/dev/null || cp "$TARGET/prim.exe" "$DIST/bin/" 2>/dev/null || {
   echo "prim binary not found under $TARGET" >&2
   exit 1
 }
 
-# Copy standard library sources
-if [[ -d "$ROOT/prim-std/src" ]]; then
-  mkdir -p "$DIST/src/std"
+# Copy standard library sources.
+if [[ -d "$ROOT/prim-std/src/std" ]]; then
   cp -r "$ROOT/prim-std/src/std" "$DIST/src/"
 elif [[ -d "$ROOT/src/std" ]]; then
-  mkdir -p "$DIST/src"
   cp -r "$ROOT/src/std" "$DIST/src/"
 else
-  echo "Standard library not found (expected prim-std/src or src/std)" >&2
+  echo "Standard library not found (expected prim-std/src/std or src/std)" >&2
   exit 1
 fi
 

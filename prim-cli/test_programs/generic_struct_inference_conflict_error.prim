@@ -1,0 +1,11 @@
+// Negative test: two fields typed as the same T pinned to different
+// concrete types must fail typecheck.
+
+struct Pair<T> {
+    first: T,
+    second: T,
+}
+
+fn main() {
+    let p = Pair { first = 1i32, second = 2i64 }
+}

@@ -1,3 +1,7 @@
+//! Build-time: generate one `cargo test` case per `.prim` file in
+//! `test_programs/` (each has a sibling `.expected` file with the expected
+//! stdout).
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

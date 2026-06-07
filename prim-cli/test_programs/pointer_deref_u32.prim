@@ -1,0 +1,25 @@
+import std.io.println_u32
+import std.ptr.null_mut_u32
+import std.ptr.ptr_add_mut_u32
+import std.ptr.ptr_byte_add_mut_u32
+
+fn main() {
+    // 32768 is 4-byte aligned and safely above static layout.
+    let base = ptr_byte_add_mut_u32(null_mut_u32(), 32768usize)
+
+    *base = 0xDEADBEEFu32
+    println_u32(*base)                                              // 3735928559
+
+    // ptr_add scales by 4 — advance to the next u32 slot.
+    let next = ptr_add_mut_u32(base, 1usize)
+    *next = 12345u32
+    println_u32(*next)                                              // 12345
+
+    // First slot still intact.
+    println_u32(*base)                                              // 3735928559
+
+    // Walk three slots forward, write, read back.
+    let third = ptr_add_mut_u32(base, 3usize)
+    *third = 0xFFFFFFFFu32
+    println_u32(*third)                                             // 4294967295
+}

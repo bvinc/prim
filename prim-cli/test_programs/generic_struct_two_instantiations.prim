@@ -1,0 +1,13 @@
+import std.io.println_i32
+import std.io.println_i64
+
+struct Box<T> {
+    value: T,
+}
+
+fn main() {
+    let a = Box { value = 7i32 }
+    let b = Box { value = 7000000000000i64 }
+    println_i32(a.value)
+    println_i64(b.value)
+}

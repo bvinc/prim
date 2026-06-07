@@ -1,0 +1,29 @@
+import std.io.println_usize
+import std.ptr.null_mut_usize
+import std.ptr.ptr_add_mut_usize
+import std.ptr.ptr_byte_add_mut_usize
+import std.ptr.ptr_addr_mut_usize
+
+fn main() {
+    let base = ptr_byte_add_mut_usize(null_mut_usize(), 32768usize)
+    println_usize(ptr_addr_mut_usize(base))                              // 32768
+
+    // ptr_add on *mut usize scales by 4 (sizeof(usize) on wasm32).
+    println_usize(ptr_addr_mut_usize(ptr_add_mut_usize(base, 10usize))) // 32808
+
+    // Deref read/write through *mut usize — the natural type for word
+    // operations in an allocator.
+    *base = 0xCAFEBABEusize
+    println_usize(*base)                                                 // 3405691582
+
+    let slot1 = ptr_add_mut_usize(base, 1usize)
+    *slot1 = 999usize
+    println_usize(*slot1)                                                // 999
+
+    // First slot still intact.
+    println_usize(*base)                                                 // 3405691582
+
+    // Read back from offset position with byte_add (32768 + 4 bytes).
+    let via_byte = ptr_byte_add_mut_usize(base, 4usize)
+    println_usize(*via_byte)                                             // 999
+}

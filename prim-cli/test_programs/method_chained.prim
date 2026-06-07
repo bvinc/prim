@@ -1,0 +1,29 @@
+import std.io.println_i32
+
+struct Box {
+    v: i32,
+}
+
+trait Spawn {
+    fn inner(b: Box) -> Box;
+    fn value(b: Box) -> i32;
+}
+
+impl Spawn for Box {
+    fn inner(b: Box) -> Box {
+        // Return a fresh Box with the squared value — exercises a method
+        // that returns a struct so the result can be chained.
+        Box { v = b.v * b.v }
+    }
+    fn value(b: Box) -> i32 {
+        b.v
+    }
+}
+
+fn main() {
+    let b = Box { v = 5 }
+    // Chained: b.inner() returns a new Box, then .value() is dispatched
+    // on it.
+    println_i32(b.inner().value())          // 25
+    println_i32(b.inner().inner().value())  // 5^4 = 625
+}

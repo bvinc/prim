@@ -1,0 +1,9 @@
+import std.io.println_isize
+import std.wasm.memory.grow
+
+fn main() {
+    // Module starts with 1 page. memory.grow returns the previous count.
+    println_isize(grow(0usize))   // 1
+    println_isize(grow(2usize))   // 1
+    println_isize(grow(0usize))   // 3
+}

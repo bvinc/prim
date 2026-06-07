@@ -1,0 +1,31 @@
+import std.io.println_i32
+
+struct Adder { base: i32 }
+
+trait Computable {
+    fn shift(c: Computable, by: i32) -> i32;
+    fn combine(c: Computable, x: i32, y: i32) -> i32;
+}
+
+impl Computable for Adder {
+    fn shift(a: Adder, by: i32) -> i32 {
+        a.base + by
+    }
+    fn combine(a: Adder, x: i32, y: i32) -> i32 {
+        a.base + x + y
+    }
+}
+
+fn use_one(c: Computable, n: i32) -> i32 {
+    c.shift(n)
+}
+
+fn use_two(c: Computable, x: i32, y: i32) -> i32 {
+    c.combine(x, y)
+}
+
+fn main() {
+    let a = Adder { base = 100 }
+    println_i32(use_one(a, 7))            // 107
+    println_i32(use_two(a, 10, 20))       // 130
+}

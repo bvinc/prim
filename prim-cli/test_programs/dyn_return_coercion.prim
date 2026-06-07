@@ -1,0 +1,31 @@
+import std.io.println_i32
+
+struct Counter { n: i32 }
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(c: Counter) -> i32 { c.n }
+}
+
+// Returning a struct from a trait-typed return position should coerce
+// via the trailing expression.
+fn make() -> Greeter {
+    Counter { n = 55 }
+}
+
+// Same for early return.
+fn make_early(flag: bool) -> Greeter {
+    if flag {
+        return Counter { n = 66 }
+    }
+    Counter { n = 77 }
+}
+
+fn main() {
+    println_i32(make().greet())               // 55
+    println_i32(make_early(true).greet())     // 66
+    println_i32(make_early(false).greet())    // 77
+}

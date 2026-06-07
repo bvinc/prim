@@ -35,17 +35,21 @@ pub(crate) struct EmitCtx<'a> {
     pub runtime: &'a HashMap<hir::FuncId, String>,
     pub builtins: &'a Builtins,
     pub struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
-    /// First wasm local index past the regular locals; scratch slots live at
-    /// `scratch_base + 0`, `scratch_base + 1`, …
+    /// HIR GlobalId → wasm global index. User globals come after the heap
+    /// pointer (wasm global 0).
+    pub global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
+    /// Per-trait wasm type index for `call_indirect` when dispatching that
+    /// trait's methods. Method signature is uniform across the trait: an
+    /// `i32` receiver (the boxed struct's data pointer) followed by the
+    /// declared param types (excluding the receiver position).
+    pub dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
+    /// `(TraitId, StructId)` → static-memory address of the vtable (4
+    /// bytes per slot, indexed by trait method position).
+    pub vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
     pub scratch_base: u32,
-    /// Counter increments once per `StructLit`, `Dbg`, `Str`, or
-    /// runtime-write site encountered in pre-order. Indexes into the
-    /// function's scratch local pool.
     pub scratch_counter: Cell<u32>,
-    /// Per-function slice of dbg site memory layouts, indexed by `dbg_counter`.
     pub dbg_sites: &'a [DbgSite],
     pub dbg_counter: Cell<u32>,
-    /// Per-function slice of string literal memory layouts.
     pub str_sites: &'a [StrSite],
     pub str_counter: Cell<u32>,
 }
@@ -58,6 +62,9 @@ pub(crate) fn build_emit_ctx<'a>(
     runtime_map: &'a HashMap<hir::FuncId, String>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
+    global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
+    dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
+    vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
     dbg_sites: &'a [DbgSite],
     str_sites: &'a [StrSite],
 ) -> EmitCtx<'a> {
@@ -78,6 +85,9 @@ pub(crate) fn build_emit_ctx<'a>(
         runtime: runtime_map,
         builtins,
         struct_layouts,
+        global_wasm_idx,
+        dyn_call_types,
+        vtable_addr,
         scratch_base,
         scratch_counter: Cell::new(0),
         dbg_sites,
@@ -85,6 +95,17 @@ pub(crate) fn build_emit_ctx<'a>(
         str_sites,
         str_counter: Cell::new(0),
     }
+}
+
+/// If `sym` resolves to a module-level global, return its wasm global
+/// index. Returns `None` if `sym` is anything else (local, function, etc.).
+fn global_wasm_index(ctx: &EmitCtx, sym: hir::SymbolId) -> Option<u32> {
+    let info = ctx.program.symbols.get(sym.0 as usize)?;
+    let gid = match info.kind {
+        hir::SymbolKind::Global(gid) => gid,
+        _ => return None,
+    };
+    ctx.global_wasm_idx.get(&gid).copied()
 }
 
 /// Look up the offset of a struct field by its name.
@@ -172,7 +193,26 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             emit_expr(f, value, ctx)?;
             if let Some(&idx) = ctx.locals.get(target) {
                 f.instruction(&Instruction::LocalSet(idx));
+            } else if let Some(g_idx) = global_wasm_index(ctx, *target) {
+                f.instruction(&Instruction::GlobalSet(g_idx));
+            } else {
+                f.instruction(&Instruction::Unreachable);
             }
+        }
+        hir::Stmt::Return { value, .. } => {
+            if let Some(expr) = value {
+                emit_expr(f, expr, ctx)?;
+            }
+            f.instruction(&Instruction::Return);
+        }
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            emit_expr(f, ptr, ctx)?;
+            emit_expr(f, value, ctx)?;
+            let pointee = match &ptr.ty {
+                hir::Type::Pointer { pointee, .. } => (**pointee).clone(),
+                _ => hir::Type::U8,
+            };
+            emit_field_store(f, &pointee, 0);
         }
         hir::Stmt::Expr(expr) => {
             emit_expr(f, expr, ctx)?;
@@ -232,6 +272,8 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::Ident(sym) => {
             if let Some(&idx) = ctx.locals.get(sym) {
                 f.instruction(&Instruction::LocalGet(idx));
+            } else if let Some(g_idx) = global_wasm_index(ctx, *sym) {
+                f.instruction(&Instruction::GlobalGet(g_idx));
             } else {
                 f.instruction(&Instruction::Unreachable);
             }
@@ -241,7 +283,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             emit_expr(f, right, ctx)?;
             emit_binary_op(f, *op, &left.ty);
         }
-        hir::ExprKind::Call { func, args } => {
+        hir::ExprKind::Call { func, args, .. } => {
             if let Some(binding) = ctx.runtime.get(func) {
                 emit_runtime_call(f, binding, args, ctx)?;
             } else if let Some(&idx) = ctx.funcs.get(func) {
@@ -253,13 +295,15 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 f.instruction(&Instruction::Unreachable);
             }
         }
-        hir::ExprKind::StructLit { struct_id, fields } => {
+        hir::ExprKind::StructLit {
+            struct_id, fields, ..
+        } => {
             emit_struct_lit(f, *struct_id, fields, ctx)?;
         }
         hir::ExprKind::Field { base, field } => {
             emit_expr(f, base, ctx)?;
             let struct_id = match &base.ty {
-                hir::Type::Struct(id) => *id,
+                hir::Type::Struct(id, _) => *id,
                 _ => {
                     f.instruction(&Instruction::Unreachable);
                     return Ok(());
@@ -313,6 +357,121 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::Str(_) => {
             emit_str_lit(f, &expr.ty, ctx);
         }
+        hir::ExprKind::Deref(operand) => {
+            emit_expr(f, operand, ctx)?;
+            emit_field_load(f, &expr.ty, 0);
+        }
+        hir::ExprKind::Coerce {
+            value,
+            source_struct,
+            target_trait,
+        } => {
+            // Materialize a fat pointer `{vtable_addr: i32, data_ptr: i32}`
+            // on the bump heap from a concrete struct value. The struct
+            // value is already a pointer to its heap-allocated data, which
+            // becomes data_ptr directly (no copy).
+            //
+            // Two scratch i32 locals must be claimed before evaluating the
+            // inner expression so the order matches the pre-order walk
+            // that reserved them in `collect_scratch_types_expr`.
+            let data_local = ctx.scratch_base + ctx.scratch_counter.get();
+            let fat_local = data_local + 1;
+            ctx.scratch_counter.set(ctx.scratch_counter.get() + 2);
+
+            emit_expr(f, value, ctx)?;
+            f.instruction(&Instruction::LocalSet(data_local));
+
+            f.instruction(&Instruction::I32Const(8));
+            f.instruction(&Instruction::Call(ctx.builtins.alloc));
+            f.instruction(&Instruction::LocalTee(fat_local));
+
+            let vt_addr = *ctx
+                .vtable_addr
+                .get(&(*target_trait, *source_struct))
+                .expect("missing vtable for coercion");
+            f.instruction(&Instruction::I32Const(vt_addr as i32));
+            f.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            f.instruction(&Instruction::LocalGet(fat_local));
+            f.instruction(&Instruction::LocalGet(data_local));
+            f.instruction(&Instruction::I32Store(MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            f.instruction(&Instruction::LocalGet(fat_local));
+        }
+        hir::ExprKind::DynCall {
+            receiver,
+            trait_id,
+            method_idx,
+            args,
+        } => {
+            // Stash the fat pointer once so we can load data_ptr (for the
+            // receiver argument) and vtable_addr (to index for the function
+            // table slot) without reevaluating the receiver expression.
+            // Scratch local is claimed before walking children.
+            let fat_local = ctx.scratch_base + ctx.scratch_counter.get();
+            ctx.scratch_counter.set(ctx.scratch_counter.get() + 1);
+
+            emit_expr(f, receiver, ctx)?;
+            f.instruction(&Instruction::LocalSet(fat_local));
+
+            f.instruction(&Instruction::LocalGet(fat_local));
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            for arg in args {
+                emit_expr(f, arg, ctx)?;
+            }
+
+            f.instruction(&Instruction::LocalGet(fat_local));
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            f.instruction(&Instruction::I32Const((*method_idx as i32) * 4));
+            f.instruction(&Instruction::I32Add);
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            let type_idx = *ctx
+                .dyn_call_types
+                .get(&(*trait_id, *method_idx))
+                .expect("missing dyn call type index");
+            f.instruction(&Instruction::CallIndirect {
+                type_index: type_idx,
+                table_index: 0,
+            });
+        }
+        hir::ExprKind::BitNot(operand) => {
+            emit_expr(f, operand, ctx)?;
+            match hir_type_to_valtype(&expr.ty) {
+                ValType::I32 => {
+                    f.instruction(&Instruction::I32Const(-1));
+                    f.instruction(&Instruction::I32Xor);
+                }
+                ValType::I64 => {
+                    f.instruction(&Instruction::I64Const(-1));
+                    f.instruction(&Instruction::I64Xor);
+                }
+                _ => {
+                    f.instruction(&Instruction::Unreachable);
+                }
+            }
+        }
         _ => {
             f.instruction(&Instruction::Unreachable);
         }
@@ -340,7 +499,7 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     };
 
     let struct_id = match ty {
-        hir::Type::Struct(id) => *id,
+        hir::Type::Struct(id, _) => *id,
         _ => {
             f.instruction(&Instruction::Unreachable);
             return;
@@ -571,6 +730,118 @@ fn emit_runtime_call(
         "prim_rt_write" => {
             emit_write(f, args, ctx)?;
         }
+        // Cooperative yield — suspend with the scheduler's yield tag.
+        // Control returns to the scheduler's `on $yield` handler in `_start`,
+        // which reschedules immediately (single-task case) or picks another
+        // runnable continuation (future, when a queue exists).
+        "prim_rt_yield" => {
+            f.instruction(&Instruction::Suspend(ctx.builtins.yield_tag));
+        }
+        // ---- pointer ops on *mut u8 and *mut u32 ----
+        // null_T(): push 0 as an i32 (any pointer type lowers to i32).
+        // ptr_add/sub/offset_T: scale n by sizeof(T), then add/sub.
+        // ptr_byte_*: skip the scaling.
+        // ptr_addr_T: pointer is already an i32, no-op.
+        "prim_rt_null_mut_u8" | "prim_rt_null_mut_u32" | "prim_rt_null_mut_usize" => {
+            f.instruction(&Instruction::I32Const(0));
+        }
+        "prim_rt_ptr_add_mut_u8" | "prim_rt_ptr_byte_add_mut_u8" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_sub_mut_u8" | "prim_rt_ptr_byte_sub_mut_u8" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Sub);
+        }
+        "prim_rt_ptr_offset_mut_u8" | "prim_rt_ptr_byte_offset_mut_u8" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_add_mut_u32" | "prim_rt_ptr_add_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Const(4));
+            f.instruction(&Instruction::I32Mul);
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_sub_mut_u32" | "prim_rt_ptr_sub_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Const(4));
+            f.instruction(&Instruction::I32Mul);
+            f.instruction(&Instruction::I32Sub);
+        }
+        "prim_rt_ptr_offset_mut_u32" | "prim_rt_ptr_offset_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Const(4));
+            f.instruction(&Instruction::I32Mul);
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_byte_add_mut_u32" | "prim_rt_ptr_byte_add_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_byte_sub_mut_u32" | "prim_rt_ptr_byte_sub_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Sub);
+        }
+        "prim_rt_ptr_byte_offset_mut_u32" | "prim_rt_ptr_byte_offset_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            f.instruction(&Instruction::I32Add);
+        }
+        "prim_rt_ptr_addr_mut_u8" | "prim_rt_ptr_addr_mut_u32" | "prim_rt_ptr_addr_mut_usize" => {
+            emit_expr(f, &args[0], ctx)?;
+        }
+        "prim_rt_memory_grow" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::MemoryGrow(0));
+        }
+        "prim_rt_memory_copy" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            emit_expr(f, &args[2], ctx)?;
+            f.instruction(&Instruction::MemoryCopy {
+                src_mem: 0,
+                dst_mem: 0,
+            });
+        }
+        "prim_rt_memory_fill" => {
+            emit_expr(f, &args[0], ctx)?;
+            emit_expr(f, &args[1], ctx)?;
+            emit_expr(f, &args[2], ctx)?;
+            f.instruction(&Instruction::MemoryFill(0));
+        }
+        "prim_rt_clz_u32" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Clz);
+        }
+        "prim_rt_ctz_u32" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Ctz);
+        }
+        "prim_rt_popcnt_u32" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Popcnt);
+        }
+        "prim_rt_clz_u64" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64Clz);
+        }
+        "prim_rt_ctz_u64" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64Ctz);
+        }
+        "prim_rt_popcnt_u64" => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64Popcnt);
+        }
         _ => {
             f.instruction(&Instruction::Unreachable);
         }
@@ -599,7 +870,7 @@ fn emit_write(f: &mut Function, args: &[hir::Expr], ctx: &EmitCtx) -> Result<(),
     emit_expr(f, &args[1], ctx)?;
 
     let struct_id = match &args[1].ty {
-        hir::Type::Struct(id) => *id,
+        hir::Type::Struct(id, _) => *id,
         _ => {
             f.instruction(&Instruction::Drop);
             f.instruction(&Instruction::Unreachable);
@@ -730,6 +1001,33 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64LeU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Le),
             (ValType::F64, _) => f.instruction(&Instruction::F64Le),
+            _ => f.instruction(&Instruction::Unreachable),
+        },
+        hir::BinaryOp::BitAnd => match vt {
+            ValType::I32 => f.instruction(&Instruction::I32And),
+            ValType::I64 => f.instruction(&Instruction::I64And),
+            _ => f.instruction(&Instruction::Unreachable),
+        },
+        hir::BinaryOp::BitOr => match vt {
+            ValType::I32 => f.instruction(&Instruction::I32Or),
+            ValType::I64 => f.instruction(&Instruction::I64Or),
+            _ => f.instruction(&Instruction::Unreachable),
+        },
+        hir::BinaryOp::BitXor => match vt {
+            ValType::I32 => f.instruction(&Instruction::I32Xor),
+            ValType::I64 => f.instruction(&Instruction::I64Xor),
+            _ => f.instruction(&Instruction::Unreachable),
+        },
+        hir::BinaryOp::ShiftLeft => match vt {
+            ValType::I32 => f.instruction(&Instruction::I32Shl),
+            ValType::I64 => f.instruction(&Instruction::I64Shl),
+            _ => f.instruction(&Instruction::Unreachable),
+        },
+        hir::BinaryOp::ShiftRight => match (vt, signed) {
+            (ValType::I32, true) => f.instruction(&Instruction::I32ShrS),
+            (ValType::I32, false) => f.instruction(&Instruction::I32ShrU),
+            (ValType::I64, true) => f.instruction(&Instruction::I64ShrS),
+            (ValType::I64, false) => f.instruction(&Instruction::I64ShrU),
             _ => f.instruction(&Instruction::Unreachable),
         },
     };

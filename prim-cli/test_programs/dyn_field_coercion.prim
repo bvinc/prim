@@ -1,0 +1,24 @@
+import std.io.println_i32
+
+struct Counter { n: i32 }
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(c: Counter) -> i32 { c.n }
+}
+
+// A struct that holds a trait-typed field.
+struct Holder { g: Greeter }
+
+fn unpack(h: Holder) -> i32 {
+    h.g.greet()
+}
+
+fn main() {
+    let c = Counter { n = 88 }
+    let h = Holder { g = c }    // field initializer coerces Counter → Greeter
+    println_i32(unpack(h))
+}

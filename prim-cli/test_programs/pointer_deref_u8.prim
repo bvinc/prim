@@ -1,0 +1,25 @@
+import std.io.println_u8
+import std.ptr.null_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+
+fn main() {
+    // The initial wasm page (64 KiB) has static layout in [0..128) and
+    // bump-allocated string data after that. With no string literals in
+    // this program nothing else writes past 128, so 32768 is a safe
+    // scratch address within the initial page.
+    let base = ptr_byte_add_mut_u8(null_mut_u8(), 32768usize)
+
+    *base = 42u8
+    println_u8(*base)                                               // 42
+
+    let p1 = ptr_byte_add_mut_u8(base, 1usize)
+    *p1 = 255u8
+    println_u8(*p1)                                                 // 255
+
+    // Independent: writing through p1 didn't touch base.
+    println_u8(*base)                                               // 42
+
+    // Overwrite.
+    *base = 7u8
+    println_u8(*base)                                               // 7
+}

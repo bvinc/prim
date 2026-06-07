@@ -75,6 +75,17 @@ pub fn compile_and_run_with_root(
 
     let run_result = Command::new("wasmtime")
         .arg("run")
+        // The scheduler in `_start` uses cont.new/resume from the
+        // stack-switching proposal, typed `(ref $main_cont)` from the
+        // function-references proposal, and a tag declaration from the
+        // exceptions proposal (tags were introduced there; stack-switching
+        // re-uses the encoding).
+        .arg("-W")
+        .arg("stack-switching=y")
+        .arg("-W")
+        .arg("function-references=y")
+        .arg("-W")
+        .arg("exceptions=y")
         .arg(temp_wasm.path())
         .output()
         .map_err(|err| {

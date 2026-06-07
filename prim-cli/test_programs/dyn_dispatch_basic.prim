@@ -1,0 +1,27 @@
+import std.io.println_i32
+
+struct Counter {
+    n: i32,
+}
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(c: Counter) -> i32 {
+        c.n
+    }
+}
+
+// Function takes a trait — the call site coerces the concrete struct
+// into a fat pointer, and the method call inside dispatches dynamically
+// through the vtable.
+fn use_greeter(g: Greeter) -> i32 {
+    g.greet()
+}
+
+fn main() {
+    let c = Counter { n = 42 }
+    println_i32(use_greeter(c))
+}

@@ -1,0 +1,9 @@
+mod rt
+
+// Cooperatively yield from the current green thread, returning control to
+// the scheduler. The scheduler picks the next runnable task (or, in the
+// single-task case, this same one) and resumes it. Lowers to wasm
+// `suspend $yield_tag`; the scheduler's resume handler installs the
+// matching `on $yield` clause.
+@runtime("prim_rt_yield")
+fn yield();

@@ -1,0 +1,37 @@
+import std.io.println_u32
+import std.io.println_u8
+import std.ptr.null_mut_u8
+import std.ptr.null_mut_u32
+import std.ptr.ptr_add_mut_u8
+import std.ptr.ptr_add_mut_u32
+import std.ptr.ptr_byte_add_mut_u8
+import std.ptr.ptr_byte_add_mut_u32
+
+fn main() {
+    // Walk a u32 array, write 0..4, then read back via byte-addressed
+    // u8 pointer and inspect the low byte of each entry (wasm is
+    // little-endian, so byte 0 of each u32 word is its low byte).
+    let base32 = ptr_byte_add_mut_u32(null_mut_u32(), 32768usize)
+    let base8 = ptr_byte_add_mut_u8(null_mut_u8(), 32768usize)
+
+    let mut i = 0usize
+    while i < 4usize {
+        let slot = ptr_add_mut_u32(base32, i)
+        // Store an arbitrary value derived from i so we can verify reads.
+        let v0 = 100u32
+        *slot = v0
+        i = i + 1usize
+    }
+
+    println_u32(*base32)                            // 100
+    println_u32(*ptr_add_mut_u32(base32, 1usize))   // 100
+    println_u32(*ptr_add_mut_u32(base32, 2usize))   // 100
+    println_u32(*ptr_add_mut_u32(base32, 3usize))   // 100
+
+    // Overwrite slot 2 to a distinct value, observe via both pointer widths.
+    *ptr_add_mut_u32(base32, 2usize) = 0x42u32
+    println_u32(*ptr_add_mut_u32(base32, 2usize))   // 66
+
+    // Read the low byte of slot 2 via the u8 pointer.
+    println_u8(*ptr_add_mut_u8(base8, 8usize))      // 66 (low byte of 0x42)
+}

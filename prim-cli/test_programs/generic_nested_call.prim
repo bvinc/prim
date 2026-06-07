@@ -1,0 +1,18 @@
+import std.io.println_i32
+
+// Inner generic — forwards its arg through identity.
+fn through<T>(x: T) -> T {
+    x
+}
+
+// Outer generic — forwards T to the inner generic. Mono should
+// substitute the outer's T into the inner's type-arg list and produce
+// one specialization per outer T.
+fn forward<T>(x: T) -> T {
+    through(x)
+}
+
+fn main() {
+    let a = forward(11i32)
+    println_i32(a)
+}

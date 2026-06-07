@@ -36,6 +36,21 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    NonConstantGlobalInit {
+        file: FileId,
+        span: Span,
+    },
+    DuplicateImplMethod {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    UnknownMethod {
+        name: String,
+        receiver_type: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -56,6 +71,22 @@ impl std::fmt::Display for LoweringError {
             LoweringError::UnknownModule { path, .. } => {
                 write!(f, "Unknown module '{}'", path)
             }
+            LoweringError::NonConstantGlobalInit { .. } => {
+                write!(
+                    f,
+                    "Module-level let initializer must be a literal (int, float, or bool)"
+                )
+            }
+            LoweringError::DuplicateImplMethod { name, .. } => {
+                write!(f, "Duplicate impl method '{}' for the same type", name)
+            }
+            LoweringError::UnknownMethod {
+                name,
+                receiver_type,
+                ..
+            } => {
+                write!(f, "No method '{}' on type {}", name, receiver_type)
+            }
         }
     }
 }
@@ -69,7 +100,10 @@ impl LoweringError {
             | LoweringError::UnknownName { span, .. }
             | LoweringError::UnknownFunction { span, .. }
             | LoweringError::UnknownStruct { span, .. }
-            | LoweringError::UnknownModule { span, .. } => *span,
+            | LoweringError::UnknownModule { span, .. }
+            | LoweringError::NonConstantGlobalInit { span, .. }
+            | LoweringError::DuplicateImplMethod { span, .. }
+            | LoweringError::UnknownMethod { span, .. } => *span,
         }
     }
 
@@ -79,7 +113,10 @@ impl LoweringError {
             | LoweringError::UnknownName { file, .. }
             | LoweringError::UnknownFunction { file, .. }
             | LoweringError::UnknownStruct { file, .. }
-            | LoweringError::UnknownModule { file, .. } => *file,
+            | LoweringError::UnknownModule { file, .. }
+            | LoweringError::NonConstantGlobalInit { file, .. }
+            | LoweringError::DuplicateImplMethod { file, .. }
+            | LoweringError::UnknownMethod { file, .. } => *file,
         }
     }
 }
@@ -164,11 +201,23 @@ struct LoweringContext<'a> {
     symbols: Vec<Symbol>,
     functions: Vec<Function>,
     structs: Vec<Struct>,
+    globals: Vec<hir::Global>,
     modules: Vec<Module>,
     root_module: ModuleId,
     main: Option<SymbolId>,
+    traits: Vec<hir::Trait>,
     struct_ids: HashMap<ResSymbolId, StructId>,
     func_ids: HashMap<ResSymbolId, FuncId>,
+    global_ids: HashMap<ResSymbolId, hir::GlobalId>,
+    trait_ids: HashMap<ResSymbolId, hir::TraitId>,
+    /// Type-param scope of the function currently being populated.
+    /// Resolved name → `TypeParamId`. Cleared between functions.
+    current_type_params: HashMap<String, hir::TypeParamId>,
+    /// `(receiver struct, method name)` → impl method FuncId. Built when
+    /// lowering each `impl ... for Struct { fn ... }` block.
+    impl_methods: HashMap<(StructId, hir::InternSymbol), FuncId>,
+    /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
+    impls: HashMap<(hir::TraitId, StructId), Vec<FuncId>>,
     stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
@@ -189,11 +238,18 @@ impl<'a> LoweringContext<'a> {
             symbols: Vec::new(),
             functions: Vec::new(),
             structs: Vec::new(),
+            globals: Vec::new(),
             modules: Vec::new(),
             root_module: program.root,
             main: None,
+            traits: Vec::new(),
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
+            global_ids: HashMap::new(),
+            trait_ids: HashMap::new(),
+            current_type_params: HashMap::new(),
+            impl_methods: HashMap::new(),
+            impls: HashMap::new(),
             stdlib_string_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
@@ -235,6 +291,7 @@ impl<'a> LoweringContext<'a> {
                         // SymbolId(res_id.0) — see pass 2 below for why this
                         // identity holds.
                         name: SymbolId(res_id.0),
+                        type_params: Vec::new(),
                         fields: Vec::new(),
                         span,
                     });
@@ -253,6 +310,7 @@ impl<'a> LoweringContext<'a> {
                     self.functions.push(Function {
                         id: fid,
                         name: SymbolId(res_id.0),
+                        type_params: Vec::new(),
                         params: Vec::new(),
                         ret: None,
                         body: hir::Block {
@@ -261,6 +319,41 @@ impl<'a> LoweringContext<'a> {
                         },
                         span,
                         runtime_binding: f.runtime_binding.clone(),
+                    });
+                }
+                for g in &file.ast.globals {
+                    let name = self.interner.resolve(&g.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let gid = *self
+                        .global_ids
+                        .entry(res_id)
+                        .or_insert_with(|| hir::GlobalId(self.globals.len() as u32));
+                    let span = self.span_id(g.span, file.file_id);
+                    // Shell: ty and init filled in pass 2 with the rest of the
+                    // module's resolved types.
+                    self.globals.push(hir::Global {
+                        id: gid,
+                        name: SymbolId(res_id.0),
+                        mutable: g.mutable,
+                        ty: hir::Type::Undetermined,
+                        init: hir::GlobalInit::I32(0),
+                        span,
+                    });
+                }
+                for t in &file.ast.traits {
+                    let name = self.interner.resolve(&t.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let tid = *self
+                        .trait_ids
+                        .entry(res_id)
+                        .or_insert_with(|| hir::TraitId(self.traits.len() as u32));
+                    let span = self.span_id(t.span, file.file_id);
+                    self.traits.push(hir::Trait {
+                        id: tid,
+                        name: SymbolId(res_id.0),
+                        methods: Vec::new(),
+                        method_idx: HashMap::new(),
+                        span,
                     });
                 }
             }
@@ -280,6 +373,63 @@ impl<'a> LoweringContext<'a> {
                 kind,
             });
         }
+
+        // Pass 3: declare impl methods. Each impl method becomes a regular
+        // Function with a synthesized symbol (indices `>= N`). The method's
+        // (receiver-struct, method-name) is recorded in `impl_methods` so
+        // typecheck can resolve `receiver.method()` calls.
+        for module in &self.program.modules {
+            let module_id = module.id;
+            for file in &module.files {
+                for im in &file.ast.impls {
+                    let struct_name = self.interner.resolve(&im.struct_name.sym).to_string();
+                    let Some(struct_res_id) = self
+                        .module_scopes
+                        .get(&module_id)
+                        .and_then(|scope| scope.get(&struct_name).copied())
+                    else {
+                        self.errors.push(LoweringError::UnknownName {
+                            name: struct_name,
+                            file: file.file_id,
+                            span: im.struct_name.span,
+                        });
+                        continue;
+                    };
+                    let Some(&sid) = self.struct_ids.get(&struct_res_id) else {
+                        continue;
+                    };
+                    for m in &im.methods {
+                        let fid = FuncId(self.functions.len() as u32);
+                        let symbol_id =
+                            self.insert_symbol(module_id, m.name.sym, SymbolKind::Function(fid));
+                        let span = self.span_id(m.name.span, file.file_id);
+                        self.functions.push(Function {
+                            id: fid,
+                            name: symbol_id,
+                            type_params: Vec::new(),
+                            params: Vec::new(),
+                            ret: None,
+                            body: hir::Block {
+                                stmts: Vec::new(),
+                                expr: None,
+                            },
+                            span,
+                            runtime_binding: None,
+                        });
+                        // Record (struct, method-name) → FuncId. Duplicate
+                        // impls for the same (struct, name) are a hard error.
+                        if self.impl_methods.insert((sid, m.name.sym), fid).is_some() {
+                            let method_name = self.interner.resolve(&m.name.sym).to_string();
+                            self.errors.push(LoweringError::DuplicateImplMethod {
+                                name: method_name,
+                                file: file.file_id,
+                                span: m.name.span,
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn populate_items(&mut self) {
@@ -294,6 +444,15 @@ impl<'a> LoweringContext<'a> {
                     let name = self.interner.resolve(&s.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let sid = *self.struct_ids.get(&res_id).expect("missing struct id");
+                    // The struct's type params shadow module-scope names
+                    // for the duration of field-type lowering, the same
+                    // way function type params do.
+                    let type_params = self.lower_type_params(
+                        &s.type_params,
+                        module_id,
+                        file.file_id,
+                        module_scope,
+                    );
                     let fields = s
                         .fields
                         .iter()
@@ -304,8 +463,10 @@ impl<'a> LoweringContext<'a> {
                         })
                         .collect();
                     if let Some(hir_struct) = self.structs.get_mut(sid.0 as usize) {
+                        hir_struct.type_params = type_params;
                         hir_struct.fields = fields;
                     }
+                    self.current_type_params.clear();
                 }
 
                 for f in &ast.functions {
@@ -314,6 +475,15 @@ impl<'a> LoweringContext<'a> {
                     let fid = *self.func_ids.get(&res_id).expect("missing function id");
 
                     self.local_scope.clear();
+                    // Set up the type-param scope so `lower_type` can map
+                    // references like `T` to `Type::Param`. Bounds resolve
+                    // against the module's trait names.
+                    let type_params = self.lower_type_params(
+                        &f.type_params,
+                        module_id,
+                        file.file_id,
+                        module_scope,
+                    );
                     let params = f
                         .parameters
                         .iter()
@@ -341,12 +511,176 @@ impl<'a> LoweringContext<'a> {
                         self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
                     if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
+                        hir_func.type_params = type_params;
                         hir_func.params = params;
                         hir_func.ret = ret;
                         hir_func.body = body;
                         hir_func.span = span;
                     }
+                    self.current_type_params.clear();
                 }
+
+                for g in &ast.globals {
+                    let name = self.interner.resolve(&g.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let gid = *self.global_ids.get(&res_id).expect("missing global id");
+                    let ty = self.lower_type(&g.type_annotation, module_scope);
+                    let init = match self.lower_global_init(&g.value, &ty, file.file_id) {
+                        Some(init) => init,
+                        None => continue,
+                    };
+                    if let Some(hir_global) = self.globals.get_mut(gid.0 as usize) {
+                        hir_global.ty = ty;
+                        hir_global.init = init;
+                    }
+                }
+
+                // Populate trait method signatures.
+                for t in &ast.traits {
+                    let name = self.interner.resolve(&t.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let tid = *self.trait_ids.get(&res_id).expect("missing trait id");
+                    let methods: Vec<hir::TraitMethodSig> = t
+                        .methods
+                        .iter()
+                        .map(|m| {
+                            let params = m
+                                .parameters
+                                .iter()
+                                .map(|p| self.lower_type(&p.type_annotation, module_scope))
+                                .collect();
+                            let ret = m
+                                .return_type
+                                .as_ref()
+                                .map(|ty| self.lower_type(ty, module_scope));
+                            hir::TraitMethodSig {
+                                name: m.name.sym,
+                                params,
+                                ret,
+                                span: self.span_id(m.name.span, file.file_id),
+                            }
+                        })
+                        .collect();
+                    if let Some(hir_trait) = self.traits.get_mut(tid.0 as usize) {
+                        let mut method_idx = HashMap::with_capacity(methods.len());
+                        for (i, m) in methods.iter().enumerate() {
+                            method_idx.insert(m.name, i as u32);
+                        }
+                        hir_trait.methods = methods;
+                        hir_trait.method_idx = method_idx;
+                    }
+                }
+
+                // Populate impl method bodies. The (struct, method) → FuncId
+                // map was built in pass 3; here we fill in params/ret/body
+                // mirroring how regular functions are populated above.
+                for im in &ast.impls {
+                    let struct_name = self.interner.resolve(&im.struct_name.sym).to_string();
+                    let Some(struct_res_id) = self
+                        .module_scopes
+                        .get(&module_id)
+                        .and_then(|scope| scope.get(&struct_name).copied())
+                    else {
+                        continue;
+                    };
+                    let Some(&sid) = self.struct_ids.get(&struct_res_id) else {
+                        continue;
+                    };
+                    // Resolve the trait so we can index into its method order
+                    // for the vtable.
+                    let trait_name = self.interner.resolve(&im.trait_name.sym).to_string();
+                    let trait_res_id = self
+                        .module_scopes
+                        .get(&module_id)
+                        .and_then(|scope| scope.get(&trait_name).copied());
+                    let tid = trait_res_id.and_then(|id| self.trait_ids.get(&id).copied());
+                    // Build the impls map entry (vtable function order) if
+                    // we found the trait.
+                    if let Some(tid) = tid {
+                        let trait_def = self.traits.get(tid.0 as usize).cloned();
+                        if let Some(trait_def) = trait_def {
+                            let mut method_fids: Vec<FuncId> =
+                                Vec::with_capacity(trait_def.methods.len());
+                            for trait_m in &trait_def.methods {
+                                if let Some(&fid) = self.impl_methods.get(&(sid, trait_m.name)) {
+                                    method_fids.push(fid);
+                                } else {
+                                    // Missing impl for this method — leave
+                                    // the slot with a sentinel; typecheck
+                                    // surfaces this as an unknown method on
+                                    // dispatch.
+                                    method_fids.push(FuncId(u32::MAX));
+                                }
+                            }
+                            self.impls.insert((tid, sid), method_fids);
+                        }
+                    }
+                    for m in &im.methods {
+                        let Some(&fid) = self.impl_methods.get(&(sid, m.name.sym)) else {
+                            continue;
+                        };
+                        self.local_scope.clear();
+                        let params: Vec<Param> = m
+                            .parameters
+                            .iter()
+                            .map(|p| {
+                                let sym =
+                                    self.insert_symbol(module_id, p.name.sym, SymbolKind::Param);
+                                self.local_scope.insert(
+                                    self.interner.resolve(&p.name.sym).to_string(),
+                                    LocalBinding {
+                                        symbol: sym,
+                                        mutable: false,
+                                    },
+                                );
+                                Param {
+                                    name: sym,
+                                    ty: self.lower_type(&p.type_annotation, module_scope),
+                                    span: self.span_id(p.name.span, file.file_id),
+                                }
+                            })
+                            .collect();
+                        let ret = m
+                            .return_type
+                            .as_ref()
+                            .map(|t| self.lower_type(t, module_scope));
+                        let body =
+                            self.lower_block(&m.body, module_id, file.file_id, ast, module_scope);
+                        let span = self.span_id(m.name.span, file.file_id);
+                        if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
+                            hir_func.params = params;
+                            hir_func.ret = ret;
+                            hir_func.body = body;
+                            hir_func.span = span;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Validate a global's initializer expression. Wasm globals can only
+    /// be initialized with a constant, so we accept literal numbers and
+    /// booleans only. Anything else is a lowering error.
+    fn lower_global_init(
+        &mut self,
+        expr: &prim_parse::Expr,
+        ty: &hir::Type,
+        file_id: FileId,
+    ) -> Option<hir::GlobalInit> {
+        use prim_parse::ExprKind;
+        match (&expr.kind, ty) {
+            (ExprKind::Int(n), hir::Type::I64 | hir::Type::U64) => Some(hir::GlobalInit::I64(*n)),
+            (ExprKind::Int(n), _) => Some(hir::GlobalInit::I32(*n as i32)),
+            (ExprKind::Float(v), hir::Type::F32) => Some(hir::GlobalInit::F32(*v as f32)),
+            (ExprKind::Float(v), _) => Some(hir::GlobalInit::F64(*v)),
+            (ExprKind::Bool(b), _) => Some(hir::GlobalInit::I32(if *b { 1 } else { 0 })),
+            _ => {
+                self.errors.push(LoweringError::NonConstantGlobalInit {
+                    file: file_id,
+                    span: expr.span,
+                });
+                None
             }
         }
     }
@@ -356,6 +690,10 @@ impl<'a> LoweringContext<'a> {
             modules: self.modules,
             functions: self.functions,
             structs: self.structs,
+            globals: self.globals,
+            traits: self.traits,
+            impl_methods: self.impl_methods,
+            impls: self.impls,
             symbols: self.symbols,
             interner: self.interner,
             main: self.main,
@@ -422,36 +760,61 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             Stmt::Assign { target, value } => {
-                let target_name = self.interner.resolve(&target.sym);
-                let binding = self.local_scope.get(target_name).copied();
-                match binding {
-                    Some(binding) => {
-                        if !binding.mutable {
-                            self.errors.push(LoweringError::AssignToImmutable {
-                                name: target_name.to_string(),
-                                file: file_id,
-                                span: target.span,
-                            });
-                        }
-                        hir::Stmt::Assign {
-                            target: binding.symbol,
-                            value: self.lower_expr(value, module, file_id, ast, module_scope),
-                            span: self.span_id(target.span, file_id),
-                        }
-                    }
-                    None => {
-                        self.errors.push(LoweringError::UnknownName {
-                            name: target_name.to_string(),
+                let target_name = self.interner.resolve(&target.sym).to_string();
+                let binding = self.local_scope.get(&target_name).copied();
+                if let Some(binding) = binding {
+                    if !binding.mutable {
+                        self.errors.push(LoweringError::AssignToImmutable {
+                            name: target_name,
                             file: file_id,
                             span: target.span,
                         });
-                        let span = self.span_id(target.span, file_id);
-                        hir::Stmt::Expr(hir::Expr {
-                            kind: hir::ExprKind::Error,
-                            ty: hir::Type::Undetermined,
-                            span,
-                        })
                     }
+                    hir::Stmt::Assign {
+                        target: binding.symbol,
+                        value: self.lower_expr(value, module, file_id, ast, module_scope),
+                        span: self.span_id(target.span, file_id),
+                    }
+                } else if let Some(&res_id) = module_scope.get(&target_name) {
+                    // Module-level binding (e.g. a global). Mutability is
+                    // checked again in typecheck; lowering just routes the
+                    // target symbol through.
+                    let sym = self.hir_symbol(res_id);
+                    let info = &self.symbols[sym.0 as usize];
+                    if !matches!(info.kind, hir::SymbolKind::Global(_)) {
+                        self.errors.push(LoweringError::AssignToImmutable {
+                            name: target_name,
+                            file: file_id,
+                            span: target.span,
+                        });
+                    }
+                    hir::Stmt::Assign {
+                        target: sym,
+                        value: self.lower_expr(value, module, file_id, ast, module_scope),
+                        span: self.span_id(target.span, file_id),
+                    }
+                } else {
+                    self.errors.push(LoweringError::UnknownName {
+                        name: target_name,
+                        file: file_id,
+                        span: target.span,
+                    });
+                    let span = self.span_id(target.span, file_id);
+                    hir::Stmt::Expr(hir::Expr {
+                        kind: hir::ExprKind::Error,
+                        ty: hir::Type::Undetermined,
+                        span,
+                    })
+                }
+            }
+            Stmt::DerefAssign { ptr, value } => {
+                let span = self.span_id(ptr.span, file_id);
+                let ptr_hir = self.lower_expr(ptr, module, file_id, ast, module_scope);
+                let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
+                hir::Stmt::DerefAssign {
+                    ptr: ptr_hir,
+                    value: value_hir,
+                    span,
                 }
             }
             Stmt::Expr(expr) => {
@@ -471,6 +834,12 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*span, file_id),
             },
             Stmt::Break { span } => hir::Stmt::Break {
+                span: self.span_id(*span, file_id),
+            },
+            Stmt::Return { value, span } => hir::Stmt::Return {
+                value: value
+                    .as_ref()
+                    .map(|e| self.lower_expr(e, module, file_id, ast, module_scope)),
                 span: self.span_id(*span, file_id),
             },
         }
@@ -548,7 +917,7 @@ impl<'a> LoweringContext<'a> {
             ExprKind::String(value) => (
                 hir::ExprKind::Str(value.clone()),
                 self.stdlib_string_struct
-                    .map(hir::Type::Struct)
+                    .map(|sid| hir::Type::Struct(sid, Vec::new()))
                     .unwrap_or(hir::Type::Undetermined),
             ),
             ExprKind::Ident(ident) => {
@@ -579,6 +948,7 @@ impl<'a> LoweringContext<'a> {
                         return hir::Expr {
                             kind: hir::ExprKind::Call {
                                 func: fid,
+                                type_args: Vec::new(),
                                 args: args
                                     .iter()
                                     .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
@@ -600,6 +970,7 @@ impl<'a> LoweringContext<'a> {
                     Some(struct_id) => (
                         hir::ExprKind::StructLit {
                             struct_id,
+                            type_args: Vec::new(),
                             fields: fields
                                 .iter()
                                 .map(|f| {
@@ -635,8 +1006,39 @@ impl<'a> LoweringContext<'a> {
                 },
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => (
+                hir::ExprKind::MethodCall {
+                    receiver: Box::new(self.lower_expr(
+                        receiver,
+                        module,
+                        file_id,
+                        ast,
+                        module_scope,
+                    )),
+                    method: method.sym,
+                    args: args
+                        .iter()
+                        .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                        .collect(),
+                },
+                self.lower_type(&expr.ty, module_scope),
+            ),
             ExprKind::Dereference(operand) => (
                 hir::ExprKind::Deref(Box::new(self.lower_expr(
+                    operand,
+                    module,
+                    file_id,
+                    ast,
+                    module_scope,
+                ))),
+                self.lower_type(&expr.ty, module_scope),
+            ),
+            ExprKind::BitNot(operand) => (
+                hir::ExprKind::BitNot(Box::new(self.lower_expr(
                     operand,
                     module,
                     file_id,
@@ -788,19 +1190,70 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Lower a function's AST type-param list and populate
+    /// `current_type_params` so subsequent `lower_type` calls in this
+    /// function's signature and body resolve `T`, `U`, etc. The bound
+    /// (if any) resolves through the module scope as a trait.
+    fn lower_type_params(
+        &mut self,
+        params: &[prim_parse::TypeParam],
+        module_id: ModuleId,
+        file_id: FileId,
+        module_scope: &ModuleScope,
+    ) -> Vec<hir::TypeParam> {
+        let mut out = Vec::with_capacity(params.len());
+        for (idx, p) in params.iter().enumerate() {
+            let tp_id = hir::TypeParamId(idx as u32);
+            let name_str = self.interner.resolve(&p.name.sym).to_string();
+            self.current_type_params.insert(name_str, tp_id);
+            let bound = p.bound.as_ref().and_then(|b| {
+                let bname = self.interner.resolve(&b.sym).to_string();
+                let res_id = module_scope.get(&bname).copied()?;
+                let tid = self.trait_ids.get(&res_id).copied();
+                if tid.is_none() {
+                    self.errors.push(LoweringError::UnknownName {
+                        name: bname,
+                        file: file_id,
+                        span: b.span,
+                    });
+                }
+                tid
+            });
+            let sym = self.insert_symbol(module_id, p.name.sym, SymbolKind::Unknown);
+            out.push(hir::TypeParam {
+                name: sym,
+                bound,
+                span: self.span_id(p.name.span, file_id),
+            });
+        }
+        out
+    }
+
     fn lower_type(&self, ty: &Type, module_scope: &ModuleScope) -> hir::Type {
         match ty {
-            Type::Struct(name) => {
+            Type::Struct(name, type_args) => {
                 let name_str = self.interner.resolve(name);
+                // A named type can resolve to a type parameter of the
+                // enclosing generic function, a struct, or a trait. Type
+                // params shadow module-scope names.
+                if let Some(&tp_id) = self.current_type_params.get(name_str) {
+                    return hir::Type::Param(tp_id);
+                }
                 // The resolver validates all type names; this expect indicates a resolver bug.
                 let res_id = *module_scope.get(name_str).unwrap_or_else(|| {
                     panic!("resolver should have caught unknown type '{name_str}'")
                 });
-                let sid = *self
-                    .struct_ids
-                    .get(&res_id)
-                    .unwrap_or_else(|| panic!("missing struct id for resolved type '{name_str}'"));
-                hir::Type::Struct(sid)
+                let lowered_args: Vec<hir::Type> = type_args
+                    .iter()
+                    .map(|t| self.lower_type(t, module_scope))
+                    .collect();
+                if let Some(&sid) = self.struct_ids.get(&res_id) {
+                    hir::Type::Struct(sid, lowered_args)
+                } else if let Some(&tid) = self.trait_ids.get(&res_id) {
+                    hir::Type::Trait(tid)
+                } else {
+                    panic!("missing struct/trait id for resolved type '{name_str}'")
+                }
             }
             Type::Array(inner) => hir::Type::Array(Box::new(self.lower_type(inner, module_scope))),
             Type::Pointer { mutable, pointee } => hir::Type::Pointer {
@@ -867,6 +1320,13 @@ impl<'a> LoweringContext<'a> {
                     .entry(res_id)
                     .or_insert_with(|| StructId(self.structs.len() as u32));
                 SymbolKind::Struct(sid)
+            }
+            ResSymbolKind::Global => {
+                let gid = *self
+                    .global_ids
+                    .entry(res_id)
+                    .or_insert_with(|| hir::GlobalId(self.globals.len() as u32));
+                SymbolKind::Global(gid)
             }
             ResSymbolKind::Trait => SymbolKind::Trait,
             ResSymbolKind::Impl => SymbolKind::Unknown,

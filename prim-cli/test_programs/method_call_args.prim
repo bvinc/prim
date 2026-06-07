@@ -1,0 +1,24 @@
+import std.io.println_i32
+
+struct Vec2 {
+    x: i32,
+    y: i32,
+}
+
+trait Math {
+    fn shifted(v: Vec2, dx: i32, dy: i32) -> i32;
+}
+
+impl Math for Vec2 {
+    fn shifted(v: Vec2, dx: i32, dy: i32) -> i32 {
+        // Return x + dx + y + dy — exercises method with multiple args
+        // beyond the receiver.
+        v.x + dx + v.y + dy
+    }
+}
+
+fn main() {
+    let v = Vec2 { x = 10, y = 20 }
+    println_i32(v.shifted(3, 4))   // 10 + 3 + 20 + 4 = 37
+    println_i32(v.shifted(0, 0))   // 30
+}

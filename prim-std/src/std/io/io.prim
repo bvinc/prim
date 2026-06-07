@@ -44,5 +44,10 @@ fn println_f32(x: f32);
 @runtime("prim_rt_println_f64")
 fn println_f64(x: f64);
 
-@runtime("prim_rt_println_bool")
-fn println_bool(b: bool);
+fn println_bool(b: bool) {
+    if b {
+        write(1, "true\n")
+    } else {
+        write(1, "false\n")
+    }
+}

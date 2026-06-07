@@ -1,0 +1,20 @@
+// Negative test: calling a method that isn't on the trait must fail.
+
+struct Counter { n: i32 }
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(c: Counter) -> i32 { c.n }
+}
+
+fn use_it(g: Greeter) -> i32 {
+    g.unknown_method()
+}
+
+fn main() {
+    let c = Counter { n = 1 }
+    use_it(c);
+}

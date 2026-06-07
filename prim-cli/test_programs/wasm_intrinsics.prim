@@ -1,0 +1,56 @@
+import std.io.println_u32
+import std.io.println_u64
+import std.io.println_u8
+import std.ptr.null_mut_u8
+import std.ptr.ptr_add_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+import std.wasm.memory.copy
+import std.wasm.memory.fill
+import std.wasm.memory.clz_u32
+import std.wasm.memory.ctz_u32
+import std.wasm.memory.popcnt_u32
+import std.wasm.memory.clz_u64
+import std.wasm.memory.ctz_u64
+import std.wasm.memory.popcnt_u64
+
+fn main() {
+    // ---- clz / ctz / popcnt ----
+    println_u32(clz_u32(1u32))                  // 31 (one bit set at LSB)
+    println_u32(clz_u32(0u32))                  // 32 (all zero)
+    println_u32(clz_u32(0x80000000u32))         // 0  (top bit set)
+
+    println_u32(ctz_u32(8u32))                  // 3  (binary 1000)
+    println_u32(ctz_u32(0u32))                  // 32
+    println_u32(ctz_u32(0x80000000u32))         // 31
+
+    println_u32(popcnt_u32(0xFFu32))            // 8
+    println_u32(popcnt_u32(0u32))               // 0
+    println_u32(popcnt_u32(0xAAAAAAAAu32))      // 16 (alternating bits)
+
+    println_u64(clz_u64(1u64))                  // 63
+    println_u64(ctz_u64(0x100u64))              // 8
+    println_u64(popcnt_u64(0x7FFFFFFFFFFFFFFFu64)) // 63
+
+    // ---- memory.fill ----
+    // Fill 8 bytes at address 32768 with 0xAB, read first and last back.
+    let buf = ptr_byte_add_mut_u8(null_mut_u8(), 32768usize)
+    fill(buf, 0xABu8, 8usize)
+    println_u8(*buf)                                            // 171
+    println_u8(*ptr_add_mut_u8(buf, 7usize))                    // 171
+
+    // ---- memory.copy ----
+    // Set up source bytes [10, 20, 30, 40] at offset 32768,
+    // copy to 32800, read back.
+    *buf = 10u8
+    *ptr_add_mut_u8(buf, 1usize) = 20u8
+    *ptr_add_mut_u8(buf, 2usize) = 30u8
+    *ptr_add_mut_u8(buf, 3usize) = 40u8
+
+    let dst = ptr_byte_add_mut_u8(null_mut_u8(), 32800usize)
+    copy(dst, buf, 4usize)
+
+    println_u8(*dst)                                            // 10
+    println_u8(*ptr_add_mut_u8(dst, 1usize))                    // 20
+    println_u8(*ptr_add_mut_u8(dst, 2usize))                    // 30
+    println_u8(*ptr_add_mut_u8(dst, 3usize))                    // 40
+}

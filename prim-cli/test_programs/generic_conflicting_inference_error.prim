@@ -1,0 +1,9 @@
+// Negative test: an arg position can't pin T to two different types.
+
+fn pair<T>(a: T, b: T) -> T {
+    a
+}
+
+fn main() {
+    pair(1i32, 2i64);
+}

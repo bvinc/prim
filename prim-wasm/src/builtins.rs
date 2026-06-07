@@ -9,7 +9,7 @@ use crate::layout::{
     DIGIT_BUF_END, DOT_OFFSET, FALSE_OFFSET, FLOAT_SCRATCH, HEAP_PTR_GLOBAL, MEM8, MEM32,
     NEWLINE_OFFSET, TRUE_OFFSET,
 };
-use wasm_encoder::{BlockType, Function, Instruction, ValType};
+use wasm_encoder::{BlockType, Function, Handle, HeapType, Instruction, RefType, ValType};
 
 /// Wasm function indices for the builtin runtime helpers, computed by the
 /// orchestration in `lib.rs` and passed into the emitters that need them.
@@ -20,6 +20,9 @@ pub(crate) struct Builtins {
     pub println_f64: u32,
     pub alloc: u32,
     pub print_bytes: u32,
+    /// Tag index for cooperative yield. Used by `std.rt.yield` which
+    /// lowers to `suspend $yield_tag`.
+    pub yield_tag: u32,
 }
 
 // ---- Shared snippets used by multiple builtin emitters ----
@@ -446,14 +449,67 @@ pub(crate) fn emit_println_f64(fd_write_idx: u32) -> Function {
     f
 }
 
-/// `_start()` — WASI entry point. Calls the user's `main`; drops its return
-/// value if it has one.
-pub(crate) fn emit_start(main_idx: u32, main_returns_value: bool) -> Function {
-    let mut f = Function::new(vec![]);
-    f.instruction(&Instruction::Call(main_idx));
+/// `_start()` — WASI entry point. Runs the user's `main` as the program's
+/// first (and only) green thread by wrapping it in a continuation, then
+/// driving a scheduler loop that resumes it, handles yields by rescheduling
+/// immediately, and exits when the continuation completes.
+///
+/// For the single-green-thread MVP, a yield is effectively a no-op: the
+/// scheduler has nothing else to run, so it just resumes the same task.
+/// When `spawn` and I/O suspension land, this loop grows a runnable queue
+/// and per-suspend-reason dispatch — the *shape* is what matters here.
+///
+/// Arguments:
+/// - `main_idx`: wasm function index of `main` (for `ref.func`).
+/// - `main_cont_type`: type index of `(cont $main_fn)`.
+/// - `yield_tag`: tag index for cooperative yield.
+/// - `main_returns_value`: drop main's return value before exiting if true.
+pub(crate) fn emit_start(
+    main_idx: u32,
+    main_cont_type: u32,
+    yield_tag: u32,
+    main_returns_value: bool,
+) -> Function {
+    let cont_ref_nullable = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(main_cont_type),
+    });
+    let cont_ref = ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(main_cont_type),
+    });
+
+    let mut f = Function::new(vec![(1, cont_ref_nullable)]);
+    let cont_local: u32 = 0;
+
+    f.instruction(&Instruction::RefFunc(main_idx));
+    f.instruction(&Instruction::ContNew(main_cont_type));
+    f.instruction(&Instruction::LocalSet(cont_local));
+
+    f.instruction(&Instruction::Loop(BlockType::Empty));
+    f.instruction(&Instruction::Block(BlockType::Result(cont_ref)));
+
+    f.instruction(&Instruction::LocalGet(cont_local));
+    f.instruction(&Instruction::Resume {
+        cont_type_index: main_cont_type,
+        resume_table: vec![Handle::OnLabel {
+            tag: yield_tag,
+            label: 0,
+        }]
+        .into(),
+    });
+    // Resume returned normally → main finished.
     if main_returns_value {
         f.instruction(&Instruction::Drop);
     }
-    f.instruction(&Instruction::End);
+    f.instruction(&Instruction::Return);
+
+    f.instruction(&Instruction::End); // end block — reached only via $yield branch
+    // Yielded: new continuation is on stack; save and reschedule.
+    f.instruction(&Instruction::LocalSet(cont_local));
+    f.instruction(&Instruction::Br(0));
+    f.instruction(&Instruction::End); // end loop
+
+    f.instruction(&Instruction::End); // end function
     f
 }

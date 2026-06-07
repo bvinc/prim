@@ -1,0 +1,32 @@
+import std.io.println_i32
+
+struct Counter { n: i32 }
+struct Doubler { n: i32 }
+
+trait Yieldable {
+    fn yield_value(y: Yieldable) -> i32;
+}
+
+impl Yieldable for Counter {
+    fn yield_value(c: Counter) -> i32 {
+        c.n
+    }
+}
+
+impl Yieldable for Doubler {
+    fn yield_value(d: Doubler) -> i32 {
+        d.n + d.n
+    }
+}
+
+fn extract(y: Yieldable) -> i32 {
+    y.yield_value()
+}
+
+fn main() {
+    let c = Counter { n = 21 }
+    let d = Doubler { n = 100 }
+    // Same function, same call site, different vtables dispatched.
+    println_i32(extract(c))   // 21
+    println_i32(extract(d))   // 200
+}

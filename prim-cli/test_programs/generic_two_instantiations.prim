@@ -1,0 +1,16 @@
+import std.io.println_i32
+import std.io.println_i64
+
+// Same generic, two different concrete substitutions. Mono should
+// produce two specializations (identity<i32>, identity<i64>) — both
+// callable in the same program.
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let a = identity(7i32)
+    let b = identity(700000000000i64)
+    println_i32(a)
+    println_i64(b)
+}

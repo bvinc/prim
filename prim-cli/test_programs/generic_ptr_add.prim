@@ -1,0 +1,17 @@
+import std.io.println_usize
+import std.ptr.null_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+import std.ptr.ptr_addr_mut_u8
+
+// Generic pointer-typed pass-through. The body never touches the
+// pointee, so the function is well-typed for *any* T. Each call site
+// substitutes T concretely; mono produces one specialization per T.
+fn ptr_id<T>(p: *mut T) -> *mut T {
+    p
+}
+
+fn main() {
+    let p = ptr_byte_add_mut_u8(null_mut_u8(), 100usize)
+    let q = ptr_id(p)
+    println_usize(ptr_addr_mut_u8(q))
+}

@@ -1,0 +1,10 @@
+import std.io.println_i64
+import std.rt.yield
+
+fn main() {
+    println_i64(1)
+    yield()
+    println_i64(2)
+    yield()
+    println_i64(3)
+}

@@ -1,0 +1,27 @@
+import std.io.println_i32
+
+struct Value { n: i32 }
+
+trait Ord {
+    fn lt(self: Ord, other: Ord) -> bool;
+}
+
+impl Ord for Value {
+    fn lt(a: Value, b: Value) -> bool {
+        a.n < b.n
+    }
+}
+
+// Bounded generic: any T that implements Ord can be passed; the body
+// calls `a.lt(b)` which the typechecker resolves through the bound and
+// monomorphization turns into a direct call to Value::lt.
+fn min<T: Ord>(a: T, b: T) -> T {
+    if a.lt(b) { a } else { b }
+}
+
+fn main() {
+    let x = Value { n = 7 }
+    let y = Value { n = 3 }
+    let m = min(x, y)
+    println_i32(m.n)
+}

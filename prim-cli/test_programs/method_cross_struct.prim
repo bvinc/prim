@@ -1,0 +1,38 @@
+import std.io.println_i32
+
+struct Inner {
+    n: i32,
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+trait Reveal {
+    fn show(i: Inner) -> i32;
+}
+
+trait Probe {
+    fn lookup(o: Outer) -> i32;
+}
+
+impl Reveal for Inner {
+    fn show(i: Inner) -> i32 {
+        i.n + 1i32
+    }
+}
+
+impl Probe for Outer {
+    fn lookup(o: Outer) -> i32 {
+        // Method on Outer calls a method on a different struct (Inner).
+        // Exercises cross-struct method resolution at typecheck time.
+        o.inner.show()
+    }
+}
+
+fn main() {
+    let i = Inner { n = 41 }
+    let o = Outer { inner = i }
+    println_i32(o.lookup())     // 42
+    println_i32(i.show())       // 42
+}

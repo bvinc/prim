@@ -1,0 +1,25 @@
+import std.io.println_i32
+
+struct Counter {
+    n: i32,
+}
+
+trait Bumpable {
+    fn current(c: Counter) -> i32;
+    fn doubled(c: Counter) -> i32;
+}
+
+impl Bumpable for Counter {
+    fn current(c: Counter) -> i32 {
+        c.n
+    }
+    fn doubled(c: Counter) -> i32 {
+        c.n + c.n
+    }
+}
+
+fn main() {
+    let c = Counter { n = 21 }
+    println_i32(c.current())   // 21
+    println_i32(c.doubled())   // 42
+}

@@ -1,0 +1,32 @@
+import std.io.println_i32
+
+struct Shape { side: i32 }
+
+trait Geom {
+    fn perimeter(s: Geom) -> i32;
+    fn area(s: Geom) -> i32;
+    fn diagonal_squared(s: Geom) -> i32;
+}
+
+impl Geom for Shape {
+    fn perimeter(s: Shape) -> i32 {
+        s.side * 4i32
+    }
+    fn area(s: Shape) -> i32 {
+        s.side * s.side
+    }
+    fn diagonal_squared(s: Shape) -> i32 {
+        s.side * s.side + s.side * s.side
+    }
+}
+
+fn measure(g: Geom) -> i32 {
+    // Three different vtable slots, three indirect calls.
+    g.perimeter() + g.area() + g.diagonal_squared()
+}
+
+fn main() {
+    let sq = Shape { side = 5 }
+    // perimeter = 20, area = 25, diag^2 = 50 — total 95.
+    println_i32(measure(sq))
+}

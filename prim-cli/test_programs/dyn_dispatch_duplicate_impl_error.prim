@@ -1,0 +1,25 @@
+// Negative test: two impls with the same method on the same struct
+// must be rejected.
+
+struct Counter { n: i32 }
+
+trait Greeter {
+    fn greet(g: Greeter) -> i32;
+}
+
+trait Other {
+    fn greet(g: Other) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(c: Counter) -> i32 { c.n }
+}
+
+impl Other for Counter {
+    fn greet(c: Counter) -> i32 { c.n + 1i32 }
+}
+
+fn main() {
+    let c = Counter { n = 1 }
+    c.greet();
+}

@@ -34,6 +34,7 @@ pub enum TokenKind {
     Loop,
     While,
     Break,
+    Return,
     For,
     True,
     False,
@@ -76,6 +77,13 @@ pub enum TokenKind {
     UnaryMinus,    // -
     UnaryStar,     // *
     PostfixStar,   // *
+
+    // Bitwise
+    Pipe,       // |
+    Caret,      // ^
+    LeftShift,  // <<
+    RightShift, // >>
+    Bang,       // !  (unary bitwise NOT, Rust-style)
 
     // Punctuation
     LeftParen,    // (
@@ -194,6 +202,13 @@ impl<'a> Tokenizer<'a> {
                         kind: TokenKind::GreaterEquals,
                         span: Span::new(start_pos, self.position),
                     }))
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::RightShift,
+                        span: Span::new(start_pos, self.position),
+                    }))
                 } else {
                     self.advance();
                     Ok(Some(Token {
@@ -208,6 +223,13 @@ impl<'a> Tokenizer<'a> {
                     self.advance();
                     Ok(Some(Token {
                         kind: TokenKind::LessEquals,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else if self.peek() == Some('<') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::LeftShift,
                         span: Span::new(start_pos, self.position),
                     }))
                 } else {
@@ -227,13 +249,11 @@ impl<'a> Tokenizer<'a> {
                         span: Span::new(start_pos, self.position),
                     }))
                 } else {
-                    let end_pos = start_pos + 1;
-                    Err(TokenError::UnexpectedCharacter {
-                        ch: '!',
-                        span: Span::new(start_pos, end_pos),
-                    })
+                    self.emit_simple(TokenKind::Bang, start_pos)
                 }
             }
+            Some('|') => self.emit_simple(TokenKind::Pipe, start_pos),
+            Some('^') => self.emit_simple(TokenKind::Caret, start_pos),
             Some('(') => self.emit_simple(TokenKind::LeftParen, start_pos),
             Some(')') => self.emit_simple(TokenKind::RightParen, start_pos),
             Some('{') => self.emit_simple(TokenKind::LeftBrace, start_pos),
@@ -453,6 +473,7 @@ impl<'a> Tokenizer<'a> {
             "loop" => TokenKind::Loop,
             "while" => TokenKind::While,
             "break" => TokenKind::Break,
+            "return" => TokenKind::Return,
             "import" => TokenKind::Import,
             "mod" => TokenKind::Mod,
             "for" => TokenKind::For,

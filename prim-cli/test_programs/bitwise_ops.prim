@@ -1,0 +1,36 @@
+import std.io.println_u32
+import std.io.println_i32
+import std.io.println_u64
+
+fn main() {
+    let a = 0b1100u32
+    let b = 0b1010u32
+
+    println_u32(a & b)    // 0b1000 = 8
+    println_u32(a | b)    // 0b1110 = 14
+    println_u32(a ^ b)    // 0b0110 = 6
+
+    let one = 1u32
+    println_u32(one << 4u32)    // 16
+    println_u32(0xF0u32 >> 4u32) // 15
+
+    let x = 0u32
+    println_u32(!x)             // 0xFFFFFFFF = 4294967295
+
+    // signed: arithmetic shift right preserves sign
+    let neg = -16i32
+    println_i32(neg >> 2i32)    // -4
+
+    // 64-bit
+    let big = 1u64 << 40u64
+    println_u64(big)            // 1099511627776
+
+    // precedence: bitwise binds tighter than comparison (Rust rule)
+    // a & b == 8 should parse as (a & b) == 8, evaluating to true (printed as 1)
+    let ok = (a & b) == 8u32
+    if ok {
+        println_u32(1u32)
+    } else {
+        println_u32(0u32)
+    }
+}

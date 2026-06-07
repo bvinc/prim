@@ -282,7 +282,10 @@ fn test_parse_error_unknown_expression_attribute() {
 #[test]
 fn test_parse_error_statements_outside_function() {
     let interner = Interner::new();
-    let result = parse("let x = 42", &interner).0;
+    // A bare expression at the top level is rejected; `let` (with a type
+    // annotation) is allowed as a module-level global, so use something
+    // unambiguously stmt-shaped.
+    let result = parse("42", &interner).0;
 
     match result {
         Err(ParseError::StatementsOutsideFunction { .. }) => {}
@@ -1215,7 +1218,7 @@ fn test_parse_struct_type_annotation() {
 
     let main_func = &program.functions[0];
     if let Stmt::Let {
-        type_annotation: Some(Type::Struct(name)),
+        type_annotation: Some(Type::Struct(name, _)),
         ..
     } = &main_func.body.stmts[0]
     {

@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, Ident, ImportDecl, ImportSelector,
-    Interner, NamePath, Parameter, ParseError, Program, Severity, Span, Stmt, StructDefinition,
-    StructField, StructFieldDefinition, Type,
+    BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
+    ImportSelector, Interner, NamePath, Parameter, ParseError, Program, Severity, Span, Stmt,
+    StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -14,9 +14,16 @@ impl Precedence {
     pub const NONE: Precedence = Precedence(0);
     pub const EQUALITY: Precedence = Precedence(10); // == !=
     pub const COMPARISON: Precedence = Precedence(15); // > < >= <=
+    // Bitwise operators bind TIGHTER than comparison/equality — Rust-style,
+    // not C-style. `mask & 0xF == 0` parses as `(mask & 0xF) == 0`, NOT
+    // `mask & (0xF == 0)` (the famous C footgun).
+    pub const BIT_OR: Precedence = Precedence(16); // |
+    pub const BIT_XOR: Precedence = Precedence(17); // ^
+    pub const BIT_AND: Precedence = Precedence(18); // &
+    pub const SHIFT: Precedence = Precedence(19); // << >>
     pub const ADDITION: Precedence = Precedence(20); // + -
     pub const MULTIPLICATION: Precedence = Precedence(30); // * /
-    pub const UNARY: Precedence = Precedence(40); // -x
+    pub const UNARY: Precedence = Precedence(40); // -x !x
     pub const CALL: Precedence = Precedence(50); // func()
 }
 
@@ -98,6 +105,7 @@ impl<'a> Parser<'a> {
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         let mut imports: Vec<ImportDecl> = Vec::new();
+        let mut globals: Vec<GlobalDecl> = Vec::new();
 
         // Optional module header: mod <identifier>
         if matches!(self.peek_kind(), Some(TokenKind::Mod)) {
@@ -203,6 +211,10 @@ impl<'a> Parser<'a> {
                     let im = self.parse_impl_definition()?;
                     impls.push(im);
                 }
+                Some(TokenKind::Let) => {
+                    let g = self.parse_global_decl()?;
+                    globals.push(g);
+                }
                 _ => {
                     return Err(ParseError::StatementsOutsideFunction {
                         span: self.current_span(),
@@ -218,6 +230,7 @@ impl<'a> Parser<'a> {
             functions,
             traits,
             impls,
+            globals,
         })
     }
 
@@ -375,7 +388,10 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::Array(elements),
                 })
             }
-            Some(TokenKind::UnaryMinus) => {
+            // Both UnaryMinus (tokenized when whitespace makes it unambiguous)
+            // and Minus (tokenized as infix subtract) act as negation in prefix
+            // position — the parser knows it's expecting an expression.
+            Some(TokenKind::UnaryMinus) | Some(TokenKind::Minus) => {
                 let minus_span = self.advance().span; // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = minus_span.cover(operand.span);
@@ -394,7 +410,7 @@ impl<'a> Parser<'a> {
                     },
                 })
             }
-            Some(TokenKind::UnaryPlus) => {
+            Some(TokenKind::UnaryPlus) | Some(TokenKind::Plus) => {
                 let plus_span = self.advance().span; // consume '+'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = plus_span.cover(operand.span);
@@ -413,7 +429,20 @@ impl<'a> Parser<'a> {
                     },
                 })
             }
-            Some(TokenKind::UnaryStar) => {
+            Some(TokenKind::Bang) => {
+                let bang_span = self.advance().span; // consume '!'
+                let operand = self.parse_expression(Precedence::UNARY)?;
+                let span = bang_span.cover(operand.span);
+                Ok(Expr {
+                    span,
+                    ty: Type::Undetermined,
+                    kind: ExprKind::BitNot(Box::new(operand)),
+                })
+            }
+            // Both UnaryStar (tokenized when whitespace makes it unambiguous)
+            // and Star (tokenized as infix multiply) act as dereference in
+            // prefix position — the parser knows it's expecting an expression.
+            Some(TokenKind::UnaryStar) | Some(TokenKind::Star) => {
                 let star_span = self.advance().span; // consume '*'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = star_span.cover(operand.span);
@@ -508,22 +537,121 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Dot => {
                 self.advance();
-                let field_span = self
-                    .consume(TokenKind::Identifier, "Expected field name after '.'")?
+                let name_span = self
+                    .consume(
+                        TokenKind::Identifier,
+                        "Expected field or method name after '.'",
+                    )?
                     .span;
-                let field = self.ident(field_span);
-                let span = left.span.cover(field.span);
-                Ok(Expr {
-                    span,
-                    ty: Type::Undetermined,
-                    kind: ExprKind::FieldAccess {
-                        object: Box::new(left),
-                        field,
-                    },
-                })
+                let name = self.ident(name_span);
+                // `(` after the name → method call; otherwise field access.
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+                    self.advance(); // consume '('
+                    let args = self.parse_argument_list()?;
+                    let close =
+                        self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
+                    let span = left.span.cover(close.span);
+                    Ok(Expr {
+                        span,
+                        ty: Type::Undetermined,
+                        kind: ExprKind::MethodCall {
+                            receiver: Box::new(left),
+                            method: name,
+                            args,
+                        },
+                    })
+                } else {
+                    let span = left.span.cover(name.span);
+                    Ok(Expr {
+                        span,
+                        ty: Type::Undetermined,
+                        kind: ExprKind::FieldAccess {
+                            object: Box::new(left),
+                            field: name,
+                        },
+                    })
+                }
             }
             _ => Ok(left),
         }
+    }
+
+    /// Parse `T1 (, T2)* >` — concrete type arguments used at a
+    /// generic instantiation site like `Pair<i32, u8>`. The leading `<`
+    /// has already been consumed.
+    fn parse_type_arg_list(&mut self) -> Result<Vec<Type>, ParseError> {
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_type()?);
+            match self.peek_kind() {
+                Some(TokenKind::Comma) => {
+                    self.advance();
+                    continue;
+                }
+                Some(TokenKind::Greater) => {
+                    self.advance();
+                    break;
+                }
+                Some(other) => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "',' or '>' in type argument list".to_string(),
+                        found: other,
+                        span: self.current_span(),
+                    });
+                }
+                None => {
+                    return Err(ParseError::UnexpectedEof {
+                        span: self.current_span(),
+                    });
+                }
+            }
+        }
+        Ok(args)
+    }
+
+    /// Parse `T [: Bound] (, T [: Bound])* >` — the leading `<` has already
+    /// been consumed.
+    fn parse_type_param_list(&mut self) -> Result<Vec<crate::TypeParam>, ParseError> {
+        let mut params = Vec::new();
+        loop {
+            let name_span = self
+                .consume(TokenKind::Identifier, "Expected type parameter name")?
+                .span;
+            let name = self.ident(name_span);
+            let bound = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+                self.advance(); // consume ':'
+                let bound_span = self
+                    .consume(TokenKind::Identifier, "Expected trait name after ':'")?
+                    .span;
+                Some(self.ident(bound_span))
+            } else {
+                None
+            };
+            params.push(crate::TypeParam { name, bound });
+            match self.peek_kind() {
+                Some(TokenKind::Comma) => {
+                    self.advance();
+                    continue;
+                }
+                Some(TokenKind::Greater) => {
+                    self.advance();
+                    break;
+                }
+                Some(other) => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "',' or '>' in type parameter list".to_string(),
+                        found: other,
+                        span: self.current_span(),
+                    });
+                }
+                None => {
+                    return Err(ParseError::UnexpectedEof {
+                        span: self.current_span(),
+                    });
+                }
+            }
+        }
+        Ok(params)
     }
 
     fn parse_argument_list(&mut self) -> Result<Vec<Expr>, ParseError> {
@@ -561,6 +689,14 @@ impl<'a> Parser<'a> {
             .consume(TokenKind::Identifier, "Expected function name")?
             .span;
         let name = self.ident(name_span);
+
+        // Optional type parameter list: <T, U: Trait, ...>
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
+            self.advance(); // consume '<'
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
 
         // Parse parameter list
         self.consume(TokenKind::LeftParen, "Expected '(' after function name")?;
@@ -615,6 +751,7 @@ impl<'a> Parser<'a> {
 
         Ok(Function {
             name,
+            type_params,
             parameters,
             return_type,
             body,
@@ -641,6 +778,14 @@ impl<'a> Parser<'a> {
             .span;
         let name = self.ident(name_span);
 
+        // Optional type parameter list: struct Pair<T, U: Trait> { ... }
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
+            self.advance(); // consume '<'
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
+
         // Parse struct body
         self.consume(TokenKind::LeftBrace, "Expected '{' to start struct body")?;
         let fields = self.parse_struct_field_list()?;
@@ -651,6 +796,7 @@ impl<'a> Parser<'a> {
 
         Ok(StructDefinition {
             name,
+            type_params,
             fields,
             repr_c,
             span: full_span,
@@ -737,9 +883,9 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            self.consume(TokenKind::LeftBrace, "Expected '{' to start method body")?;
-            let body = self.parse_statement_list()?;
-            self.consume(TokenKind::RightBrace, "Expected '}' to end method body")?;
+            // Use parse_block so trailing expressions are preserved (same as
+            // regular function bodies).
+            let body = self.parse_block()?;
             methods.push(crate::ImplMethod {
                 name: mname,
                 parameters,
@@ -892,7 +1038,14 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier => {
                 let span = self.advance().span;
                 let name = self.intern(span);
-                Ok(Type::Struct(name))
+                // Optional generic instantiation: `Pair<i32>` or `Map<K, V>`.
+                let type_args = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
+                    self.advance(); // consume '<'
+                    self.parse_type_arg_list()?
+                } else {
+                    Vec::new()
+                };
+                Ok(Type::Struct(name, type_args))
             }
             TokenKind::UnaryStar => {
                 self.advance(); // consume '*'
@@ -1025,6 +1178,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Loop) => self.parse_loop_statement(),
             Some(TokenKind::While) => self.parse_while_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
+            Some(TokenKind::Return) => self.parse_return_statement(),
             Some(TokenKind::Identifier) => {
                 // Check if this is an assignment (identifier followed by '=')
                 // We need to look ahead to distinguish `x = value` from `x + y`
@@ -1044,9 +1198,26 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => {
-                // Expression statement (no semicolon required)
+                // Expression statement (no semicolon required).
+                // If the expression is `*<ptr>` and the next token is `=`,
+                // it's a deref-assignment (write through a pointer).
                 let expr = self.parse_expression(Precedence::NONE)?;
-                Ok(Stmt::Expr(expr))
+                if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
+                    match expr.kind {
+                        ExprKind::Dereference(inner) => {
+                            self.advance(); // consume '='
+                            let value = self.parse_expression(Precedence::NONE)?;
+                            Ok(Stmt::DerefAssign { ptr: *inner, value })
+                        }
+                        _ => Err(ParseError::UnexpectedToken {
+                            expected: "identifier or `*ptr` on left of `=`".to_string(),
+                            found: TokenKind::Equals,
+                            span: expr.span,
+                        }),
+                    }
+                } else {
+                    Ok(Stmt::Expr(expr))
+                }
             }
         }
     }
@@ -1078,6 +1249,37 @@ impl<'a> Parser<'a> {
             }
         }
         out
+    }
+
+    /// Parse a module-level `let [mut] NAME: TYPE = EXPR;` declaration.
+    /// Type annotation is required (no global type inference). Initializer
+    /// is validated to be a literal at lowering time.
+    fn parse_global_decl(&mut self) -> Result<GlobalDecl, ParseError> {
+        let let_span = self.consume(TokenKind::Let, "Expected 'let'")?.span;
+        let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+        if mutable {
+            self.advance();
+        }
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected identifier after 'let'")?
+            .span;
+        let name = self.ident(name_span);
+        self.consume(
+            TokenKind::Colon,
+            "Module-level `let` requires a type annotation",
+        )?;
+        let type_annotation = self.parse_type()?;
+        self.consume(TokenKind::Equals, "Expected '=' in module-level let")?;
+        let value = self.parse_expression(Precedence::NONE)?;
+        let end = value.span.end();
+        self.consume(TokenKind::Semicolon, "Expected ';' after module-level let")?;
+        Ok(GlobalDecl {
+            name,
+            mutable,
+            type_annotation,
+            value,
+            span: Span::new(let_span.start(), end),
+        })
     }
 
     fn parse_let_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -1147,6 +1349,16 @@ impl<'a> Parser<'a> {
     fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {
         let token = self.consume(TokenKind::Break, "Expected 'break'")?;
         Ok(Stmt::Break { span: token.span })
+    }
+
+    fn parse_return_statement(&mut self) -> Result<Stmt, ParseError> {
+        let span = self.consume(TokenKind::Return, "Expected 'return'")?.span;
+        // Bare `return` ends at `;` or end-of-block; otherwise parse the value.
+        let value = match self.peek_kind() {
+            None | Some(TokenKind::Semicolon | TokenKind::RightBrace) => None,
+            _ => Some(self.parse_expression(Precedence::NONE)?),
+        };
+        Ok(Stmt::Return { value, span })
     }
 
     fn parse_if_expression(&mut self) -> Result<Expr, ParseError> {
@@ -1382,6 +1594,11 @@ fn token_to_binary_op(token_kind: TokenKind) -> Option<BinaryOp> {
         TokenKind::GreaterEquals => Some(BinaryOp::GreaterEquals),
         TokenKind::Less => Some(BinaryOp::Less),
         TokenKind::LessEquals => Some(BinaryOp::LessEquals),
+        TokenKind::Ampersand => Some(BinaryOp::BitAnd),
+        TokenKind::Pipe => Some(BinaryOp::BitOr),
+        TokenKind::Caret => Some(BinaryOp::BitXor),
+        TokenKind::LeftShift => Some(BinaryOp::ShiftLeft),
+        TokenKind::RightShift => Some(BinaryOp::ShiftRight),
         _ => None,
     }
 }
@@ -1413,6 +1630,10 @@ fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
         TokenKind::Greater | TokenKind::GreaterEquals | TokenKind::Less | TokenKind::LessEquals => {
             Precedence::COMPARISON
         }
+        TokenKind::Pipe => Precedence::BIT_OR,
+        TokenKind::Caret => Precedence::BIT_XOR,
+        TokenKind::Ampersand => Precedence::BIT_AND,
+        TokenKind::LeftShift | TokenKind::RightShift => Precedence::SHIFT,
         TokenKind::Plus | TokenKind::Minus => Precedence::ADDITION,
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::MULTIPLICATION,
         TokenKind::LeftParen => Precedence::CALL,

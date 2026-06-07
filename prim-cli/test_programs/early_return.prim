@@ -1,0 +1,49 @@
+import std.io.println_i32
+
+// Early return with value, branching on input.
+fn classify(x: i32) -> i32 {
+    if x < 0i32 {
+        return -1i32
+    }
+    if x == 0i32 {
+        return 0i32
+    }
+    1i32
+}
+
+// Early return from inside a loop — find first index where i*i > limit.
+fn first_square_above(limit: i32) -> i32 {
+    let mut i = 0i32
+    while i < 1000i32 {
+        if i * i > limit {
+            return i
+        }
+        i = i + 1i32
+    }
+    -1i32
+}
+
+// Early return from a void function — should just exit.
+let mut SIDE_EFFECT: i32 = 0;
+
+fn maybe_bump(do_it: bool) {
+    if do_it == false {
+        return
+    }
+    SIDE_EFFECT = SIDE_EFFECT + 1i32
+}
+
+fn main() {
+    println_i32(classify(-5i32))           // -1
+    println_i32(classify(0i32))            // 0
+    println_i32(classify(7i32))            // 1
+
+    println_i32(first_square_above(50i32)) // 8 (8*8=64 is first > 50)
+    println_i32(first_square_above(0i32))  // 1 (1*1=1 is first > 0)
+
+    maybe_bump(false)
+    println_i32(SIDE_EFFECT)               // 0
+    maybe_bump(true)
+    maybe_bump(true)
+    println_i32(SIDE_EFFECT)               // 2
+}
