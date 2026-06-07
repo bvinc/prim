@@ -15,7 +15,7 @@ impl Ord for Value {
 // Bounded generic: any T that implements Ord can be passed; the body
 // calls `a.lt(b)` which the typechecker resolves through the bound and
 // monomorphization turns into a direct call to Value::lt.
-fn min<T: Ord>(a: T, b: T) -> T {
+fn min[T: Ord](a: T, b: T) -> T {
     if a.lt(b) { a } else { b }
 }
 

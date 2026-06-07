@@ -1,19 +1,19 @@
 import std.io.println_i32
 import std.io.println_i64
 
-enum Option<T> {
+enum Option[T] {
     None,
     Some { value: T },
 }
 
-fn unwrap_i32(x: Option<i32>) -> i32 {
+fn unwrap_i32(x: Option[i32]) -> i32 {
     match x {
         Option.Some { value } => value,
         Option.None => 0i32,
     }
 }
 
-fn unwrap_i64(x: Option<i64>) -> i64 {
+fn unwrap_i64(x: Option[i64]) -> i64 {
     match x {
         Option.Some { value } => value,
         Option.None => 0i64,
@@ -23,7 +23,7 @@ fn unwrap_i64(x: Option<i64>) -> i64 {
 fn main() {
     let a = Option.Some { value = 12i32 }
     let b = Option.Some { value = 9000000000i64 }
-    let c: Option<i32> = Option.None
+    let c: Option[i32] = Option.None
     println_i32(unwrap_i32(a))
     println_i64(unwrap_i64(b))
     println_i32(unwrap_i32(c))

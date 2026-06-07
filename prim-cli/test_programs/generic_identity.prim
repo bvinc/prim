@@ -1,8 +1,8 @@
 import std.io.println_i32
 
 // Simplest generic: pass-through. The compiler stamps out a separate
-// `identity<i32>` after monomorphization.
-fn identity<T>(x: T) -> T {
+// `identity[i32]` after monomorphization.
+fn identity[T](x: T) -> T {
     x
 }
 

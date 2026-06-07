@@ -2,7 +2,7 @@ import std.io.println_i32
 
 // Simplest generic struct. Both fields are T, so T is inferred from
 // the literal's initializers.
-struct Pair<T> {
+struct Pair[T] {
     first: T,
     second: T,
 }

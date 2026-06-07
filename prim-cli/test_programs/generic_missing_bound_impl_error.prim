@@ -7,7 +7,7 @@ trait Ord {
     fn lt(self: Ord, other: Ord) -> bool;
 }
 
-fn min<T: Ord>(a: T, b: T) -> T {
+fn min[T: Ord](a: T, b: T) -> T {
     if a.lt(b) { a } else { b }
 }
 

@@ -29,7 +29,7 @@ pub fn monomorphize(program: &mut Program) {
     // specialized.
     //
     // Even non-generic functions can carry `Type::Struct(_, args)`
-    // carriers (e.g. `let x = Pair<i32> { ... }`) that need struct
+    // carriers (e.g. `let x = Pair[i32] { ... }`) that need struct
     // instantiation, so the substitution step runs with an empty `subst`
     // — it does nothing for `Type::Param` but still triggers the
     // generic-struct mono pass through `substitute_type`.

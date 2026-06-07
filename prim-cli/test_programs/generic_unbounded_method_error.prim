@@ -5,7 +5,7 @@ trait Ord {
     fn lt(self: Ord, other: Ord) -> bool;
 }
 
-fn bad<T>(a: T, b: T) -> bool {
+fn bad[T](a: T, b: T) -> bool {
     a.lt(b)
 }
 

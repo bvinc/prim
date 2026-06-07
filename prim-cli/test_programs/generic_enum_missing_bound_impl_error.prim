@@ -4,7 +4,7 @@ trait Ord {
     fn lt(self: Ord, other: Ord) -> bool;
 }
 
-enum Slot<T: Ord> {
+enum Slot[T: Ord] {
     Empty,
     Full { value: T },
 }

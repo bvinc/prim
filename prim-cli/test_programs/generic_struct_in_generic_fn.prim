@@ -1,11 +1,11 @@
 import std.io.println_i32
 
-struct Wrap<T> {
+struct Wrap[T] {
     inner: T,
 }
 
 // Generic function that constructs a generic struct using its own T.
-fn wrap<T>(x: T) -> Wrap<T> {
+fn wrap[T](x: T) -> Wrap[T] {
     Wrap { inner = x }
 }
 

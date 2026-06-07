@@ -1,6 +1,6 @@
 // Negative test: an arg position can't pin T to two different types.
 
-fn pair<T>(a: T, b: T) -> T {
+fn pair[T](a: T, b: T) -> T {
     a
 }
 

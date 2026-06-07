@@ -6,7 +6,7 @@ import std.ptr.ptr_addr_mut_u8
 // Generic pointer-typed pass-through. The body never touches the
 // pointee, so the function is well-typed for *any* T. Each call site
 // substitutes T concretely; mono produces one specialization per T.
-fn ptr_id<T>(p: *mut T) -> *mut T {
+fn ptr_id[T](p: *mut T) -> *mut T {
     p
 }
 

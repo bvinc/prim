@@ -1,7 +1,7 @@
 import std.io.println_i32
 import std.io.println_i64
 
-struct Box<T> {
+struct Box[T] {
     value: T,
 }
 

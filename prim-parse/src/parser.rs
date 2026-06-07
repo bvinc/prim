@@ -613,8 +613,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `T1 (, T2)* >` — concrete type arguments used at a
-    /// generic instantiation site like `Pair<i32, u8>`. The leading `<`
+    /// Parse `T1 (, T2)* ]` — concrete type arguments used at a
+    /// generic instantiation site like `Pair[i32, u8]`. The leading `[`
     /// has already been consumed.
     fn parse_type_arg_list(&mut self) -> Result<Vec<Type>, ParseError> {
         let mut args = Vec::new();
@@ -625,13 +625,13 @@ impl<'a> Parser<'a> {
                     self.advance();
                     continue;
                 }
-                Some(TokenKind::Greater) => {
+                Some(TokenKind::RightBracket) => {
                     self.advance();
                     break;
                 }
                 Some(other) => {
                     return Err(ParseError::UnexpectedToken {
-                        expected: "',' or '>' in type argument list".to_string(),
+                        expected: "',' or ']' in type argument list".to_string(),
                         found: other,
                         span: self.current_span(),
                     });
@@ -646,7 +646,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    /// Parse `T [: Bound] (, T [: Bound])* >` — the leading `<` has already
+    /// Parse `T [: Bound] (, T [: Bound])* ]` — the leading `[` has already
     /// been consumed.
     fn parse_type_param_list(&mut self) -> Result<Vec<crate::TypeParam>, ParseError> {
         let mut params = Vec::new();
@@ -670,13 +670,13 @@ impl<'a> Parser<'a> {
                     self.advance();
                     continue;
                 }
-                Some(TokenKind::Greater) => {
+                Some(TokenKind::RightBracket) => {
                     self.advance();
                     break;
                 }
                 Some(other) => {
                     return Err(ParseError::UnexpectedToken {
-                        expected: "',' or '>' in type parameter list".to_string(),
+                        expected: "',' or ']' in type parameter list".to_string(),
                         found: other,
                         span: self.current_span(),
                     });
@@ -727,9 +727,9 @@ impl<'a> Parser<'a> {
             .span;
         let name = self.ident(name_span);
 
-        // Optional type parameter list: <T, U: Trait, ...>
-        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
-            self.advance(); // consume '<'
+        // Optional type parameter list: [T, U: Trait, ...]
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
+            self.advance(); // consume '['
             self.parse_type_param_list()?
         } else {
             Vec::new()
@@ -815,9 +815,9 @@ impl<'a> Parser<'a> {
             .span;
         let name = self.ident(name_span);
 
-        // Optional type parameter list: struct Pair<T, U: Trait> { ... }
-        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
-            self.advance(); // consume '<'
+        // Optional type parameter list: struct Pair[T, U: Trait] { ... }
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
+            self.advance(); // consume '['
             self.parse_type_param_list()?
         } else {
             Vec::new()
@@ -851,7 +851,7 @@ impl<'a> Parser<'a> {
         let name = self.ident(name_span);
 
         // Optional type-param list mirrors the struct grammar.
-        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
             self.advance();
             self.parse_type_param_list()?
         } else {
@@ -1139,9 +1139,9 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier => {
                 let span = self.advance().span;
                 let name = self.intern(span);
-                // Optional generic instantiation: `Pair<i32>` or `Map<K, V>`.
-                let type_args = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
-                    self.advance(); // consume '<'
+                // Optional generic instantiation: `Pair[i32]` or `Map[K, V]`.
+                let type_args = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
+                    self.advance(); // consume '['
                     self.parse_type_arg_list()?
                 } else {
                     Vec::new()
