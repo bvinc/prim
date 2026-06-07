@@ -119,6 +119,12 @@ struct Checker<'a> {
     /// `StructLit`.
     struct_type_params: HashMap<StructId, Vec<crate::hir::TypeParam>>,
     struct_fields: HashMap<StructId, HashMap<InternSymbol, Type>>,
+    enum_type_params: HashMap<crate::hir::EnumId, Vec<crate::hir::TypeParam>>,
+    /// `(enum, variant_idx)` → field name → declared type. Used at
+    /// `VariantLit` typecheck for the same per-field unify/inference
+    /// as `StructLit`, and at pattern lowering to look up binding
+    /// types.
+    enum_variant_fields: HashMap<(crate::hir::EnumId, u32), HashMap<InternSymbol, Type>>,
     loop_depth: usize,
     /// Return type of the function currently being checked. Used by
     /// `Stmt::Return` to validate the value type.
@@ -136,6 +142,8 @@ impl<'a> Checker<'a> {
             func_type_params: HashMap::new(),
             struct_type_params: HashMap::new(),
             struct_fields: HashMap::new(),
+            enum_type_params: HashMap::new(),
+            enum_variant_fields: HashMap::new(),
             loop_depth: 0,
             current_ret: None,
             current_type_params: Vec::new(),
@@ -227,6 +235,14 @@ impl<'a> Checker<'a> {
                 }
                 true
             }
+            (Type::Enum(ea, aa), Type::Enum(eb, ab)) if ea == eb && aa.len() == ab.len() => {
+                for (a, b) in aa.iter().zip(ab.iter()) {
+                    if !Self::infer_pins(a, b, pins) {
+                        return false;
+                    }
+                }
+                true
+            }
             _ => true,
         }
     }
@@ -243,6 +259,12 @@ impl<'a> Checker<'a> {
             Type::Array(elem) => Type::Array(Box::new(Self::substitute_params(elem, pins))),
             Type::Struct(sid, args) => Type::Struct(
                 *sid,
+                args.iter()
+                    .map(|t| Self::substitute_params(t, pins))
+                    .collect(),
+            ),
+            Type::Enum(eid, args) => Type::Enum(
+                *eid,
                 args.iter()
                     .map(|t| Self::substitute_params(t, pins))
                     .collect(),
@@ -269,6 +291,13 @@ impl<'a> Checker<'a> {
             }
             Type::Struct(sid, type_args) => Type::Struct(
                 *sid,
+                type_args
+                    .iter()
+                    .map(|t| Self::substitute_params_with_slice(t, args))
+                    .collect(),
+            ),
+            Type::Enum(eid, type_args) => Type::Enum(
+                *eid,
                 type_args
                     .iter()
                     .map(|t| Self::substitute_params_with_slice(t, args))
@@ -322,6 +351,22 @@ impl<'a> Checker<'a> {
             self.struct_fields.insert(s.id, fields);
             if !s.type_params.is_empty() {
                 self.struct_type_params.insert(s.id, s.type_params.clone());
+            }
+        }
+
+        for e in &self.program.enums {
+            if !e.type_params.is_empty() {
+                self.enum_type_params.insert(e.id, e.type_params.clone());
+            }
+            for (idx, variant) in e.variants.iter().enumerate() {
+                let mut fields = HashMap::with_capacity(variant.fields.len());
+                for f in &variant.fields {
+                    if matches!(f.ty, Type::Undetermined) {
+                        return Err(self.error(f.span, TypeCheckKind::UndeterminedFieldType));
+                    }
+                    fields.insert(f.name, f.ty.clone());
+                }
+                self.enum_variant_fields.insert((e.id, idx as u32), fields);
             }
         }
 
@@ -1462,6 +1507,241 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Coerce { .. } => Ok(ty.clone()),
             ExprKind::TraitBoundCall { .. } => Ok(ty.clone()),
+            ExprKind::VariantLit {
+                enum_id,
+                variant_idx,
+                type_args,
+                fields,
+            } => {
+                let eid = *enum_id;
+                let vidx = *variant_idx;
+                let generic = self.enum_type_params.get(&eid).cloned();
+                let contextual_type_args = match &ty {
+                    Type::Enum(id, args) if *id == eid => args.clone(),
+                    _ => Vec::new(),
+                };
+                // Check each field initializer.
+                let mut field_actuals: Vec<(InternSymbol, Type)> = Vec::with_capacity(fields.len());
+                let mut field_expected: Vec<(InternSymbol, Type)> =
+                    Vec::with_capacity(fields.len());
+                for (field_sym, val) in fields.iter_mut() {
+                    let expected = {
+                        let map = self.enum_variant_fields.get(&(eid, vidx)).ok_or_else(|| {
+                            self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "unknown enum variant {:?}::{}",
+                                    eid, vidx
+                                )),
+                            )
+                        })?;
+                        map.get(field_sym).cloned().ok_or_else(|| {
+                            self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "no field '{}' on enum variant",
+                                    self.program.interner.resolve(field_sym)
+                                )),
+                            )
+                        })?
+                    };
+                    self.apply_expected(val, &expected);
+                    let got = self.check_expr(val, locals)?;
+                    field_actuals.push((*field_sym, got));
+                    field_expected.push((*field_sym, expected));
+                }
+                // Inference + bound checks (same shape as the struct
+                // literal path).
+                let (resolved_type_args, expected_after_subst): (
+                    Vec<Type>,
+                    Vec<(InternSymbol, Type)>,
+                ) = if let Some(tparams) = generic.as_ref() {
+                    let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
+                    for (i, arg) in contextual_type_args.iter().enumerate() {
+                        pins.insert(crate::hir::TypeParamId(i as u32), arg.clone());
+                    }
+                    for (i, arg) in type_args.iter().enumerate() {
+                        pins.insert(crate::hir::TypeParamId(i as u32), arg.clone());
+                    }
+                    for ((_, expected), (_, got)) in field_expected.iter().zip(field_actuals.iter())
+                    {
+                        if !Self::infer_pins(expected, got, &mut pins) {
+                            let efmt = self.type_name(expected);
+                            let gfmt = self.type_name(got);
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "conflicting inferences for enum type parameter (expected {}, got {})",
+                                    efmt, gfmt
+                                )),
+                            ));
+                        }
+                    }
+                    let mut inferred = Vec::with_capacity(tparams.len());
+                    for (i, tp) in tparams.iter().enumerate() {
+                        let id = crate::hir::TypeParamId(i as u32);
+                        let pinned = pins.get(&id).cloned().ok_or_else(|| {
+                            let name = self
+                                .program
+                                .interner
+                                .resolve(&self.program.symbols[tp.name.0 as usize].name);
+                            self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "cannot infer enum type parameter '{}'",
+                                    name
+                                )),
+                            )
+                        })?;
+                        inferred.push(pinned);
+                    }
+                    let substituted = field_expected
+                        .iter()
+                        .map(|(sym, t)| (*sym, Self::substitute_params(t, &pins)))
+                        .collect();
+                    (inferred, substituted)
+                } else {
+                    (Vec::new(), field_expected)
+                };
+                for ((_, val), ((_, expected), (_, got))) in fields
+                    .iter_mut()
+                    .zip(expected_after_subst.iter().zip(field_actuals.iter()))
+                {
+                    if self.try_coerce_struct_to_trait(val, got, expected) {
+                        continue;
+                    }
+                    if self.unify(expected, got).is_none() {
+                        let expected_name = self.type_name(expected);
+                        let found_name = self.type_name(got);
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: expected_name,
+                                found: found_name,
+                            },
+                        ));
+                    }
+                }
+                *type_args = resolved_type_args.clone();
+                let enum_ty = Type::Enum(eid, resolved_type_args);
+                *ty = enum_ty.clone();
+                Ok(enum_ty)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let scrut_ty = self.check_expr(scrutinee, locals)?;
+                let (eid, eargs) = match &scrut_ty {
+                    Type::Enum(id, args) => (*id, args.clone()),
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(format!(
+                                "match scrutinee must be an enum type, got {}",
+                                self.type_name(other)
+                            )),
+                        ));
+                    }
+                };
+                let variant_count = self
+                    .program
+                    .enums
+                    .get(eid.0 as usize)
+                    .map(|e| e.variants.len() as u32)
+                    .unwrap_or(0);
+                let mut covered = vec![false; variant_count as usize];
+                let mut has_wildcard = false;
+                let mut result_ty: Option<Type> = None;
+                for arm in arms.iter_mut() {
+                    let mut arm_bindings = Vec::new();
+                    match &mut arm.pattern {
+                        crate::hir::Pattern::Wildcard { .. } => {
+                            has_wildcard = true;
+                        }
+                        crate::hir::Pattern::Variant {
+                            enum_id,
+                            variant_idx,
+                            bindings,
+                            ..
+                        } => {
+                            if *enum_id != eid {
+                                return Err(self.error(
+                                    *span,
+                                    TypeCheckKind::Legacy(
+                                        "pattern's enum does not match scrutinee's enum"
+                                            .to_string(),
+                                    ),
+                                ));
+                            }
+                            if *variant_idx >= variant_count {
+                                return Err(self.error(
+                                    *span,
+                                    TypeCheckKind::Legacy("variant index out of range".to_string()),
+                                ));
+                            }
+                            if let Some(slot) = covered.get_mut(*variant_idx as usize) {
+                                *slot = true;
+                            }
+                            // Substitute the carrier's type args into
+                            // each binding's declared type and install
+                            // it as a local for the arm body.
+                            let field_map =
+                                self.enum_variant_fields.get(&(eid, *variant_idx)).cloned();
+                            if let Some(field_map) = field_map {
+                                for (field_sym, binding_sym, binding_ty) in bindings.iter_mut() {
+                                    let declared =
+                                        field_map.get(field_sym).cloned().ok_or_else(|| {
+                                            self.error(
+                                                *span,
+                                                TypeCheckKind::Legacy(format!(
+                                                    "no field '{}' on variant",
+                                                    self.program.interner.resolve(field_sym)
+                                                )),
+                                            )
+                                        })?;
+                                    let resolved =
+                                        Self::substitute_params_with_slice(&declared, &eargs);
+                                    *binding_ty = resolved.clone();
+                                    locals.insert(*binding_sym, resolved);
+                                    arm_bindings.push(*binding_sym);
+                                }
+                            }
+                        }
+                    }
+                    let body_ty = self.check_expr(&mut arm.body, locals)?;
+                    for binding in arm_bindings {
+                        locals.remove(&binding);
+                    }
+                    result_ty = match result_ty {
+                        None => Some(body_ty),
+                        Some(prev) => match self.unify(&prev, &body_ty) {
+                            Some(u) => Some(u),
+                            None => {
+                                let pname = self.type_name(&prev);
+                                let bname = self.type_name(&body_ty);
+                                return Err(self.error(
+                                    *span,
+                                    TypeCheckKind::TypeMismatch {
+                                        expected: pname,
+                                        found: bname,
+                                    },
+                                ));
+                            }
+                        },
+                    };
+                }
+                // Exhaustiveness: every variant must be covered, or a
+                // wildcard must be present.
+                if !has_wildcard && covered.iter().any(|is_covered| !is_covered) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "non-exhaustive match: not all variants are covered".to_string(),
+                        ),
+                    ));
+                }
+                let final_ty = result_ty.unwrap_or(Type::Undetermined);
+                *ty = final_ty.clone();
+                Ok(final_ty)
+            }
         }
     }
 
@@ -1480,6 +1760,7 @@ impl<'a> Checker<'a> {
             (Type::FloatVar, t) | (t, Type::FloatVar) if self.is_float(t) => Some(t.clone()),
             (Type::IntVar, Type::FloatVar) | (Type::FloatVar, Type::IntVar) => None,
             (Type::Struct(x, ax), Type::Struct(y, ay)) if x == y && ax == ay => Some(a.clone()),
+            (Type::Enum(x, ax), Type::Enum(y, ay)) if x == y && ax == ay => Some(a.clone()),
             (
                 Type::Pointer {
                     mutable: ma,
@@ -1552,6 +1833,21 @@ impl<'a> Checker<'a> {
             ExprKind::Dbg { inner, .. } => {
                 self.apply_expected(inner, expected);
                 *ty = inner.ty.clone();
+            }
+            ExprKind::VariantLit {
+                enum_id, type_args, ..
+            } => {
+                if let Type::Enum(expected_enum, expected_args) = expected {
+                    if enum_id == expected_enum {
+                        *type_args = expected_args.clone();
+                        *ty = expected.clone();
+                    }
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.apply_expected(&mut arm.body, expected);
+                }
             }
             _ => {}
         }
@@ -1653,6 +1949,17 @@ impl<'a> Checker<'a> {
             ExprKind::StructLit { fields, .. } => {
                 for (_, val) in fields {
                     self.finalize_expr(val);
+                }
+            }
+            ExprKind::VariantLit { fields, .. } => {
+                for (_, val) in fields {
+                    self.finalize_expr(val);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.finalize_expr(scrutinee);
+                for arm in arms {
+                    self.finalize_expr(&mut arm.body);
                 }
             }
             ExprKind::Field { base, .. } => {

@@ -61,6 +61,7 @@ pub(crate) enum ResSymbolKind {
     Module,
     Function,
     Struct,
+    Enum,
     Trait,
     Impl,
     Global,

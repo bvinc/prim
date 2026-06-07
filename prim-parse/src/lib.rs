@@ -83,6 +83,19 @@ pub enum ExprKind {
         name: Ident,
         fields: Vec<StructField>,
     },
+    /// `Enum.Variant` (unit) or `Enum.Variant { field = expr, ... }`
+    /// (struct-like). Resolved to a specific enum + variant index in
+    /// HIR lowering.
+    VariantLiteral {
+        enum_name: Ident,
+        variant_name: Ident,
+        fields: Vec<StructField>,
+    },
+    /// `match scrutinee { pattern => arm_expr, ... }`.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     FieldAccess {
         object: Box<Expr>,
         field: Ident,
@@ -157,6 +170,40 @@ pub struct StructField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// Pattern syntax in a match arm. Kept minimal for phase 1: just unit
+/// and struct-like variant patterns, plus a wildcard. No nesting, no
+/// guards, no literal patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    Wildcard {
+        span: Span,
+    },
+    Variant {
+        enum_name: Ident,
+        variant_name: Ident,
+        /// `field name → binding name` pairs. Empty for unit variants.
+        bindings: Vec<PatternBinding>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternBinding {
+    /// Field name on the variant.
+    pub field: Ident,
+    /// Local binding name introduced into the arm body's scope. When
+    /// the source writes `Some { value }`, `field` and `binding` are
+    /// the same; `Some { value: x }` lets them differ.
+    pub binding: Ident,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
@@ -169,6 +216,25 @@ pub struct StructDefinition {
 pub struct StructFieldDefinition {
     pub name: Ident,
     pub field_type: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDefinition {
+    pub name: Ident,
+    pub type_params: Vec<TypeParam>,
+    pub variants: Vec<VariantDefinition>,
+    pub span: Span,
+}
+
+/// A single variant of an `enum`. Empty `fields` means a unit variant
+/// (e.g. `None`); otherwise it's a struct-like variant with named
+/// fields (e.g. `Some { value: T }`). Tuple variants aren't supported
+/// — payloads always carry a name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDefinition {
+    pub name: Ident,
+    pub fields: Vec<StructFieldDefinition>,
+    pub span: Span,
 }
 
 /// A module-level `let` (or `let mut`) declaration. The initializer is
@@ -265,6 +331,7 @@ pub struct Program {
     pub module_name: Option<Ident>,
     pub imports: Vec<ImportDecl>,
     pub structs: Vec<StructDefinition>,
+    pub enums: Vec<EnumDefinition>,
     pub functions: Vec<Function>,
     pub traits: Vec<TraitDefinition>,
     pub impls: Vec<ImplDefinition>,

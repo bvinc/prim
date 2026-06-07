@@ -21,6 +21,9 @@ pub struct GlobalId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TraitId(pub u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EnumId(pub u32);
+
 /// Position of a generic function's type parameter within its
 /// `type_params` vec. `Type::Param(TypeParamId(i))` refers to the i-th
 /// parameter of the enclosing function.
@@ -38,6 +41,7 @@ pub struct Program {
     pub modules: Vec<Module>,
     pub functions: Vec<Function>,
     pub structs: Vec<Struct>,
+    pub enums: Vec<Enum>,
     pub globals: Vec<Global>,
     pub traits: Vec<Trait>,
     /// `(receiver struct, method name)` → impl method's FuncId. Populated
@@ -90,6 +94,29 @@ pub struct Struct {
     pub id: StructId,
     pub name: SymbolId,
     pub type_params: Vec<TypeParam>,
+    pub fields: Vec<Field>,
+    pub span: SpanId,
+}
+
+/// A tagged-union enum. Values are heap pointers to a `{discriminant:
+/// u32, payload: max(variant payload sizes)}` block. The discriminant
+/// is the variant's index in `variants`.
+#[derive(Clone, Debug)]
+pub struct Enum {
+    pub id: EnumId,
+    pub name: SymbolId,
+    pub type_params: Vec<TypeParam>,
+    pub variants: Vec<Variant>,
+    /// Variant name → position in `variants`. O(1) lookup at typecheck
+    /// and pattern-match time.
+    pub variant_idx: std::collections::HashMap<InternSymbol, u32>,
+    pub span: SpanId,
+}
+
+/// One variant of an enum. Unit variants have `fields` empty.
+#[derive(Clone, Debug)]
+pub struct Variant {
+    pub name: InternSymbol,
     pub fields: Vec<Field>,
     pub span: SpanId,
 }
@@ -234,6 +261,20 @@ pub enum ExprKind {
         type_args: Vec<Type>,
         fields: Vec<(InternSymbol, Expr)>,
     },
+    /// `Enum.Variant` (unit) or `Enum.Variant { field = expr, ... }`
+    /// (struct-like).
+    VariantLit {
+        enum_id: EnumId,
+        variant_idx: u32,
+        type_args: Vec<Type>,
+        fields: Vec<(InternSymbol, Expr)>,
+    },
+    /// `match scrutinee { arms... }`. Arms are checked left-to-right at
+    /// codegen via discriminant equality.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Field {
         base: Box<Expr>,
         field: InternSymbol,
@@ -296,6 +337,28 @@ pub enum ExprKind {
 }
 
 #[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: SpanId,
+}
+
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    Wildcard {
+        span: SpanId,
+    },
+    Variant {
+        enum_id: EnumId,
+        variant_idx: u32,
+        /// `(field name, local symbol introduced into the arm body, local type)`
+        /// triples. Empty for unit variants.
+        bindings: Vec<(InternSymbol, SymbolId, Type)>,
+        span: SpanId,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct Symbol {
     pub id: SymbolId,
     pub module: ModuleId,
@@ -339,6 +402,10 @@ pub enum Type {
     /// A trait type — at the wasm level a pointer to an 8-byte fat pointer
     /// struct `{vtable_addr, data_addr}`.
     Trait(TraitId),
+    /// An enum type with optional type arguments. Like `Type::Struct`,
+    /// non-empty args means a specific instantiation that mono will
+    /// turn into a fresh concrete `EnumId`.
+    Enum(EnumId, Vec<Type>),
     /// A type parameter `T` within a generic function's signature or body.
     /// Substituted to a concrete type by monomorphization before codegen.
     Param(TypeParamId),
@@ -394,6 +461,20 @@ impl fmt::Display for Type {
                 }
             }
             Type::Trait(id) => write!(f, "trait {:?}", id),
+            Type::Enum(id, args) => {
+                if args.is_empty() {
+                    write!(f, "enum {:?}", id)
+                } else {
+                    write!(f, "enum {:?}<", id)?;
+                    for (i, t) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ">")
+                }
+            }
             Type::Param(id) => write!(f, "T#{}", id.0),
             Type::Pointer { mutable, pointee } => {
                 if *mutable {

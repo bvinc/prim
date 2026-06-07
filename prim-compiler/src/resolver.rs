@@ -165,6 +165,26 @@ impl<'a> ScopeCollector<'a> {
             scope.insert(name, sym);
         }
 
+        for e in &ast.enums {
+            let name = interner.resolve(&e.name.sym).to_string();
+            if scope.contains_key(&name) {
+                self.errors.push(ResolveError::DuplicateSymbol {
+                    name,
+                    file: file.file_id,
+                    span: e.span,
+                });
+                continue;
+            }
+            let sym = self.add_symbol(
+                name.clone(),
+                ResSymbolKind::Enum,
+                Some(module_id),
+                file.file_id,
+                e.span,
+            );
+            scope.insert(name, sym);
+        }
+
         for func in &ast.functions {
             let name = interner.resolve(&func.name.sym).to_string();
             if scope.contains_key(&name) {

@@ -1,0 +1,11 @@
+enum Switch {
+    Off,
+    On,
+}
+
+fn main() {
+    let s = Switch.On
+    match s {
+        Switch.On => 1i32,
+    }
+}

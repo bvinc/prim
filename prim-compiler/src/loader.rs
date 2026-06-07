@@ -478,6 +478,10 @@ fn collect_exports(files: &[ModuleFile], interner: &prim_parse::Interner) -> Exp
             let name = interner.resolve(&s.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Struct);
         }
+        for e in &file.ast.enums {
+            let name = interner.resolve(&e.name.sym).to_string();
+            exports.insert(name, ResSymbolKind::Enum);
+        }
         for f in &file.ast.functions {
             let name = interner.resolve(&f.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Function);

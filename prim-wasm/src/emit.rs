@@ -3,7 +3,7 @@
 
 use crate::WasmError;
 use crate::builtins::Builtins;
-use crate::layout::{StructLayout, emit_field_load, emit_field_store};
+use crate::layout::{EnumLayout, StructLayout, emit_field_load, emit_field_store};
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
 use prim_compiler::hir;
@@ -35,6 +35,8 @@ pub(crate) struct EmitCtx<'a> {
     pub runtime: &'a HashMap<hir::FuncId, String>,
     pub builtins: &'a Builtins,
     pub struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
+    pub enum_layouts: &'a HashMap<hir::EnumId, EnumLayout>,
+    pub named_struct_fields: &'a HashMap<hir::StructId, HashMap<String, (u32, hir::Type)>>,
     /// HIR GlobalId → wasm global index. User globals come after the heap
     /// pointer (wasm global 0).
     pub global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
@@ -62,6 +64,8 @@ pub(crate) fn build_emit_ctx<'a>(
     runtime_map: &'a HashMap<hir::FuncId, String>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
+    enum_layouts: &'a HashMap<hir::EnumId, EnumLayout>,
+    named_struct_fields: &'a HashMap<hir::StructId, HashMap<String, (u32, hir::Type)>>,
     global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
     dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
     vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
@@ -85,6 +89,8 @@ pub(crate) fn build_emit_ctx<'a>(
         runtime: runtime_map,
         builtins,
         struct_layouts,
+        enum_layouts,
+        named_struct_fields,
         global_wasm_idx,
         dyn_call_types,
         vtable_addr,
@@ -108,29 +114,15 @@ fn global_wasm_index(ctx: &EmitCtx, sym: hir::SymbolId) -> Option<u32> {
     ctx.global_wasm_idx.get(&gid).copied()
 }
 
-/// Look up the offset of a struct field by its name.
-///
-/// Walks `program.structs` to find the struct, then matches a field by its
-/// resolved name string. The shared `lasso::ThreadedRodeo` interner across
-/// the compilation means `InternSymbol` comparisons would also work; this
-/// resolves by string for robustness against any future synthetic-symbol
-/// edge cases.
-fn struct_field_offset(
-    program: &hir::Program,
-    layouts: &HashMap<hir::StructId, StructLayout>,
+fn named_struct_field(
+    ctx: &EmitCtx,
     struct_id: hir::StructId,
     field_name: &str,
-) -> Option<u32> {
-    let s = program.structs.iter().find(|s| s.id == struct_id)?;
-    let field = s
-        .fields
-        .iter()
-        .find(|f| program.interner.resolve(&f.name) == field_name)?;
-    layouts
+) -> Option<(u32, hir::Type)> {
+    ctx.named_struct_fields
         .get(&struct_id)?
-        .fields
-        .get(&field.name)
-        .map(|(off, _)| *off)
+        .get(field_name)
+        .cloned()
 }
 
 // === Function body emission ===
@@ -299,6 +291,17 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             struct_id, fields, ..
         } => {
             emit_struct_lit(f, *struct_id, fields, ctx)?;
+        }
+        hir::ExprKind::VariantLit {
+            enum_id,
+            variant_idx,
+            fields,
+            ..
+        } => {
+            emit_variant_lit(f, *enum_id, *variant_idx, fields, ctx)?;
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            emit_match(f, scrutinee, arms, &expr.ty, ctx)?;
         }
         hir::ExprKind::Field { base, field } => {
             emit_expr(f, base, ctx)?;
@@ -514,22 +517,22 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
         }
     };
 
-    let data_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "data") {
-        Some(o) => o,
+    let data_off = match named_struct_field(ctx, struct_id, "data") {
+        Some((o, _)) => o,
         None => {
             f.instruction(&Instruction::Unreachable);
             return;
         }
     };
-    let len_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "len") {
-        Some(o) => o,
+    let len_off = match named_struct_field(ctx, struct_id, "len") {
+        Some((o, _)) => o,
         None => {
             f.instruction(&Instruction::Unreachable);
             return;
         }
     };
-    let cap_off = match struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "cap") {
-        Some(o) => o,
+    let cap_off = match named_struct_field(ctx, struct_id, "cap") {
+        Some((o, _)) => o,
         None => {
             f.instruction(&Instruction::Unreachable);
             return;
@@ -679,6 +682,169 @@ fn emit_struct_lit(
     // Push ptr as the struct value
     f.instruction(&Instruction::LocalGet(ptr_local));
     Ok(())
+}
+
+fn emit_variant_lit(
+    f: &mut Function,
+    enum_id: hir::EnumId,
+    variant_idx: u32,
+    fields: &[(hir::InternSymbol, hir::Expr)],
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + 1);
+    let ptr_local = ctx.scratch_base + counter;
+
+    let layout = match ctx.enum_layouts.get(&enum_id) {
+        Some(l) => l,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+    let variant = match layout.variants.get(variant_idx as usize) {
+        Some(v) => v,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+
+    f.instruction(&Instruction::I32Const(layout.size as i32));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalSet(ptr_local));
+
+    f.instruction(&Instruction::LocalGet(ptr_local));
+    f.instruction(&Instruction::I32Const(variant_idx as i32));
+    emit_field_store(f, &hir::Type::U32, 0);
+
+    for (field_sym, value) in fields {
+        let (payload_offset, field_ty) = match variant.fields.get(field_sym) {
+            Some(t) => t.clone(),
+            None => {
+                f.instruction(&Instruction::Unreachable);
+                continue;
+            }
+        };
+        f.instruction(&Instruction::LocalGet(ptr_local));
+        emit_expr(f, value, ctx)?;
+        emit_field_store(f, &field_ty, 8 + payload_offset);
+    }
+
+    f.instruction(&Instruction::LocalGet(ptr_local));
+    Ok(())
+}
+
+fn emit_match(
+    f: &mut Function,
+    scrutinee: &hir::Expr,
+    arms: &[hir::MatchArm],
+    result_ty: &hir::Type,
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + 1);
+    let scrutinee_local = ctx.scratch_base + counter;
+    let enum_id = match &scrutinee.ty {
+        hir::Type::Enum(id, _) => *id,
+        _ => {
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+
+    emit_expr(f, scrutinee, ctx)?;
+    f.instruction(&Instruction::LocalSet(scrutinee_local));
+    emit_match_arm_chain(f, scrutinee_local, enum_id, arms, 0, result_ty, ctx)
+}
+
+fn emit_match_arm_chain(
+    f: &mut Function,
+    scrutinee_local: u32,
+    enum_id: hir::EnumId,
+    arms: &[hir::MatchArm],
+    index: usize,
+    result_ty: &hir::Type,
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let Some(arm) = arms.get(index) else {
+        f.instruction(&Instruction::Unreachable);
+        if produces_value(result_ty) {
+            emit_default_value(f, result_ty);
+        }
+        return Ok(());
+    };
+
+    match &arm.pattern {
+        hir::Pattern::Wildcard { .. } => {
+            emit_expr(f, &arm.body, ctx)?;
+        }
+        hir::Pattern::Variant {
+            variant_idx,
+            bindings,
+            ..
+        } => {
+            f.instruction(&Instruction::LocalGet(scrutinee_local));
+            emit_field_load(f, &hir::Type::U32, 0);
+            f.instruction(&Instruction::I32Const(*variant_idx as i32));
+            f.instruction(&Instruction::I32Eq);
+
+            if produces_value(result_ty) {
+                f.instruction(&Instruction::If(BlockType::Result(hir_type_to_valtype(
+                    result_ty,
+                ))));
+            } else {
+                f.instruction(&Instruction::If(BlockType::Empty));
+            }
+
+            emit_match_bindings(f, scrutinee_local, enum_id, *variant_idx, bindings, ctx);
+            emit_expr(f, &arm.body, ctx)?;
+
+            f.instruction(&Instruction::Else);
+            emit_match_arm_chain(f, scrutinee_local, enum_id, arms, index + 1, result_ty, ctx)?;
+            f.instruction(&Instruction::End);
+        }
+    }
+
+    Ok(())
+}
+
+fn emit_match_bindings(
+    f: &mut Function,
+    scrutinee_local: u32,
+    enum_id: hir::EnumId,
+    variant_idx: u32,
+    bindings: &[(hir::InternSymbol, hir::SymbolId, hir::Type)],
+    ctx: &EmitCtx,
+) {
+    let variant = match ctx
+        .enum_layouts
+        .get(&enum_id)
+        .and_then(|layout| layout.variants.get(variant_idx as usize))
+    {
+        Some(v) => v,
+        None => {
+            f.instruction(&Instruction::Unreachable);
+            return;
+        }
+    };
+
+    for (field_sym, binding_sym, _) in bindings {
+        let (payload_offset, field_ty) = match variant.fields.get(field_sym) {
+            Some(t) => t.clone(),
+            None => {
+                f.instruction(&Instruction::Unreachable);
+                continue;
+            }
+        };
+        let Some(&local) = ctx.locals.get(binding_sym) else {
+            f.instruction(&Instruction::Unreachable);
+            continue;
+        };
+        f.instruction(&Instruction::LocalGet(scrutinee_local));
+        emit_field_load(f, &field_ty, 8 + payload_offset);
+        f.instruction(&Instruction::LocalSet(local));
+    }
 }
 
 fn emit_runtime_call(
@@ -877,8 +1043,8 @@ fn emit_write(f: &mut Function, args: &[hir::Expr], ctx: &EmitCtx) -> Result<(),
             return Ok(());
         }
     };
-    let data_off = struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "data");
-    let len_off = struct_field_offset(ctx.program, ctx.struct_layouts, struct_id, "len");
+    let data_off = named_struct_field(ctx, struct_id, "data").map(|(o, _)| o);
+    let len_off = named_struct_field(ctx, struct_id, "len").map(|(o, _)| o);
     let (data_off, len_off) = match (data_off, len_off) {
         (Some(d), Some(l)) => (d, l),
         _ => {

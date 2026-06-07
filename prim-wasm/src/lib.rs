@@ -24,8 +24,8 @@ use crate::builtins::{
 };
 use crate::emit::{DbgSite, StrSite, build_emit_ctx, emit_user_function};
 use crate::layout::{
-    DOT_OFFSET, FALSE_OFFSET, NEWLINE_OFFSET, STATIC_DATA_START, StructLayout, TRUE_OFFSET,
-    compute_struct_layout,
+    DOT_OFFSET, EnumLayout, FALSE_OFFSET, NEWLINE_OFFSET, STATIC_DATA_START, StructLayout,
+    TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
 };
 use crate::types::{TypeRegistry, hir_type_to_valtype};
 use crate::walks::{collect_dbg_prefixes_block, collect_str_literals_block};
@@ -63,6 +63,27 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut struct_layouts: HashMap<hir::StructId, StructLayout> = HashMap::new();
     for s in &program.structs {
         struct_layouts.insert(s.id, compute_struct_layout(s));
+    }
+    let mut enum_layouts: HashMap<hir::EnumId, EnumLayout> = HashMap::new();
+    for e in &program.enums {
+        enum_layouts.insert(e.id, compute_enum_layout(e));
+    }
+    let mut named_struct_fields: HashMap<hir::StructId, HashMap<String, (u32, hir::Type)>> =
+        HashMap::new();
+    for s in &program.structs {
+        let Some(layout) = struct_layouts.get(&s.id) else {
+            continue;
+        };
+        let mut fields = HashMap::with_capacity(s.fields.len());
+        for field in &s.fields {
+            if let Some((offset, ty)) = layout.fields.get(&field.name) {
+                fields.insert(
+                    program.interner.resolve(&field.name).to_string(),
+                    (*offset, ty.clone()),
+                );
+            }
+        }
+        named_struct_fields.insert(s.id, fields);
     }
 
     let mut types = TypeRegistry::new();
@@ -402,6 +423,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 &runtime_map,
                 &builtins,
                 &struct_layouts,
+                &enum_layouts,
+                &named_struct_fields,
                 &global_wasm_idx,
                 &dyn_call_types,
                 &vtable_addr,

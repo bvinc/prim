@@ -1,7 +1,7 @@
 # spell-checker:ignore bintools gnum gperf ldflags libclang nixpkgs numtide pkgs texinfo gettext
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # <https://github.com/nix-systems/nix-systems>
     systems.url = "github:nix-systems/default";

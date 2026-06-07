@@ -1,0 +1,19 @@
+import std.io.println_i32
+
+enum MaybeI32 {
+    None,
+    Some { value: i32 },
+}
+
+fn unwrap_or(m: MaybeI32, default: i32) -> i32 {
+    match m {
+        MaybeI32.Some { value } => value,
+        MaybeI32.None => default,
+    }
+}
+
+fn main() {
+    let a = MaybeI32.Some { value = 41i32 }
+    println_i32(unwrap_or(a, 0i32))
+    println_i32(unwrap_or(MaybeI32.None, 7i32))
+}

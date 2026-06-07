@@ -87,6 +87,22 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_expr(val, locals);
             }
         }
+        hir::ExprKind::VariantLit { fields, .. } => {
+            for (_, val) in fields {
+                collect_locals_expr(val, locals);
+            }
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_locals_expr(scrutinee, locals);
+            for arm in arms {
+                if let hir::Pattern::Variant { bindings, .. } = &arm.pattern {
+                    for (_, binding, ty) in bindings {
+                        locals.push((*binding, hir_type_to_valtype(ty)));
+                    }
+                }
+                collect_locals_expr(&arm.body, locals);
+            }
+        }
         hir::ExprKind::Field { base, .. } => collect_locals_expr(base, locals),
         hir::ExprKind::Deref(base) => collect_locals_expr(base, locals),
         hir::ExprKind::Coerce { value, .. } => collect_locals_expr(value, locals),
@@ -171,6 +187,19 @@ fn collect_scratch_types_expr(
             out.push(ValType::I32);
             for (_, val) in fields {
                 collect_scratch_types_expr(val, runtime, out);
+            }
+        }
+        hir::ExprKind::VariantLit { fields, .. } => {
+            out.push(ValType::I32);
+            for (_, val) in fields {
+                collect_scratch_types_expr(val, runtime, out);
+            }
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            out.push(ValType::I32);
+            collect_scratch_types_expr(scrutinee, runtime, out);
+            for arm in arms {
+                collect_scratch_types_expr(&arm.body, runtime, out);
             }
         }
         hir::ExprKind::Dbg { inner, .. } => {
@@ -293,6 +322,17 @@ fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
                 collect_dbg_prefixes_expr(val, out);
             }
         }
+        hir::ExprKind::VariantLit { fields, .. } => {
+            for (_, val) in fields {
+                collect_dbg_prefixes_expr(val, out);
+            }
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_dbg_prefixes_expr(scrutinee, out);
+            for arm in arms {
+                collect_dbg_prefixes_expr(&arm.body, out);
+            }
+        }
         hir::ExprKind::Binary { left, right, .. } => {
             collect_dbg_prefixes_expr(left, out);
             collect_dbg_prefixes_expr(right, out);
@@ -385,6 +425,17 @@ fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
         hir::ExprKind::StructLit { fields, .. } => {
             for (_, val) in fields {
                 collect_str_literals_expr(val, out);
+            }
+        }
+        hir::ExprKind::VariantLit { fields, .. } => {
+            for (_, val) in fields {
+                collect_str_literals_expr(val, out);
+            }
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_str_literals_expr(scrutinee, out);
+            for arm in arms {
+                collect_str_literals_expr(&arm.body, out);
             }
         }
         hir::ExprKind::Binary { left, right, .. } => {

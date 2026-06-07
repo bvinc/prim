@@ -13,7 +13,7 @@
 //! recursion work because each mono_map entry is inserted *before* the
 //! cloned body / fields are processed.
 
-use super::{Block, Expr, ExprKind, FuncId, Program, Stmt, StructId, Type};
+use super::{Block, EnumId, Expr, ExprKind, FuncId, Program, Stmt, StructId, Type};
 use std::collections::HashMap;
 
 pub fn monomorphize(program: &mut Program) {
@@ -21,6 +21,7 @@ pub fn monomorphize(program: &mut Program) {
         program,
         func_mono_map: HashMap::new(),
         struct_mono_map: HashMap::new(),
+        enum_mono_map: HashMap::new(),
     };
     // Process every non-generic function. Calls to generic functions in
     // their bodies kick off instantiation; calls inside generic bodies
@@ -48,6 +49,8 @@ struct Mono<'a> {
     func_mono_map: HashMap<(FuncId, Vec<Type>), FuncId>,
     /// Same dedup for generic structs.
     struct_mono_map: HashMap<(StructId, Vec<Type>), StructId>,
+    /// Same dedup for generic enums.
+    enum_mono_map: HashMap<(EnumId, Vec<Type>), EnumId>,
 }
 
 impl Mono<'_> {
@@ -148,6 +151,31 @@ impl Mono<'_> {
                     let new_sid = self.instantiate_struct(*struct_id, concrete);
                     *struct_id = new_sid;
                     type_args.clear();
+                }
+            }
+            ExprKind::VariantLit {
+                enum_id,
+                type_args,
+                fields,
+                ..
+            } => {
+                for (_, v) in fields.iter_mut() {
+                    self.rewrite_expr(v, subst);
+                }
+                if !type_args.is_empty() {
+                    let concrete: Vec<Type> = type_args
+                        .iter()
+                        .map(|t| self.substitute_type(t, subst))
+                        .collect();
+                    let new_eid = self.instantiate_enum(*enum_id, concrete);
+                    *enum_id = new_eid;
+                    type_args.clear();
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.rewrite_expr(scrutinee, subst);
+                for arm in arms {
+                    self.rewrite_expr(&mut arm.body, subst);
                 }
             }
             ExprKind::ArrayLit(elems) => {
@@ -281,6 +309,26 @@ impl Mono<'_> {
         new_sid
     }
 
+    fn instantiate_enum(&mut self, orig: EnumId, type_args: Vec<Type>) -> EnumId {
+        let key = (orig, type_args);
+        if let Some(&existing) = self.enum_mono_map.get(&key) {
+            return existing;
+        }
+        let new_eid = EnumId(self.program.enums.len() as u32);
+        self.enum_mono_map.insert(key.clone(), new_eid);
+        let (_, type_args) = key;
+        let mut clone = self.program.enums[orig.0 as usize].clone();
+        clone.id = new_eid;
+        clone.type_params = Vec::new();
+        for variant in &mut clone.variants {
+            for field in &mut variant.fields {
+                field.ty = self.substitute_type(&field.ty, &type_args);
+            }
+        }
+        self.program.enums.push(clone);
+        new_eid
+    }
+
     /// Replace `Type::Param(i)` with `subst[i]` and recursively
     /// instantiate any generic struct types encountered.
     fn substitute_type(&mut self, ty: &Type, subst: &[Type]) -> Type {
@@ -302,6 +350,15 @@ impl Mono<'_> {
                     .collect();
                 let new_sid = self.instantiate_struct(*sid, concrete_args);
                 Type::Struct(new_sid, Vec::new())
+            }
+            Type::Enum(eid, args) if args.is_empty() => Type::Enum(*eid, Vec::new()),
+            Type::Enum(eid, args) => {
+                let concrete_args: Vec<Type> = args
+                    .iter()
+                    .map(|t| self.substitute_type(t, subst))
+                    .collect();
+                let new_eid = self.instantiate_enum(*eid, concrete_args);
+                Type::Enum(new_eid, Vec::new())
             }
             _ => ty.clone(),
         }
@@ -368,6 +425,30 @@ impl Mono<'_> {
                 }
                 for (_, v) in fields {
                     self.substitute_expr(v, subst);
+                }
+            }
+            ExprKind::VariantLit {
+                type_args, fields, ..
+            } => {
+                for t in type_args.iter_mut() {
+                    *t = self.substitute_type(t, subst);
+                }
+                for (_, v) in fields {
+                    self.substitute_expr(v, subst);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.substitute_expr(scrutinee, subst);
+                for arm in arms {
+                    match &mut arm.pattern {
+                        super::Pattern::Wildcard { .. } => {}
+                        super::Pattern::Variant { bindings, .. } => {
+                            for (_, _, ty) in bindings {
+                                *ty = self.substitute_type(ty, subst);
+                            }
+                        }
+                    }
+                    self.substitute_expr(&mut arm.body, subst);
                 }
             }
             ExprKind::ArrayLit(elems) => {

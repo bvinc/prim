@@ -1,0 +1,14 @@
+enum A {
+    One,
+}
+
+enum B {
+    One,
+}
+
+fn main() {
+    let a = A.One
+    match a {
+        B.One => 1i32,
+    }
+}

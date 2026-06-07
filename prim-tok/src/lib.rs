@@ -24,6 +24,7 @@ pub enum TokenKind {
     // Keywords
     Let,
     Struct,
+    Enum,
     Fn,
     Impl,
     Trait,
@@ -35,6 +36,7 @@ pub enum TokenKind {
     While,
     Break,
     Return,
+    Match,
     For,
     True,
     False,
@@ -73,6 +75,7 @@ pub enum TokenKind {
     Less,          // <
     LessEquals,    // <=
     Arrow,         // ->
+    FatArrow,      // =>
     UnaryPlus,     // +
     UnaryMinus,    // -
     UnaryStar,     // *
@@ -190,6 +193,13 @@ impl<'a> Tokenizer<'a> {
             Some('=') => {
                 if self.peek() == Some('=') {
                     self.read_operator("==", start_pos)
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::FatArrow,
+                        span: Span::new(start_pos, self.position),
+                    }))
                 } else {
                     self.read_operator("=", start_pos)
                 }
@@ -465,6 +475,7 @@ impl<'a> Tokenizer<'a> {
         let kind = match text {
             "let" => TokenKind::Let,
             "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum,
             "fn" => TokenKind::Fn,
             "impl" => TokenKind::Impl,
             "trait" => TokenKind::Trait,
@@ -473,6 +484,7 @@ impl<'a> Tokenizer<'a> {
             "loop" => TokenKind::Loop,
             "while" => TokenKind::While,
             "break" => TokenKind::Break,
+            "match" => TokenKind::Match,
             "return" => TokenKind::Return,
             "import" => TokenKind::Import,
             "mod" => TokenKind::Mod,

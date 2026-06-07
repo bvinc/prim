@@ -101,6 +101,7 @@ impl<'a> Parser<'a> {
 
     fn parse_internal(&mut self) -> Result<Program, ParseError> {
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         let mut functions = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
@@ -199,6 +200,10 @@ impl<'a> Parser<'a> {
                     let struct_def = self.parse_struct_with_attrs(attrs)?;
                     structs.push(struct_def);
                 }
+                Some(TokenKind::Enum) => {
+                    let enum_def = self.parse_enum_definition()?;
+                    enums.push(enum_def);
+                }
                 Some(TokenKind::Fn) => {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
@@ -227,6 +232,7 @@ impl<'a> Parser<'a> {
             module_name: self.module_name,
             imports,
             structs,
+            enums,
             functions,
             traits,
             impls,
@@ -318,6 +324,34 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Identifier) => {
                 let span = self.advance().span;
                 let ident = self.ident(span);
+
+                // Variant literal with struct-like body: `Foo.Bar { ... }`.
+                // Unit variants `Foo.Bar` are still parsed as field access
+                // and lifted to `VariantLit` in HIR if `Foo` resolves to
+                // an enum. Both shapes survive a single peek of one extra
+                // token, so no backtracking buffer is needed.
+                if matches!(self.peek_kind(), Some(TokenKind::Dot))
+                    && matches!(self.peek_kind_at(1), Some(TokenKind::Identifier))
+                    && self.allow_struct_literal
+                    && matches!(self.peek_kind_at(2), Some(TokenKind::LeftBrace))
+                {
+                    self.advance(); // '.'
+                    let variant_span = self.advance().span; // variant ident
+                    let variant_name = self.ident(variant_span);
+                    self.advance(); // '{'
+                    let fields = self.parse_struct_literal_fields()?;
+                    let end_span = self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                    let full = ident.span.cover(end_span.span);
+                    return Ok(Expr {
+                        span: full,
+                        ty: Type::Undetermined,
+                        kind: ExprKind::VariantLiteral {
+                            enum_name: ident,
+                            variant_name,
+                            fields,
+                        },
+                    });
+                }
 
                 // Check if this is a function call
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
@@ -453,6 +487,7 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::If) => self.parse_if_expression(),
+            Some(TokenKind::Match) => self.parse_match_expression(),
             Some(TokenKind::LeftBrace) => {
                 // Block expression: { stmts; expr }
                 let block = self.parse_block()?;
@@ -800,6 +835,70 @@ impl<'a> Parser<'a> {
             fields,
             repr_c,
             span: full_span,
+        })
+    }
+
+    fn parse_enum_definition(&mut self) -> Result<crate::EnumDefinition, ParseError> {
+        let span_start = self
+            .consume(TokenKind::Enum, "Expected 'enum'")?
+            .span
+            .start();
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected enum name")?
+            .span;
+        let name = self.ident(name_span);
+
+        // Optional type-param list mirrors the struct grammar.
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::Less)) {
+            self.advance();
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
+
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start enum body")?;
+        let mut variants = Vec::new();
+        if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+            variants.push(self.parse_variant_definition()?);
+            while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                    break;
+                }
+                variants.push(self.parse_variant_definition()?);
+            }
+        }
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end enum body")?;
+        let span = crate::Span::new(span_start, right_brace.span.end());
+
+        Ok(crate::EnumDefinition {
+            name,
+            type_params,
+            variants,
+            span,
+        })
+    }
+
+    fn parse_variant_definition(&mut self) -> Result<crate::VariantDefinition, ParseError> {
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected variant name")?
+            .span;
+        let name = self.ident(name_span);
+        let span_start = name_span.start();
+        // Unit variant: `None`. Struct-like variant: `Some { value: T, ... }`.
+        let (fields, span_end) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+            self.advance();
+            let fields = self.parse_struct_field_list()?;
+            let right_brace =
+                self.consume(TokenKind::RightBrace, "Expected '}' to end variant body")?;
+            (fields, right_brace.span.end())
+        } else {
+            (Vec::new(), name_span.end())
+        };
+        Ok(crate::VariantDefinition {
+            name,
+            fields,
+            span: crate::Span::new(span_start, span_end),
         })
     }
 
@@ -1405,6 +1504,123 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_match_expression(&mut self) -> Result<Expr, ParseError> {
+        let match_start = self
+            .consume(TokenKind::Match, "Expected 'match'")?
+            .span
+            .start();
+        // The scrutinee is parsed without struct-literal context for the
+        // same reason `if` and `while` do — `{` introduces the arm list.
+        let scrutinee = self.without_struct_literals(|p| p.parse_expression(Precedence::NONE))?;
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start match arms")?;
+        let mut arms = Vec::new();
+        if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+            arms.push(self.parse_match_arm()?);
+            while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                    break;
+                }
+                arms.push(self.parse_match_arm()?);
+            }
+        }
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end match")?;
+        Ok(Expr {
+            span: Span::new(match_start, right_brace.span.end()),
+            ty: Type::Undetermined,
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
+        })
+    }
+
+    fn parse_match_arm(&mut self) -> Result<crate::MatchArm, ParseError> {
+        let pattern = self.parse_pattern()?;
+        self.consume(TokenKind::FatArrow, "Expected '=>' after match pattern")?;
+        let body = self.parse_expression(Precedence::NONE)?;
+        let span = match &pattern {
+            crate::Pattern::Wildcard { span } => span.cover(body.span),
+            crate::Pattern::Variant { span, .. } => span.cover(body.span),
+        };
+        Ok(crate::MatchArm {
+            pattern,
+            body,
+            span,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<crate::Pattern, ParseError> {
+        // `_` wildcard.
+        if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
+            let next_text = {
+                let span = self.tokens[self.current].span;
+                span.text(self.source)
+            };
+            if next_text == "_" {
+                let span = self.advance().span;
+                return Ok(crate::Pattern::Wildcard { span });
+            }
+        }
+
+        let enum_span = self
+            .consume(TokenKind::Identifier, "Expected enum name in pattern")?
+            .span;
+        let enum_name = self.ident(enum_span);
+        self.consume(
+            TokenKind::Dot,
+            "Expected '.' between enum and variant name in pattern",
+        )?;
+        let variant_span = self
+            .consume(TokenKind::Identifier, "Expected variant name in pattern")?
+            .span;
+        let variant_name = self.ident(variant_span);
+        let (bindings, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+            self.advance(); // consume '{'
+            let mut bindings = Vec::new();
+            if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                bindings.push(self.parse_pattern_binding()?);
+                while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                    if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                        break;
+                    }
+                    bindings.push(self.parse_pattern_binding()?);
+                }
+            }
+            let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
+            (bindings, close.span)
+        } else {
+            (Vec::new(), variant_span)
+        };
+        let span = enum_span.cover(end_span);
+        Ok(crate::Pattern::Variant {
+            enum_name,
+            variant_name,
+            bindings,
+            span,
+        })
+    }
+
+    fn parse_pattern_binding(&mut self) -> Result<crate::PatternBinding, ParseError> {
+        let field_span = self
+            .consume(TokenKind::Identifier, "Expected field name in pattern")?
+            .span;
+        let field = self.ident(field_span);
+        // `name: alias` lets the binding differ from the field name;
+        // bare `name` introduces a local with the field's own name.
+        let binding = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            self.advance();
+            let alias_span = self
+                .consume(TokenKind::Identifier, "Expected binding name after ':'")?
+                .span;
+            self.ident(alias_span)
+        } else {
+            field
+        };
+        Ok(crate::PatternBinding { field, binding })
+    }
+
     fn consume(&mut self, expected: TokenKind, message: &str) -> Result<&Token, ParseError> {
         match self.tokens.get(self.current) {
             Some(tok) if tok.kind == expected => Ok(self.advance()),
@@ -1436,6 +1652,11 @@ impl<'a> Parser<'a> {
 
     fn peek_kind(&self) -> Option<TokenKind> {
         self.tokens.get(self.current).map(|t| t.kind)
+    }
+
+    /// Peek `n` tokens ahead of the cursor.
+    fn peek_kind_at(&self, n: usize) -> Option<TokenKind> {
+        self.tokens.get(self.current + n).map(|t| t.kind)
     }
 
     fn previous(&self) -> &Token {

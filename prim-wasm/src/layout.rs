@@ -55,6 +55,21 @@ pub(crate) struct StructLayout {
     pub fields: HashMap<hir::InternSymbol, (u32, hir::Type)>,
 }
 
+/// Computed memory layout for one enum variant's payload.
+#[derive(Clone)]
+pub(crate) struct VariantLayout {
+    pub fields: HashMap<hir::InternSymbol, (u32, hir::Type)>,
+}
+
+/// Computed memory layout for one enum. Values are pointers to:
+///   offset 0: u32 discriminant
+///   offset 8: variant payload, sized for the largest variant
+#[derive(Clone)]
+pub(crate) struct EnumLayout {
+    pub size: u32,
+    pub variants: Vec<VariantLayout>,
+}
+
 /// Byte size of a field of the given type in linear memory.
 fn field_size(ty: &hir::Type) -> u32 {
     match ty {
@@ -82,6 +97,29 @@ pub(crate) fn compute_struct_layout(s: &hir::Struct) -> StructLayout {
     }
     let size = align_up(offset.max(1), 8);
     StructLayout { size, fields }
+}
+
+pub(crate) fn compute_enum_layout(e: &hir::Enum) -> EnumLayout {
+    let mut variants = Vec::with_capacity(e.variants.len());
+    let mut max_payload = 0u32;
+
+    for variant in &e.variants {
+        let mut offset = 0u32;
+        let mut fields = HashMap::with_capacity(variant.fields.len());
+        for field in &variant.fields {
+            let size = field_size(&field.ty);
+            offset = align_up(offset, size);
+            fields.insert(field.name, (offset, field.ty.clone()));
+            offset += size;
+        }
+        max_payload = max_payload.max(align_up(offset, 8));
+        variants.push(VariantLayout { fields });
+    }
+
+    EnumLayout {
+        size: 8 + max_payload,
+        variants,
+    }
 }
 
 /// Build a `MemArg` for a load/store at the given field offset, with the

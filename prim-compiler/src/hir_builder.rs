@@ -206,10 +206,12 @@ struct LoweringContext<'a> {
     root_module: ModuleId,
     main: Option<SymbolId>,
     traits: Vec<hir::Trait>,
+    enums: Vec<hir::Enum>,
     struct_ids: HashMap<ResSymbolId, StructId>,
     func_ids: HashMap<ResSymbolId, FuncId>,
     global_ids: HashMap<ResSymbolId, hir::GlobalId>,
     trait_ids: HashMap<ResSymbolId, hir::TraitId>,
+    enum_ids: HashMap<ResSymbolId, hir::EnumId>,
     /// Type-param scope of the function currently being populated.
     /// Resolved name → `TypeParamId`. Cleared between functions.
     current_type_params: HashMap<String, hir::TypeParamId>,
@@ -243,10 +245,12 @@ impl<'a> LoweringContext<'a> {
             root_module: program.root,
             main: None,
             traits: Vec::new(),
+            enums: Vec::new(),
             struct_ids: HashMap::new(),
             func_ids: HashMap::new(),
             global_ids: HashMap::new(),
             trait_ids: HashMap::new(),
+            enum_ids: HashMap::new(),
             current_type_params: HashMap::new(),
             impl_methods: HashMap::new(),
             impls: HashMap::new(),
@@ -353,6 +357,23 @@ impl<'a> LoweringContext<'a> {
                         name: SymbolId(res_id.0),
                         methods: Vec::new(),
                         method_idx: HashMap::new(),
+                        span,
+                    });
+                }
+                for e in &file.ast.enums {
+                    let name = self.interner.resolve(&e.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let eid = *self
+                        .enum_ids
+                        .entry(res_id)
+                        .or_insert_with(|| hir::EnumId(self.enums.len() as u32));
+                    let span = self.span_id(e.span, file.file_id);
+                    self.enums.push(hir::Enum {
+                        id: eid,
+                        name: SymbolId(res_id.0),
+                        type_params: Vec::new(),
+                        variants: Vec::new(),
+                        variant_idx: HashMap::new(),
                         span,
                     });
                 }
@@ -465,6 +486,43 @@ impl<'a> LoweringContext<'a> {
                     if let Some(hir_struct) = self.structs.get_mut(sid.0 as usize) {
                         hir_struct.type_params = type_params;
                         hir_struct.fields = fields;
+                    }
+                    self.current_type_params.clear();
+                }
+
+                for e in &ast.enums {
+                    let name = self.interner.resolve(&e.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let eid = *self.enum_ids.get(&res_id).expect("missing enum id");
+                    let type_params = self.lower_type_params(
+                        &e.type_params,
+                        module_id,
+                        file.file_id,
+                        module_scope,
+                    );
+                    let mut variants = Vec::with_capacity(e.variants.len());
+                    let mut variant_idx = HashMap::with_capacity(e.variants.len());
+                    for (i, v) in e.variants.iter().enumerate() {
+                        variant_idx.insert(v.name.sym, i as u32);
+                        let fields: Vec<hir::Field> = v
+                            .fields
+                            .iter()
+                            .map(|f| hir::Field {
+                                name: f.name.sym,
+                                ty: self.lower_type(&f.field_type, module_scope),
+                                span: self.span_id(f.name.span, file.file_id),
+                            })
+                            .collect();
+                        variants.push(hir::Variant {
+                            name: v.name.sym,
+                            fields,
+                            span: self.span_id(v.span, file.file_id),
+                        });
+                    }
+                    if let Some(hir_enum) = self.enums.get_mut(eid.0 as usize) {
+                        hir_enum.type_params = type_params;
+                        hir_enum.variants = variants;
+                        hir_enum.variant_idx = variant_idx;
                     }
                     self.current_type_params.clear();
                 }
@@ -690,6 +748,7 @@ impl<'a> LoweringContext<'a> {
             modules: self.modules,
             functions: self.functions,
             structs: self.structs,
+            enums: self.enums,
             globals: self.globals,
             traits: self.traits,
             impl_methods: self.impl_methods,
@@ -865,6 +924,98 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    fn lower_match_arm(
+        &mut self,
+        arm: &prim_parse::MatchArm,
+        module: ModuleId,
+        file_id: FileId,
+        ast: &prim_parse::Program,
+        module_scope: &ModuleScope,
+    ) -> hir::MatchArm {
+        // Pattern bindings introduce locals scoped to the arm body, so
+        // we open and close a fresh local scope around it.
+        self.local_scope.push();
+        let pattern = self.lower_pattern(&arm.pattern, module, file_id, module_scope);
+        let body = self.lower_expr(&arm.body, module, file_id, ast, module_scope);
+        self.local_scope.pop();
+        hir::MatchArm {
+            pattern,
+            body,
+            span: self.span_id(arm.span, file_id),
+        }
+    }
+
+    fn lower_pattern(
+        &mut self,
+        pat: &prim_parse::Pattern,
+        module: ModuleId,
+        file_id: FileId,
+        module_scope: &ModuleScope,
+    ) -> hir::Pattern {
+        match pat {
+            prim_parse::Pattern::Wildcard { span } => hir::Pattern::Wildcard {
+                span: self.span_id(*span, file_id),
+            },
+            prim_parse::Pattern::Variant {
+                enum_name,
+                variant_name,
+                bindings,
+                span,
+            } => {
+                let name_str = self.interner.resolve(&enum_name.sym).to_string();
+                let res_id = module_scope.get(&name_str).copied();
+                let eid = res_id.and_then(|r| self.enum_ids.get(&r).copied());
+                let (enum_id, variant_idx) = match eid {
+                    Some(eid) => match self
+                        .enums
+                        .get(eid.0 as usize)
+                        .and_then(|e| e.variant_idx.get(&variant_name.sym).copied())
+                    {
+                        Some(idx) => (eid, idx),
+                        None => {
+                            let vname = self.interner.resolve(&variant_name.sym).to_string();
+                            self.errors.push(LoweringError::UnknownName {
+                                name: format!("variant '{}' in enum '{}'", vname, name_str),
+                                file: file_id,
+                                span: variant_name.span,
+                            });
+                            (eid, 0)
+                        }
+                    },
+                    None => {
+                        self.errors.push(LoweringError::UnknownName {
+                            name: format!("enum '{}'", name_str),
+                            file: file_id,
+                            span: enum_name.span,
+                        });
+                        (hir::EnumId(0), 0)
+                    }
+                };
+                // Each binding introduces a fresh Local in the arm scope.
+                let binding_pairs: Vec<(hir::InternSymbol, SymbolId, hir::Type)> = bindings
+                    .iter()
+                    .map(|b| {
+                        let sym = self.insert_symbol(module, b.binding.sym, SymbolKind::Local);
+                        self.local_scope.insert(
+                            self.interner.resolve(&b.binding.sym).to_string(),
+                            LocalBinding {
+                                symbol: sym,
+                                mutable: false,
+                            },
+                        );
+                        (b.field.sym, sym, hir::Type::Undetermined)
+                    })
+                    .collect();
+                hir::Pattern::Variant {
+                    enum_id,
+                    variant_idx,
+                    bindings: binding_pairs,
+                    span: self.span_id(*span, file_id),
+                }
+            }
+        }
+    }
+
     fn lower_block(
         &mut self,
         block: &prim_parse::Block,
@@ -999,13 +1150,114 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
             }
-            ExprKind::FieldAccess { object, field } => (
-                hir::ExprKind::Field {
-                    base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
-                    field: field.sym,
-                },
-                self.lower_type(&expr.ty, module_scope),
-            ),
+            ExprKind::VariantLiteral {
+                enum_name,
+                variant_name,
+                fields,
+            } => {
+                let name_str = self.interner.resolve(&enum_name.sym).to_string();
+                let res_id = module_scope.get(&name_str).copied();
+                let eid = res_id.and_then(|r| self.enum_ids.get(&r).copied());
+                match eid {
+                    Some(eid) => {
+                        let variant_idx = self
+                            .enums
+                            .get(eid.0 as usize)
+                            .and_then(|e| e.variant_idx.get(&variant_name.sym).copied());
+                        match variant_idx {
+                            Some(variant_idx) => (
+                                hir::ExprKind::VariantLit {
+                                    enum_id: eid,
+                                    variant_idx,
+                                    type_args: Vec::new(),
+                                    fields: fields
+                                        .iter()
+                                        .map(|f| {
+                                            (
+                                                f.name.sym,
+                                                self.lower_expr(
+                                                    &f.value,
+                                                    module,
+                                                    file_id,
+                                                    ast,
+                                                    module_scope,
+                                                ),
+                                            )
+                                        })
+                                        .collect(),
+                                },
+                                hir::Type::Enum(eid, Vec::new()),
+                            ),
+                            None => {
+                                let vname = self.interner.resolve(&variant_name.sym).to_string();
+                                self.errors.push(LoweringError::UnknownName {
+                                    name: format!("variant '{}' in enum '{}'", vname, name_str),
+                                    file: file_id,
+                                    span: variant_name.span,
+                                });
+                                return error();
+                            }
+                        }
+                    }
+                    None => {
+                        self.errors.push(LoweringError::UnknownName {
+                            name: format!("enum '{}'", name_str),
+                            file: file_id,
+                            span: enum_name.span,
+                        });
+                        return error();
+                    }
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let scrut_hir = self.lower_expr(scrutinee, module, file_id, ast, module_scope);
+                let arms_hir = arms
+                    .iter()
+                    .map(|arm| self.lower_match_arm(arm, module, file_id, ast, module_scope))
+                    .collect();
+                (
+                    hir::ExprKind::Match {
+                        scrutinee: Box::new(scrut_hir),
+                        arms: arms_hir,
+                    },
+                    self.lower_type(&expr.ty, module_scope),
+                )
+            }
+            ExprKind::FieldAccess { object, field } => {
+                // `Enum.Variant` (unit) parses as a field access but
+                // resolves to a unit variant literal whenever the
+                // object is an identifier naming an enum in scope.
+                if let ExprKind::Ident(name) = &object.kind {
+                    let name_str = self.interner.resolve(&name.sym).to_string();
+                    if let Some(res_id) = module_scope.get(&name_str).copied() {
+                        if let Some(&eid) = self.enum_ids.get(&res_id) {
+                            let variant_idx = self
+                                .enums
+                                .get(eid.0 as usize)
+                                .and_then(|e| e.variant_idx.get(&field.sym).copied());
+                            if let Some(variant_idx) = variant_idx {
+                                return hir::Expr {
+                                    kind: hir::ExprKind::VariantLit {
+                                        enum_id: eid,
+                                        variant_idx,
+                                        type_args: Vec::new(),
+                                        fields: Vec::new(),
+                                    },
+                                    ty: hir::Type::Enum(eid, Vec::new()),
+                                    span: self.span_id(expr.span, file_id),
+                                };
+                            }
+                        }
+                    }
+                }
+                (
+                    hir::ExprKind::Field {
+                        base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
+                        field: field.sym,
+                    },
+                    self.lower_type(&expr.ty, module_scope),
+                )
+            }
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -1249,10 +1501,12 @@ impl<'a> LoweringContext<'a> {
                     .collect();
                 if let Some(&sid) = self.struct_ids.get(&res_id) {
                     hir::Type::Struct(sid, lowered_args)
+                } else if let Some(&eid) = self.enum_ids.get(&res_id) {
+                    hir::Type::Enum(eid, lowered_args)
                 } else if let Some(&tid) = self.trait_ids.get(&res_id) {
                     hir::Type::Trait(tid)
                 } else {
-                    panic!("missing struct/trait id for resolved type '{name_str}'")
+                    panic!("missing struct/trait/enum id for resolved type '{name_str}'")
                 }
             }
             Type::Array(inner) => hir::Type::Array(Box::new(self.lower_type(inner, module_scope))),
@@ -1328,6 +1582,7 @@ impl<'a> LoweringContext<'a> {
                     .or_insert_with(|| hir::GlobalId(self.globals.len() as u32));
                 SymbolKind::Global(gid)
             }
+            ResSymbolKind::Enum => SymbolKind::Unknown,
             ResSymbolKind::Trait => SymbolKind::Trait,
             ResSymbolKind::Impl => SymbolKind::Unknown,
             ResSymbolKind::Module => SymbolKind::Module,
