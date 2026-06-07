@@ -22,7 +22,7 @@ use crate::builtins::{
     Builtins, emit_alloc, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
     emit_println_u64, emit_start,
 };
-use crate::emit::{DbgSite, StrSite, build_emit_ctx, emit_user_function};
+use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
 use crate::layout::{
     DOT_OFFSET, EnumLayout, FALSE_OFFSET, NEWLINE_OFFSET, STATIC_DATA_START, StructLayout,
     TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
@@ -68,22 +68,46 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     for e in &program.enums {
         enum_layouts.insert(e.id, compute_enum_layout(e));
     }
-    let mut named_struct_fields: HashMap<hir::StructId, HashMap<String, (u32, hir::Type)>> =
-        HashMap::new();
+    let mut string_layout = None;
     for s in &program.structs {
         let Some(layout) = struct_layouts.get(&s.id) else {
             continue;
         };
-        let mut fields = HashMap::with_capacity(s.fields.len());
+        let Some(symbol) = program.symbols.get(s.name.0 as usize) else {
+            continue;
+        };
+        let module_name = &program.modules[symbol.module.0 as usize].name;
+        if module_name.len() != 2 || module_name[0] != "std" || module_name[1] != "string" {
+            continue;
+        }
+        if program.interner.resolve(&symbol.name) != "String" {
+            continue;
+        }
+        let mut data_offset = None;
+        let mut len_offset = None;
+        let mut cap_offset = None;
         for field in &s.fields {
-            if let Some((offset, ty)) = layout.fields.get(&field.name) {
-                fields.insert(
-                    program.interner.resolve(&field.name).to_string(),
-                    (*offset, ty.clone()),
-                );
+            let Some((offset, _)) = layout.fields.get(&field.name) else {
+                continue;
+            };
+            match program.interner.resolve(&field.name) {
+                "data" => data_offset = Some(*offset),
+                "len" => len_offset = Some(*offset),
+                "cap" => cap_offset = Some(*offset),
+                _ => {}
             }
         }
-        named_struct_fields.insert(s.id, fields);
+        if let (Some(data_offset), Some(len_offset), Some(cap_offset)) =
+            (data_offset, len_offset, cap_offset)
+        {
+            string_layout = Some(StringLayout {
+                struct_id: s.id,
+                size: layout.size,
+                data_offset,
+                len_offset,
+                cap_offset,
+            });
+        }
     }
 
     let mut types = TypeRegistry::new();
@@ -122,15 +146,15 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
     let mut func_map: HashMap<hir::FuncId, u32> = HashMap::new();
-    let mut runtime_map: HashMap<hir::FuncId, String> = HashMap::new();
+    let mut runtime_map: HashMap<hir::FuncId, hir::RuntimeAbi> = HashMap::new();
     let mut user_func_types: Vec<u32> = Vec::new();
     let mut next_idx: u32 = 7;
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
     for func in &program.functions {
-        if let Some(binding) = &func.runtime_binding {
-            runtime_map.insert(func.id, binding.clone());
+        if let Some(runtime) = func.runtime {
+            runtime_map.insert(func.id, runtime);
         } else {
             func_map.insert(func.id, next_idx);
             let params: Vec<ValType> = func
@@ -177,7 +201,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut per_func_str_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
     let mut cursor: u32 = STATIC_DATA_START;
     for func in &program.functions {
-        if func.runtime_binding.is_some() {
+        if func.runtime.is_some() {
             continue;
         }
         let dbg_start = dbg_sites.len();
@@ -411,7 +435,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_alloc());
     codes.function(&emit_print_bytes(fd_write_idx));
     for func in &program.functions {
-        if func.runtime_binding.is_none() {
+        if func.runtime.is_none() {
             let dbg_range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
             let str_range = per_func_str_range.get(&func.id).cloned().unwrap_or(0..0);
             let dbg_slice = &dbg_sites[dbg_range];
@@ -424,7 +448,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 &builtins,
                 &struct_layouts,
                 &enum_layouts,
-                &named_struct_fields,
+                string_layout,
                 &global_wasm_idx,
                 &dyn_call_types,
                 &vtable_addr,

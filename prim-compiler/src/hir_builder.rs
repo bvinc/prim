@@ -51,6 +51,11 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    UnknownRuntimeAbi {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -87,6 +92,9 @@ impl std::fmt::Display for LoweringError {
             } => {
                 write!(f, "No method '{}' on type {}", name, receiver_type)
             }
+            LoweringError::UnknownRuntimeAbi { name, .. } => {
+                write!(f, "Unknown runtime ABI '{}'", name)
+            }
         }
     }
 }
@@ -103,7 +111,8 @@ impl LoweringError {
             | LoweringError::UnknownModule { span, .. }
             | LoweringError::NonConstantGlobalInit { span, .. }
             | LoweringError::DuplicateImplMethod { span, .. }
-            | LoweringError::UnknownMethod { span, .. } => *span,
+            | LoweringError::UnknownMethod { span, .. }
+            | LoweringError::UnknownRuntimeAbi { span, .. } => *span,
         }
     }
 
@@ -116,7 +125,8 @@ impl LoweringError {
             | LoweringError::UnknownModule { file, .. }
             | LoweringError::NonConstantGlobalInit { file, .. }
             | LoweringError::DuplicateImplMethod { file, .. }
-            | LoweringError::UnknownMethod { file, .. } => *file,
+            | LoweringError::UnknownMethod { file, .. }
+            | LoweringError::UnknownRuntimeAbi { file, .. } => *file,
         }
     }
 }
@@ -311,6 +321,17 @@ impl<'a> LoweringContext<'a> {
                         .entry(res_id)
                         .or_insert_with(|| FuncId(self.functions.len() as u32));
                     let span = self.span_id(f.span, file.file_id);
+                    let runtime = f.runtime_binding.as_deref().and_then(|binding| {
+                        let runtime = hir::RuntimeAbi::from_symbol(binding);
+                        if runtime.is_none() {
+                            self.errors.push(LoweringError::UnknownRuntimeAbi {
+                                name: binding.to_string(),
+                                file: file.file_id,
+                                span: f.span,
+                            });
+                        }
+                        runtime
+                    });
                     self.functions.push(Function {
                         id: fid,
                         name: SymbolId(res_id.0),
@@ -322,7 +343,7 @@ impl<'a> LoweringContext<'a> {
                             expr: None,
                         },
                         span,
-                        runtime_binding: f.runtime_binding.clone(),
+                        runtime,
                     });
                 }
                 for g in &file.ast.globals {
@@ -435,7 +456,7 @@ impl<'a> LoweringContext<'a> {
                                 expr: None,
                             },
                             span,
-                            runtime_binding: None,
+                            runtime: None,
                         });
                         // Record (struct, method-name) → FuncId. Duplicate
                         // impls for the same (struct, name) are a hard error.

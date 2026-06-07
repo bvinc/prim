@@ -1,0 +1,4 @@
+@runtime("prim_rt_missing")
+fn missing();
+
+fn main() {}

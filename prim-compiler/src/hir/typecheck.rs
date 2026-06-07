@@ -714,7 +714,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-            } else if func.runtime_binding.is_none() {
+            } else if func.runtime.is_none() {
                 return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
             }
         } else if let Some(expr) = &mut func.body.expr {

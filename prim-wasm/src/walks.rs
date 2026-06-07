@@ -136,7 +136,7 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
 
 pub(crate) fn collect_scratch_types_block(
     block: &hir::Block,
-    runtime: &HashMap<hir::FuncId, String>,
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     out: &mut Vec<ValType>,
 ) {
     for stmt in &block.stmts {
@@ -149,7 +149,7 @@ pub(crate) fn collect_scratch_types_block(
 
 fn collect_scratch_types_stmt(
     stmt: &hir::Stmt,
-    runtime: &HashMap<hir::FuncId, String>,
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     out: &mut Vec<ValType>,
 ) {
     match stmt {
@@ -179,7 +179,7 @@ fn collect_scratch_types_stmt(
 
 fn collect_scratch_types_expr(
     expr: &hir::Expr,
-    runtime: &HashMap<hir::FuncId, String>,
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     out: &mut Vec<ValType>,
 ) {
     match &expr.kind {
@@ -217,7 +217,7 @@ fn collect_scratch_types_expr(
         hir::ExprKind::Call { func, args, .. } => {
             // write(fd, s: String) needs one i32 scratch to duplicate the
             // String struct ptr across two field loads.
-            if runtime.get(func).map(String::as_str) == Some("prim_rt_write") {
+            if runtime.get(func) == Some(&hir::RuntimeAbi::Write) {
                 out.push(ValType::I32);
             }
             for a in args {
