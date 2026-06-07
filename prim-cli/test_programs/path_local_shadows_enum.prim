@@ -1,0 +1,14 @@
+import std.io.println_i32
+
+struct Holder {
+    Some: i32,
+}
+
+enum Choice {
+    Some,
+}
+
+fn main() {
+    let Choice = Holder { Some = 42 }
+    println_i32(Choice.Some)
+}

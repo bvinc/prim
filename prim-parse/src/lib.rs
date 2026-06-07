@@ -70,6 +70,10 @@ pub enum ExprKind {
     Bool(bool),
     String(String),
     Ident(Ident),
+    /// Dotted identifier path, e.g. `std.io.println_i32`, `Option.Some`,
+    /// or `value.field`. Lowering resolves whether this names modules/enums
+    /// or is value field access.
+    Path(NamePath),
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -87,7 +91,7 @@ pub enum ExprKind {
     /// (struct-like). Resolved to a specific enum + variant index in
     /// HIR lowering.
     VariantLiteral {
-        enum_name: Ident,
+        enum_path: NamePath,
         variant_name: Ident,
         fields: Vec<StructField>,
     },
@@ -185,7 +189,7 @@ pub enum Pattern {
         span: Span,
     },
     Variant {
-        enum_name: Ident,
+        enum_path: NamePath,
         variant_name: Ident,
         /// `field name → binding name` pairs. Empty for unit variants.
         bindings: Vec<PatternBinding>,

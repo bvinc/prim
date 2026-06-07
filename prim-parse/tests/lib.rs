@@ -1134,18 +1134,16 @@ fn main() {
         panic!("Expected let statement");
     }
 
-    // Check field access in println (trailing expression)
+    // Dotted identifier chains parse as paths. Lowering decides whether
+    // this is a value field access or a module/enum path.
     if let Some(expr) = main_func.body.expr.as_deref() {
         if let ExprKind::FunctionCall { args, .. } = &expr.kind {
-            if let ExprKind::FieldAccess { object, field } = &args[0].kind {
-                assert_eq!(interner.resolve(&field.sym), "x");
-                if let ExprKind::Ident(id) = &object.kind {
-                    assert_eq!(interner.resolve(&id.sym), "p");
-                } else {
-                    panic!("Expected identifier in field access");
-                }
+            if let ExprKind::Path(path) = &args[0].kind {
+                assert_eq!(path.segments.len(), 2);
+                assert_eq!(interner.resolve(&path.segments[0].sym), "p");
+                assert_eq!(interner.resolve(&path.segments[1].sym), "x");
             } else {
-                panic!("Expected field access in println");
+                panic!("Expected path in println");
             }
         } else {
             panic!("Expected function call");
@@ -1162,15 +1160,12 @@ fn test_parse_field_access() {
 
     let main_func = &program.functions[0];
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
-        if let ExprKind::FieldAccess { object, field } = &value.kind {
-            assert_eq!(interner.resolve(&field.sym), "x");
-            if let ExprKind::Ident(obj_name) = &object.kind {
-                assert_eq!(interner.resolve(&obj_name.sym), "point");
-            } else {
-                panic!("Expected identifier in field access object");
-            }
+        if let ExprKind::Path(path) = &value.kind {
+            assert_eq!(path.segments.len(), 2);
+            assert_eq!(interner.resolve(&path.segments[0].sym), "point");
+            assert_eq!(interner.resolve(&path.segments[1].sym), "x");
         } else {
-            panic!("Expected field access expression");
+            panic!("Expected path expression");
         }
     } else {
         panic!("Expected let statement");

@@ -56,6 +56,11 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    NotAnEnum {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -95,6 +100,9 @@ impl std::fmt::Display for LoweringError {
             LoweringError::UnknownRuntimeAbi { name, .. } => {
                 write!(f, "Unknown runtime ABI '{}'", name)
             }
+            LoweringError::NotAnEnum { name, .. } => {
+                write!(f, "'{}' is not an enum", name)
+            }
         }
     }
 }
@@ -112,7 +120,8 @@ impl LoweringError {
             | LoweringError::NonConstantGlobalInit { span, .. }
             | LoweringError::DuplicateImplMethod { span, .. }
             | LoweringError::UnknownMethod { span, .. }
-            | LoweringError::UnknownRuntimeAbi { span, .. } => *span,
+            | LoweringError::UnknownRuntimeAbi { span, .. }
+            | LoweringError::NotAnEnum { span, .. } => *span,
         }
     }
 
@@ -126,7 +135,8 @@ impl LoweringError {
             | LoweringError::NonConstantGlobalInit { file, .. }
             | LoweringError::DuplicateImplMethod { file, .. }
             | LoweringError::UnknownMethod { file, .. }
-            | LoweringError::UnknownRuntimeAbi { file, .. } => *file,
+            | LoweringError::UnknownRuntimeAbi { file, .. }
+            | LoweringError::NotAnEnum { file, .. } => *file,
         }
     }
 }
@@ -978,13 +988,13 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*span, file_id),
             },
             prim_parse::Pattern::Variant {
-                enum_name,
+                enum_path,
                 variant_name,
                 bindings,
                 span,
             } => {
-                let name_str = self.interner.resolve(&enum_name.sym).to_string();
-                let res_id = module_scope.get(&name_str).copied();
+                let name_str = self.path_name(enum_path);
+                let res_id = self.resolve_symbol_path(enum_path, file_id, module_scope);
                 let eid = res_id.and_then(|r| self.enum_ids.get(&r).copied());
                 let (enum_id, variant_idx) = match eid {
                     Some(eid) => match self
@@ -1004,11 +1014,15 @@ impl<'a> LoweringContext<'a> {
                         }
                     },
                     None => {
-                        self.errors.push(LoweringError::UnknownName {
-                            name: format!("enum '{}'", name_str),
-                            file: file_id,
-                            span: enum_name.span,
-                        });
+                        // `res_id` resolved but isn't an enum; if it didn't
+                        // resolve at all, `resolve_symbol_path` already erred.
+                        if res_id.is_some() {
+                            self.errors.push(LoweringError::NotAnEnum {
+                                name: name_str,
+                                file: file_id,
+                                span: enum_path.segments[0].span,
+                            });
+                        }
                         (hir::EnumId(0), 0)
                     }
                 };
@@ -1102,6 +1116,9 @@ impl<'a> LoweringContext<'a> {
                     None => return error(),
                 }
             }
+            ExprKind::Path(path) => {
+                return self.lower_path_expr(path, expr.span, module, file_id, module_scope);
+            }
             ExprKind::Binary { left, op, right } => (
                 hir::ExprKind::Binary {
                     op: *op,
@@ -1111,6 +1128,21 @@ impl<'a> LoweringContext<'a> {
                 self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::FunctionCall { path, args } => {
+                if let Some(receiver) = self.lower_path_call_receiver(path, file_id) {
+                    let method = *path.segments.last().expect("method segment");
+                    return hir::Expr {
+                        kind: hir::ExprKind::MethodCall {
+                            receiver: Box::new(receiver),
+                            method: method.sym,
+                            args: args
+                                .iter()
+                                .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                                .collect(),
+                        },
+                        ty: self.lower_type(&expr.ty, module_scope),
+                        span,
+                    };
+                }
                 let call_span = path.segments.last().expect("empty path").span;
                 let fid = self
                     .resolve_function_path(path, file_id, ast, module_scope)
@@ -1172,12 +1204,12 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             ExprKind::VariantLiteral {
-                enum_name,
+                enum_path,
                 variant_name,
                 fields,
             } => {
-                let name_str = self.interner.resolve(&enum_name.sym).to_string();
-                let res_id = module_scope.get(&name_str).copied();
+                let name_str = self.path_name(enum_path);
+                let res_id = self.resolve_symbol_path(enum_path, file_id, module_scope);
                 let eid = res_id.and_then(|r| self.enum_ids.get(&r).copied());
                 match eid {
                     Some(eid) => {
@@ -1221,11 +1253,15 @@ impl<'a> LoweringContext<'a> {
                         }
                     }
                     None => {
-                        self.errors.push(LoweringError::UnknownName {
-                            name: format!("enum '{}'", name_str),
-                            file: file_id,
-                            span: enum_name.span,
-                        });
+                        // `res_id` resolved but isn't an enum; if it didn't
+                        // resolve at all, `resolve_symbol_path` already erred.
+                        if res_id.is_some() {
+                            self.errors.push(LoweringError::NotAnEnum {
+                                name: name_str,
+                                file: file_id,
+                                span: enum_path.segments[0].span,
+                            });
+                        }
                         return error();
                     }
                 }
@@ -1244,41 +1280,13 @@ impl<'a> LoweringContext<'a> {
                     self.lower_type(&expr.ty, module_scope),
                 )
             }
-            ExprKind::FieldAccess { object, field } => {
-                // `Enum.Variant` (unit) parses as a field access but
-                // resolves to a unit variant literal whenever the
-                // object is an identifier naming an enum in scope.
-                if let ExprKind::Ident(name) = &object.kind {
-                    let name_str = self.interner.resolve(&name.sym).to_string();
-                    if let Some(res_id) = module_scope.get(&name_str).copied() {
-                        if let Some(&eid) = self.enum_ids.get(&res_id) {
-                            let variant_idx = self
-                                .enums
-                                .get(eid.0 as usize)
-                                .and_then(|e| e.variant_idx.get(&field.sym).copied());
-                            if let Some(variant_idx) = variant_idx {
-                                return hir::Expr {
-                                    kind: hir::ExprKind::VariantLit {
-                                        enum_id: eid,
-                                        variant_idx,
-                                        type_args: Vec::new(),
-                                        fields: Vec::new(),
-                                    },
-                                    ty: hir::Type::Enum(eid, Vec::new()),
-                                    span: self.span_id(expr.span, file_id),
-                                };
-                            }
-                        }
-                    }
-                }
-                (
-                    hir::ExprKind::Field {
-                        base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
-                        field: field.sym,
-                    },
-                    self.lower_type(&expr.ty, module_scope),
-                )
-            }
+            ExprKind::FieldAccess { object, field } => (
+                hir::ExprKind::Field {
+                    base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
+                    field: field.sym,
+                },
+                self.lower_type(&expr.ty, module_scope),
+            ),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -1406,6 +1414,206 @@ impl<'a> LoweringContext<'a> {
         None
     }
 
+    fn path_name(&self, path: &prim_parse::NamePath) -> String {
+        path.segments
+            .iter()
+            .map(|segment| self.interner.resolve(&segment.sym).to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    fn lookup_symbol_path(
+        &self,
+        path: &prim_parse::NamePath,
+        module_scope: &ModuleScope,
+    ) -> Option<ResSymbolId> {
+        let name_ident = path.segments.last()?;
+        let name = self.interner.resolve(&name_ident.sym);
+        if path.segments.len() == 1 {
+            return module_scope.get(name).copied();
+        }
+
+        let module_path: Vec<String> = path
+            .segments
+            .iter()
+            .take(path.segments.len() - 1)
+            .map(|ident| self.interner.resolve(&ident.sym).to_string())
+            .collect();
+        let key = crate::program::ModuleKey::Name(module_path);
+        let target_module_id = self.program.module_index.get(&key)?;
+        self.module_scopes
+            .get(target_module_id)
+            .and_then(|scope| scope.get(name).copied())
+    }
+
+    fn resolve_symbol_path(
+        &mut self,
+        path: &prim_parse::NamePath,
+        file_id: FileId,
+        module_scope: &ModuleScope,
+    ) -> Option<ResSymbolId> {
+        if let Some(id) = self.lookup_symbol_path(path, module_scope) {
+            return Some(id);
+        }
+
+        let name_ident = path.segments.last().expect("empty path");
+        let name = self.interner.resolve(&name_ident.sym);
+        if path.segments.len() == 1 {
+            self.errors.push(LoweringError::UnknownName {
+                name: name.to_string(),
+                file: file_id,
+                span: name_ident.span,
+            });
+            return None;
+        }
+
+        let module_path: Vec<String> = path
+            .segments
+            .iter()
+            .take(path.segments.len() - 1)
+            .map(|ident| self.interner.resolve(&ident.sym).to_string())
+            .collect();
+        let key = crate::program::ModuleKey::Name(module_path.clone());
+        if !self.program.module_index.contains_key(&key) {
+            self.errors.push(LoweringError::UnknownModule {
+                path: module_path.join("::"),
+                file: file_id,
+                span: path.segments[0].span,
+            });
+            return None;
+        }
+
+        self.errors.push(LoweringError::UnknownName {
+            name: name.to_string(),
+            file: file_id,
+            span: name_ident.span,
+        });
+        None
+    }
+
+    fn lower_local_path(
+        &mut self,
+        path: &prim_parse::NamePath,
+        span: Span,
+        file_id: FileId,
+    ) -> Option<hir::Expr> {
+        let first = path.segments.first()?;
+        let name = self.interner.resolve(&first.sym);
+        let binding = *self.local_scope.get(name)?;
+        let mut expr = hir::Expr {
+            kind: hir::ExprKind::Ident(binding.symbol),
+            ty: hir::Type::Undetermined,
+            span: self.span_id(first.span, file_id),
+        };
+        for segment in path.segments.iter().skip(1) {
+            expr = hir::Expr {
+                kind: hir::ExprKind::Field {
+                    base: Box::new(expr),
+                    field: segment.sym,
+                },
+                ty: hir::Type::Undetermined,
+                span: self.span_id(span, file_id),
+            };
+        }
+        Some(expr)
+    }
+
+    fn lower_path_call_receiver(
+        &mut self,
+        path: &prim_parse::NamePath,
+        file_id: FileId,
+    ) -> Option<hir::Expr> {
+        if path.segments.len() < 2 {
+            return None;
+        }
+        let first_name = self.interner.resolve(&path.segments[0].sym);
+        self.local_scope.get(first_name)?;
+        let receiver_path = prim_parse::NamePath {
+            segments: path.segments[..path.segments.len() - 1].to_vec(),
+        };
+        let span = receiver_path
+            .segments
+            .first()
+            .expect("receiver path")
+            .span
+            .cover(receiver_path.segments.last().expect("receiver path").span);
+        self.lower_local_path(&receiver_path, span, file_id)
+    }
+
+    fn lower_path_expr(
+        &mut self,
+        path: &prim_parse::NamePath,
+        span: Span,
+        _module: ModuleId,
+        file_id: FileId,
+        module_scope: &ModuleScope,
+    ) -> hir::Expr {
+        let span_id = self.span_id(span, file_id);
+        let error = || hir::Expr {
+            kind: hir::ExprKind::Error,
+            ty: hir::Type::Undetermined,
+            span: span_id,
+        };
+
+        if let Some(expr) = self.lower_local_path(path, span, file_id) {
+            return expr;
+        }
+
+        if path.segments.len() >= 2 {
+            let enum_path = prim_parse::NamePath {
+                segments: path.segments[..path.segments.len() - 1].to_vec(),
+            };
+            let variant_name = path.segments.last().expect("variant segment");
+            if let Some(enum_res_id) = self.lookup_symbol_path(&enum_path, module_scope) {
+                if let Some(&eid) = self.enum_ids.get(&enum_res_id) {
+                    let variant_idx = self
+                        .enums
+                        .get(eid.0 as usize)
+                        .and_then(|e| e.variant_idx.get(&variant_name.sym).copied());
+                    return match variant_idx {
+                        Some(variant_idx) => hir::Expr {
+                            kind: hir::ExprKind::VariantLit {
+                                enum_id: eid,
+                                variant_idx,
+                                type_args: Vec::new(),
+                                fields: Vec::new(),
+                            },
+                            ty: hir::Type::Enum(eid, Vec::new()),
+                            span: span_id,
+                        },
+                        None => {
+                            self.errors.push(LoweringError::UnknownName {
+                                name: format!(
+                                    "variant '{}' in enum '{}'",
+                                    self.interner.resolve(&variant_name.sym),
+                                    self.path_name(&enum_path)
+                                ),
+                                file: file_id,
+                                span: variant_name.span,
+                            });
+                            error()
+                        }
+                    };
+                }
+                self.errors.push(LoweringError::NotAnEnum {
+                    name: self.path_name(&enum_path),
+                    file: file_id,
+                    span: enum_path.segments[0].span,
+                });
+                return error();
+            }
+        }
+
+        match self.resolve_symbol_path(path, file_id, module_scope) {
+            Some(res_id) => hir::Expr {
+                kind: hir::ExprKind::Ident(self.hir_symbol(res_id)),
+                ty: hir::Type::Undetermined,
+                span: span_id,
+            },
+            None => error(),
+        }
+    }
+
     fn resolve_function_path(
         &mut self,
         path: &prim_parse::NamePath,
@@ -1416,20 +1624,13 @@ impl<'a> LoweringContext<'a> {
         let name_ident = path.segments.last().expect("empty path");
         let name = self.interner.resolve(&name_ident.sym);
 
-        if path.segments.len() == 1 {
-            // Simple name - look up in module scope
-            if let Some(&id) = module_scope.get(name) {
-                Some(id)
-            } else {
-                self.errors.push(LoweringError::UnknownFunction {
-                    name: name.to_string(),
-                    file: file_id,
-                    span: name_ident.span,
-                });
-                None
+        if let Some(id) = self.lookup_symbol_path(path, module_scope) {
+            if self.func_ids.contains_key(&id) {
+                return Some(id);
             }
-        } else {
-            // Qualified path - look up in target module
+        }
+
+        if path.segments.len() > 1 {
             let module_path: Vec<String> = path
                 .segments
                 .iter()
@@ -1437,30 +1638,22 @@ impl<'a> LoweringContext<'a> {
                 .map(|ident| self.interner.resolve(&ident.sym).to_string())
                 .collect();
             let key = crate::program::ModuleKey::Name(module_path.clone());
-            let first_seg = &path.segments[0];
-            let Some(target_module_id) = self.program.module_index.get(&key) else {
+            if !self.program.module_index.contains_key(&key) {
                 self.errors.push(LoweringError::UnknownModule {
                     path: module_path.join("::"),
                     file: file_id,
-                    span: first_seg.span,
+                    span: path.segments[0].span,
                 });
                 return None;
-            };
-            let target_scope = self
-                .module_scopes
-                .get(target_module_id)
-                .expect("missing scope for known module");
-            if let Some(&id) = target_scope.get(name) {
-                Some(id)
-            } else {
-                self.errors.push(LoweringError::UnknownFunction {
-                    name: name.to_string(),
-                    file: file_id,
-                    span: name_ident.span,
-                });
-                None
             }
         }
+
+        self.errors.push(LoweringError::UnknownFunction {
+            name: name.to_string(),
+            file: file_id,
+            span: name_ident.span,
+        });
+        None
     }
 
     /// Lower a function's AST type-param list and populate

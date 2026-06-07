@@ -325,34 +325,6 @@ impl<'a> Parser<'a> {
                 let span = self.advance().span;
                 let ident = self.ident(span);
 
-                // Variant literal with struct-like body: `Foo.Bar { ... }`.
-                // Unit variants `Foo.Bar` are still parsed as field access
-                // and lifted to `VariantLit` in HIR if `Foo` resolves to
-                // an enum. Both shapes survive a single peek of one extra
-                // token, so no backtracking buffer is needed.
-                if matches!(self.peek_kind(), Some(TokenKind::Dot))
-                    && matches!(self.peek_kind_at(1), Some(TokenKind::Identifier))
-                    && self.allow_struct_literal
-                    && matches!(self.peek_kind_at(2), Some(TokenKind::LeftBrace))
-                {
-                    self.advance(); // '.'
-                    let variant_span = self.advance().span; // variant ident
-                    let variant_name = self.ident(variant_span);
-                    self.advance(); // '{'
-                    let fields = self.parse_struct_literal_fields()?;
-                    let end_span = self.consume(TokenKind::RightBrace, "Expected '}'")?;
-                    let full = ident.span.cover(end_span.span);
-                    return Ok(Expr {
-                        span: full,
-                        ty: Type::Undetermined,
-                        kind: ExprKind::VariantLiteral {
-                            enum_name: ident,
-                            variant_name,
-                            fields,
-                        },
-                    });
-                }
-
                 // Check if this is a function call
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
                     self.advance(); // consume '('
@@ -535,20 +507,11 @@ impl<'a> Parser<'a> {
 
         match kind {
             TokenKind::LeftParen => {
-                // Function call: identifier(args) or qualified: module.ident(args)
-                let (path, start_span) = match &left.kind {
-                    ExprKind::Ident(ident) => (vec![*ident], left.span),
-                    ExprKind::FieldAccess { object, field } => {
-                        if let ExprKind::Ident(obj_ident) = &object.kind {
-                            (vec![*obj_ident, *field], object.span)
-                        } else {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "module name before '.'".to_string(),
-                                found: kind,
-                                span: self.current_span(),
-                            });
-                        }
-                    }
+                // Function call: identifier(args) or qualified path(args).
+                // Lowering decides whether a two-segment local path like
+                // `value.method(args)` is a method call.
+                let path = match Self::expr_to_path(&left) {
+                    Some(path) => path,
                     _ => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "function name".to_string(),
@@ -560,14 +523,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let args = self.parse_argument_list()?;
                 let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
-                let span = start_span.cover(end_span.span);
+                let span = left.span.cover(end_span.span);
                 Ok(Expr {
                     span,
                     ty: Type::Undetermined,
-                    kind: ExprKind::FunctionCall {
-                        path: NamePath { segments: path },
-                        args,
-                    },
+                    kind: ExprKind::FunctionCall { path, args },
                 })
             }
             TokenKind::Dot => {
@@ -586,6 +546,14 @@ impl<'a> Parser<'a> {
                     let close =
                         self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
                     let span = left.span.cover(close.span);
+                    if let Some(mut path) = Self::expr_to_path(&left) {
+                        path.segments.push(name);
+                        return Ok(Expr {
+                            span,
+                            ty: Type::Undetermined,
+                            kind: ExprKind::FunctionCall { path, args },
+                        });
+                    }
                     Ok(Expr {
                         span,
                         ty: Type::Undetermined,
@@ -597,6 +565,32 @@ impl<'a> Parser<'a> {
                     })
                 } else {
                     let span = left.span.cover(name.span);
+                    if let Some(mut path) = Self::expr_to_path(&left) {
+                        path.segments.push(name);
+                        if self.allow_struct_literal
+                            && path.segments.len() >= 2
+                            && matches!(self.peek_kind(), Some(TokenKind::LeftBrace))
+                        {
+                            self.advance(); // consume '{'
+                            let fields = self.parse_struct_literal_fields()?;
+                            let end_span = self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                            let variant_name = path.segments.pop().expect("variant segment");
+                            return Ok(Expr {
+                                span: left.span.cover(end_span.span),
+                                ty: Type::Undetermined,
+                                kind: ExprKind::VariantLiteral {
+                                    enum_path: path,
+                                    variant_name,
+                                    fields,
+                                },
+                            });
+                        }
+                        return Ok(Expr {
+                            span,
+                            ty: Type::Undetermined,
+                            kind: ExprKind::Path(path),
+                        });
+                    }
                     Ok(Expr {
                         span,
                         ty: Type::Undetermined,
@@ -608,6 +602,14 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => Ok(left),
+        }
+    }
+
+    fn expr_to_path(expr: &Expr) -> Option<NamePath> {
+        match &expr.kind {
+            ExprKind::Ident(ident) => Some(NamePath::from_single(*ident)),
+            ExprKind::Path(path) => Some(path.clone()),
+            _ => None,
         }
     }
 
@@ -1563,18 +1565,31 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let enum_span = self
+        let first_span = self
             .consume(TokenKind::Identifier, "Expected enum name in pattern")?
             .span;
-        let enum_name = self.ident(enum_span);
-        self.consume(
-            TokenKind::Dot,
-            "Expected '.' between enum and variant name in pattern",
-        )?;
-        let variant_span = self
-            .consume(TokenKind::Identifier, "Expected variant name in pattern")?
-            .span;
-        let variant_name = self.ident(variant_span);
+        let mut segments = vec![self.ident(first_span)];
+        while matches!(self.peek_kind(), Some(TokenKind::Dot)) {
+            self.advance();
+            let segment_span = self
+                .consume(TokenKind::Identifier, "Expected name segment in pattern")?
+                .span;
+            segments.push(self.ident(segment_span));
+        }
+        if segments.len() < 2 {
+            return match self.peek_kind() {
+                Some(found) => Err(ParseError::UnexpectedToken {
+                    expected: "enum variant pattern".to_string(),
+                    found,
+                    span: self.current_span(),
+                }),
+                None => Err(ParseError::UnexpectedEof {
+                    span: self.current_span(),
+                }),
+            };
+        }
+        let variant_name = segments.pop().expect("variant segment");
+        let enum_path = NamePath { segments };
         let (bindings, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
             self.advance(); // consume '{'
             let mut bindings = Vec::new();
@@ -1591,11 +1606,11 @@ impl<'a> Parser<'a> {
             let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
             (bindings, close.span)
         } else {
-            (Vec::new(), variant_span)
+            (Vec::new(), variant_name.span)
         };
-        let span = enum_span.cover(end_span);
+        let span = first_span.cover(end_span);
         Ok(crate::Pattern::Variant {
-            enum_name,
+            enum_path,
             variant_name,
             bindings,
             span,
@@ -1652,11 +1667,6 @@ impl<'a> Parser<'a> {
 
     fn peek_kind(&self) -> Option<TokenKind> {
         self.tokens.get(self.current).map(|t| t.kind)
-    }
-
-    /// Peek `n` tokens ahead of the cursor.
-    fn peek_kind_at(&self, n: usize) -> Option<TokenKind> {
-        self.tokens.get(self.current + n).map(|t| t.kind)
     }
 
     fn previous(&self) -> &Token {
