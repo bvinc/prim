@@ -44,10 +44,11 @@ pub struct Program {
     pub enums: Vec<Enum>,
     pub globals: Vec<Global>,
     pub traits: Vec<Trait>,
-    /// `(receiver struct, method name)` → impl method's FuncId. Populated
-    /// by lowering each `impl Trait for Struct { fn ... }` block. Method
-    /// calls in expressions look up here at typecheck time.
-    pub impl_methods: std::collections::HashMap<(StructId, InternSymbol), FuncId>,
+    /// `(receiver type, method name)` → impl method's FuncId. Populated
+    /// by lowering each `impl Trait for Type { fn ... }` block, where the
+    /// receiver type is a struct or an enum. Method calls in expressions
+    /// look up here at typecheck time to resolve static dispatch.
+    pub impl_methods: std::collections::HashMap<(MethodOwner, InternSymbol), FuncId>,
     /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
     /// Used to generate vtables and to dispatch dynamic method calls.
     pub impls: std::collections::HashMap<(TraitId, StructId), Vec<FuncId>>,
@@ -58,6 +59,14 @@ pub struct Program {
     pub interner: Arc<Interner>,
     pub main: Option<SymbolId>,
     pub spans: Vec<(FileId, Span)>,
+}
+
+/// The concrete type an `impl` block attaches methods to. Both struct and
+/// enum receivers resolve method calls through `Program::impl_methods`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MethodOwner {
+    Struct(StructId),
+    Enum(EnumId),
 }
 
 #[derive(Clone, Debug)]

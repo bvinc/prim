@@ -1,0 +1,9 @@
+enum Light {
+    Red,
+    Green,
+}
+
+fn main() {
+    let g = Light.Green
+    g.nonexistent()
+}

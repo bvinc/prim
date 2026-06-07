@@ -61,6 +61,11 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    InvalidImplTarget {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -103,6 +108,13 @@ impl std::fmt::Display for LoweringError {
             LoweringError::NotAnEnum { name, .. } => {
                 write!(f, "'{}' is not an enum", name)
             }
+            LoweringError::InvalidImplTarget { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement methods for '{}': not a struct or enum",
+                    name
+                )
+            }
         }
     }
 }
@@ -121,7 +133,8 @@ impl LoweringError {
             | LoweringError::DuplicateImplMethod { span, .. }
             | LoweringError::UnknownMethod { span, .. }
             | LoweringError::UnknownRuntimeAbi { span, .. }
-            | LoweringError::NotAnEnum { span, .. } => *span,
+            | LoweringError::NotAnEnum { span, .. }
+            | LoweringError::InvalidImplTarget { span, .. } => *span,
         }
     }
 
@@ -136,7 +149,8 @@ impl LoweringError {
             | LoweringError::DuplicateImplMethod { file, .. }
             | LoweringError::UnknownMethod { file, .. }
             | LoweringError::UnknownRuntimeAbi { file, .. }
-            | LoweringError::NotAnEnum { file, .. } => *file,
+            | LoweringError::NotAnEnum { file, .. }
+            | LoweringError::InvalidImplTarget { file, .. } => *file,
         }
     }
 }
@@ -235,10 +249,12 @@ struct LoweringContext<'a> {
     /// Type-param scope of the function currently being populated.
     /// Resolved name → `TypeParamId`. Cleared between functions.
     current_type_params: HashMap<String, hir::TypeParamId>,
-    /// `(receiver struct, method name)` → impl method FuncId. Built when
-    /// lowering each `impl ... for Struct { fn ... }` block.
-    impl_methods: HashMap<(StructId, hir::InternSymbol), FuncId>,
+    /// `(receiver type, method name)` → impl method FuncId. Built when
+    /// lowering each `impl ... for Type { fn ... }` block; the receiver is a
+    /// struct or an enum.
+    impl_methods: HashMap<(hir::MethodOwner, hir::InternSymbol), FuncId>,
     /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
+    /// Vtables back dynamic dispatch, which is struct-only for now.
     impls: HashMap<(hir::TraitId, StructId), Vec<FuncId>>,
     stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
@@ -447,7 +463,12 @@ impl<'a> LoweringContext<'a> {
                         });
                         continue;
                     };
-                    let Some(&sid) = self.struct_ids.get(&struct_res_id) else {
+                    let Some(owner) = self.method_owner(struct_res_id) else {
+                        self.errors.push(LoweringError::InvalidImplTarget {
+                            name: struct_name,
+                            file: file.file_id,
+                            span: im.struct_name.span,
+                        });
                         continue;
                     };
                     for m in &im.methods {
@@ -468,9 +489,9 @@ impl<'a> LoweringContext<'a> {
                             span,
                             runtime: None,
                         });
-                        // Record (struct, method-name) → FuncId. Duplicate
-                        // impls for the same (struct, name) are a hard error.
-                        if self.impl_methods.insert((sid, m.name.sym), fid).is_some() {
+                        // Record (owner, method-name) → FuncId. Duplicate
+                        // impls for the same (owner, name) are a hard error.
+                        if self.impl_methods.insert((owner, m.name.sym), fid).is_some() {
                             let method_name = self.interner.resolve(&m.name.sym).to_string();
                             self.errors.push(LoweringError::DuplicateImplMethod {
                                 name: method_name,
@@ -482,6 +503,17 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
+    }
+
+    /// The struct or enum a resolved symbol names, if any. Used to key
+    /// `impl` blocks by their receiver type.
+    fn method_owner(&self, res_id: ResSymbolId) -> Option<hir::MethodOwner> {
+        if let Some(&sid) = self.struct_ids.get(&res_id) {
+            return Some(hir::MethodOwner::Struct(sid));
+        }
+        self.enum_ids
+            .get(&res_id)
+            .map(|&eid| hir::MethodOwner::Enum(eid))
     }
 
     fn populate_items(&mut self) {
@@ -672,26 +704,25 @@ impl<'a> LoweringContext<'a> {
                     else {
                         continue;
                     };
-                    let Some(&sid) = self.struct_ids.get(&struct_res_id) else {
+                    let Some(owner) = self.method_owner(struct_res_id) else {
                         continue;
                     };
                     // Resolve the trait so we can index into its method order
-                    // for the vtable.
+                    // for the vtable. Vtables (dynamic dispatch) are built for
+                    // struct receivers only; enums use static dispatch.
                     let trait_name = self.interner.resolve(&im.trait_name.sym).to_string();
                     let trait_res_id = self
                         .module_scopes
                         .get(&module_id)
                         .and_then(|scope| scope.get(&trait_name).copied());
                     let tid = trait_res_id.and_then(|id| self.trait_ids.get(&id).copied());
-                    // Build the impls map entry (vtable function order) if
-                    // we found the trait.
-                    if let Some(tid) = tid {
+                    if let (Some(tid), hir::MethodOwner::Struct(sid)) = (tid, owner) {
                         let trait_def = self.traits.get(tid.0 as usize).cloned();
                         if let Some(trait_def) = trait_def {
                             let mut method_fids: Vec<FuncId> =
                                 Vec::with_capacity(trait_def.methods.len());
                             for trait_m in &trait_def.methods {
-                                if let Some(&fid) = self.impl_methods.get(&(sid, trait_m.name)) {
+                                if let Some(&fid) = self.impl_methods.get(&(owner, trait_m.name)) {
                                     method_fids.push(fid);
                                 } else {
                                     // Missing impl for this method — leave
@@ -705,7 +736,7 @@ impl<'a> LoweringContext<'a> {
                         }
                     }
                     for m in &im.methods {
-                        let Some(&fid) = self.impl_methods.get(&(sid, m.name.sym)) else {
+                        let Some(&fid) = self.impl_methods.get(&(owner, m.name.sym)) else {
                             continue;
                         };
                         self.local_scope.clear();

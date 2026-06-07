@@ -1,0 +1,35 @@
+import std.io.println_i32
+
+enum Shape {
+    Square { side: i32 },
+    Rect { w: i32, h: i32 },
+}
+
+trait Area {
+    fn area(s: Shape) -> i32;
+    fn scaled_area(s: Shape, k: i32) -> i32;
+}
+
+impl Area for Shape {
+    fn area(s: Shape) -> i32 {
+        match s {
+            Shape.Square { side } => side * side,
+            Shape.Rect { w, h } => w * h,
+        }
+    }
+    fn scaled_area(s: Shape, k: i32) -> i32 {
+        match s {
+            Shape.Square { side } => side * side * k,
+            Shape.Rect { w, h } => w * h * k,
+        }
+    }
+}
+
+fn main() {
+    let sq = Shape.Square { side = 4 }
+    let r = Shape.Rect { w = 3, h = 5 }
+    println_i32(sq.area())          // 16
+    println_i32(r.area())           // 15
+    println_i32(sq.scaled_area(2))  // 32
+    println_i32(r.scaled_area(10))  // 150
+}

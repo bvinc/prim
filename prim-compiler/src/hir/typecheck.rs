@@ -239,6 +239,13 @@ impl<'a> Checker<'a> {
                 .and_then(|t| self.program.symbols.get(t.name.0 as usize))
                 .map(|sym| self.program.interner.resolve(&sym.name).to_string())
                 .unwrap_or_else(|| format!("{}", ty)),
+            Type::Enum(eid, _) => self
+                .program
+                .enums
+                .get(eid.0 as usize)
+                .and_then(|e| self.program.symbols.get(e.name.0 as usize))
+                .map(|sym| self.program.interner.resolve(&sym.name).to_string())
+                .unwrap_or_else(|| format!("{}", ty)),
             _ => format!("{}", ty),
         }
     }
@@ -1051,8 +1058,9 @@ impl<'a> Checker<'a> {
                 // whether it's a concrete struct (direct call) or a trait
                 // value (dynamic dispatch via vtable).
                 let recv_ty = self.check_expr(receiver, locals)?;
-                let sid = match &recv_ty {
-                    Type::Struct(id, _) => *id,
+                let owner = match &recv_ty {
+                    Type::Struct(id, _) => crate::hir::MethodOwner::Struct(*id),
+                    Type::Enum(id, _) => crate::hir::MethodOwner::Enum(*id),
                     Type::Trait(tid) => {
                         // Dynamic dispatch path. Find the method in the
                         // trait's declaration order to determine the vtable
@@ -1258,7 +1266,7 @@ impl<'a> Checker<'a> {
                         return Err(self.error(
                             *span,
                             TypeCheckKind::Legacy(format!(
-                                "method call receiver must be a struct or trait type, got {}",
+                                "method call receiver must be a struct, enum, or trait type, got {}",
                                 recv_ty
                             )),
                         ));
@@ -1266,16 +1274,19 @@ impl<'a> Checker<'a> {
                 };
                 let method_name = *method;
                 // Step 2: look up the impl method.
-                let func = match self.program.impl_methods.get(&(sid, method_name)).copied() {
+                let func = match self
+                    .program
+                    .impl_methods
+                    .get(&(owner, method_name))
+                    .copied()
+                {
                     Some(f) => f,
                     None => {
                         let name = self.program.interner.resolve(&method_name).to_string();
+                        let type_name = self.type_name(&recv_ty);
                         return Err(self.error(
                             *span,
-                            TypeCheckKind::Legacy(format!(
-                                "no method '{}' on struct {:?}",
-                                name, sid
-                            )),
+                            TypeCheckKind::Legacy(format!("no method '{}' on {}", name, type_name)),
                         ));
                     }
                 };

@@ -249,7 +249,7 @@ impl Mono<'_> {
                 let impl_fid = *self
                     .program
                     .impl_methods
-                    .get(&(sid, *method))
+                    .get(&(super::MethodOwner::Struct(sid), *method))
                     .expect("missing impl method after substitution");
                 let receiver_owned =
                     std::mem::replace(receiver.as_mut(), placeholder_expr(expr.span));

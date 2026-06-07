@@ -1,0 +1,16 @@
+trait A {
+    fn foo(x: i32) -> i32;
+}
+
+trait B {
+    fn bar(x: i32) -> i32;
+}
+
+// `impl ... for B` names a trait, which is neither a struct nor an enum.
+impl A for B {
+    fn foo(x: i32) -> i32 {
+        x
+    }
+}
+
+fn main() {}

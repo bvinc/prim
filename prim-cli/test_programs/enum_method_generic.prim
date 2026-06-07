@@ -1,0 +1,38 @@
+import std.io.println_i32
+
+// Methods on a generic enum — the `Option<T>` shape from a real stdlib.
+// `impl Opt for Option` attaches static methods to the generic enum; the
+// method signatures pin the concrete instantiation they operate on.
+enum Option<T> {
+    None,
+    Some { value: T },
+}
+
+trait Opt {
+    fn unwrap_or(o: Option<i32>, fallback: i32) -> i32;
+    fn is_some(o: Option<i32>) -> i32;
+}
+
+impl Opt for Option {
+    fn unwrap_or(o: Option<i32>, fallback: i32) -> i32 {
+        match o {
+            Option.Some { value } => value,
+            Option.None => fallback,
+        }
+    }
+    fn is_some(o: Option<i32>) -> i32 {
+        match o {
+            Option.Some { value } => 1,
+            Option.None => 0,
+        }
+    }
+}
+
+fn main() {
+    let a = Option.Some { value = 42i32 }
+    let b: Option<i32> = Option.None
+    println_i32(a.unwrap_or(7))   // 42
+    println_i32(b.unwrap_or(7))   // 7
+    println_i32(a.is_some())      // 1
+    println_i32(b.is_some())      // 0
+}
