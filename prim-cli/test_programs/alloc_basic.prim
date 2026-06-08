@@ -1,0 +1,23 @@
+import std.io.println_u8
+import std.io.println_usize
+import std.mem.alloc
+import std.mem.free
+import std.ptr.byte_add
+import std.ptr.addr
+
+// Allocate a buffer, write bytes through *mut u8, read them back, and check
+// that a second allocation is disjoint from the first.
+fn main() {
+    let buf = alloc(4usize)
+    *buf = 65u8
+    let p1 = byte_add[u8](buf, 1usize)
+    *p1 = 66u8
+    println_u8(*buf)                                 // 65
+    println_u8(*p1)                                  // 66
+
+    let other = alloc(4usize)
+    println_usize(addr[u8](other) - addr[u8](buf))   // 8 (aligned up)
+
+    free(buf)
+    free(other)
+}

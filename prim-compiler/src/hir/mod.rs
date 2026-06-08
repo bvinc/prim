@@ -148,6 +148,11 @@ pub enum RuntimeAbi {
     PtrByteSub,
     PtrByteOffset,
     PtrAddr,
+    /// Heap allocation backed by the bump allocator. `Free` does not reclaim
+    /// yet (see std.mem); it exists so call sites can establish ownership
+    /// discipline now.
+    Alloc,
+    Free,
 }
 
 impl RuntimeAbi {
@@ -160,6 +165,8 @@ impl RuntimeAbi {
             "prim_rt_ptr_byte_sub" => Some(Self::PtrByteSub),
             "prim_rt_ptr_byte_offset" => Some(Self::PtrByteOffset),
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
+            "prim_rt_alloc" => Some(Self::Alloc),
+            "prim_rt_free" => Some(Self::Free),
             "prim_rt_yield" => Some(Self::Yield),
             "prim_rt_println_i64" => Some(Self::PrintlnI64),
             "prim_rt_println_i32" => Some(Self::PrintlnI32),

@@ -1013,6 +1013,16 @@ fn emit_runtime_call(
         hir::RuntimeAbi::PtrAddr => {
             emit_expr(f, &args[0], ctx)?;
         }
+        hir::RuntimeAbi::Alloc => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::Call(ctx.builtins.alloc));
+        }
+        hir::RuntimeAbi::Free => {
+            // Bump allocator: free does not reclaim memory yet. Evaluate the
+            // pointer argument for any side effects, then discard it.
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::Drop);
+        }
     }
     Ok(())
 }

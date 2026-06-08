@@ -5,3 +5,14 @@ mod mem
 // runtime. Backs generic pointer arithmetic and allocation sizing.
 @runtime("prim_rt_size_of")
 fn size_of[T]() -> usize;
+
+// alloc(n) — return a pointer to n freshly allocated, 8-byte-aligned bytes.
+@runtime("prim_rt_alloc")
+fn alloc(n: usize) -> *mut u8;
+
+// free(p) — release a prior allocation. NOTE: the current allocator is a
+// bump allocator, so free does not reclaim memory yet. The function exists
+// so call sites can establish correct free-discipline now; it will start
+// reclaiming when a real allocator (or ownership-driven drop) lands.
+@runtime("prim_rt_free")
+fn free(p: *mut u8);
