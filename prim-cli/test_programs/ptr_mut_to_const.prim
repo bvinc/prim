@@ -1,0 +1,16 @@
+import std.io.print_str
+import std.mem.alloc
+import std.ptr.byte_add
+import std.string.String
+
+// Build a String from a freshly allocated buffer. String.data is *const u8;
+// the buffer is *mut u8. The implicit *mut -> *const coercion is what makes
+// this assignment type-check — the exact step needed to format strings in
+// Prim instead of relying on per-type runtime intrinsics.
+fn main() {
+    let buf = alloc(2usize)
+    *buf = 72u8                          // 'H'
+    *byte_add[u8](buf, 1usize) = 73u8    // 'I'
+    let s = String { data = buf, len = 2usize, cap = 2usize }
+    print_str(s)                         // HI
+}

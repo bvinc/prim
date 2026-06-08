@@ -1872,7 +1872,10 @@ impl<'a> Checker<'a> {
                     mutable: mb,
                     pointee: pb,
                 },
-            ) if ma == mb => self.unify(pa, pb).map(|p| Type::Pointer {
+                // `a` is the expected type. A `*mut T` actual may be used
+                // where a `*const T` is expected (dropping mutability is
+                // sound and a runtime no-op); the reverse is rejected.
+            ) if !ma || *mb => self.unify(pa, pb).map(|p| Type::Pointer {
                 mutable: *ma,
                 pointee: Box::new(p),
             }),
