@@ -6,17 +6,20 @@ import std.ptr.byte_add
 import std.ptr.addr
 
 // Allocate a buffer, write bytes through *mut u8, read them back, and check
-// that a second allocation is disjoint from the first.
+// that a second allocation is disjoint from the first. The two allocations
+// are taken back-to-back (before any printing, since println itself now
+// allocates a scratch buffer).
 fn main() {
     let buf = alloc(4usize)
-    *buf = 65u8
-    let p1 = byte_add[u8](buf, 1usize)
-    *p1 = 66u8
-    println_u8(*buf)                                 // 65
-    println_u8(*p1)                                  // 66
-
     let other = alloc(4usize)
-    println_usize(addr[u8](other) - addr[u8](buf))   // 8 (aligned up)
+    let gap = addr[u8](other) - addr[u8](buf)        // 8 (aligned up)
+
+    *buf = 65u8
+    *byte_add[u8](buf, 1usize) = 66u8
+
+    println_u8(*buf)                                  // 65
+    println_u8(*byte_add[u8](buf, 1usize))           // 66
+    println_usize(gap)                               // 8
 
     free(buf)
     free(other)

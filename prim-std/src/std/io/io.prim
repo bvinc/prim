@@ -1,5 +1,19 @@
 mod io
 
+import std.mem.alloc
+import std.mem.free
+import std.ptr.byte_add
+import std.convert.i64_to_u8_wrapping
+import std.convert.u64_to_u8_wrapping
+import std.convert.i8_to_i64
+import std.convert.i16_to_i64
+import std.convert.i32_to_i64
+import std.convert.isize_to_i64
+import std.convert.u8_to_u64
+import std.convert.u16_to_u64
+import std.convert.u32_to_u64
+import std.convert.usize_to_u64
+
 @runtime("prim_rt_write")
 fn write(fd: i64, s: String);
 
@@ -8,35 +22,82 @@ fn print_str(s: String) {
     write(1, "\n");
 }
 
-@runtime("prim_rt_println_u8")
-fn println_u8(x: u8);
+// ---- integer printing ----
+// Decimal digits are written backwards into a small heap buffer, then the
+// slice is handed to write. The signed path uses a remainder-based loop so
+// the most-negative value never overflows; the unsigned path uses unsigned
+// division. Narrower types widen to i64/u64 and delegate. 24 bytes covers
+// the widest output (20 digits + sign).
 
-@runtime("prim_rt_println_i8")
-fn println_i8(x: i8);
+fn println_i64(x: i64) {
+    let buf = alloc(24usize)
+    let mut pos = 24usize
+    let neg = x < 0i64
+    let mut n = x
+    loop {
+        let rem = n % 10i64
+        let digit = if rem < 0i64 { 0i64 - rem } else { rem }
+        pos = pos - 1usize
+        *byte_add[u8](buf, pos) = i64_to_u8_wrapping(48i64 + digit)
+        n = n / 10i64
+        if n == 0i64 { break }
+    }
+    if neg {
+        pos = pos - 1usize
+        *byte_add[u8](buf, pos) = 45u8
+    }
+    let s = String { data = byte_add[u8](buf, pos), len = 24usize - pos, cap = 24usize }
+    print_str(s)
+    free(buf)
+}
 
-@runtime("prim_rt_println_u16")
-fn println_u16(x: u16);
+fn println_u64(x: u64) {
+    let buf = alloc(24usize)
+    let mut pos = 24usize
+    let mut n = x
+    loop {
+        let rem = n % 10u64
+        pos = pos - 1usize
+        *byte_add[u8](buf, pos) = u64_to_u8_wrapping(48u64 + rem)
+        n = n / 10u64
+        if n == 0u64 { break }
+    }
+    let s = String { data = byte_add[u8](buf, pos), len = 24usize - pos, cap = 24usize }
+    print_str(s)
+    free(buf)
+}
 
-@runtime("prim_rt_println_i16")
-fn println_i16(x: i16);
+fn println_i32(x: i32) {
+    println_i64(i32_to_i64(x))
+}
 
-@runtime("prim_rt_println_u32")
-fn println_u32(x: u32);
+fn println_i16(x: i16) {
+    println_i64(i16_to_i64(x))
+}
 
-@runtime("prim_rt_println_i32")
-fn println_i32(x: i32);
+fn println_i8(x: i8) {
+    println_i64(i8_to_i64(x))
+}
 
-@runtime("prim_rt_println_u64")
-fn println_u64(x: u64);
+fn println_isize(x: isize) {
+    println_i64(isize_to_i64(x))
+}
 
-@runtime("prim_rt_println_i64")
-fn println_i64(x: i64);
+fn println_u32(x: u32) {
+    println_u64(u32_to_u64(x))
+}
 
-@runtime("prim_rt_println_usize")
-fn println_usize(x: usize);
+fn println_u16(x: u16) {
+    println_u64(u16_to_u64(x))
+}
 
-@runtime("prim_rt_println_isize")
-fn println_isize(x: isize);
+fn println_u8(x: u8) {
+    println_u64(u8_to_u64(x))
+}
+
+fn println_usize(x: usize) {
+    println_u64(usize_to_u64(x))
+}
 
 @runtime("prim_rt_println_f32")
 fn println_f32(x: f32);

@@ -895,30 +895,6 @@ fn emit_runtime_call(
     ctx: &EmitCtx,
 ) -> Result<(), WasmError> {
     match runtime {
-        hir::RuntimeAbi::PrintlnI64 => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Call(ctx.builtins.println_i64));
-        }
-        hir::RuntimeAbi::PrintlnI32
-        | hir::RuntimeAbi::PrintlnI16
-        | hir::RuntimeAbi::PrintlnI8
-        | hir::RuntimeAbi::PrintlnIsize => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::I64ExtendI32S);
-            f.instruction(&Instruction::Call(ctx.builtins.println_i64));
-        }
-        hir::RuntimeAbi::PrintlnU64 => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Call(ctx.builtins.println_u64));
-        }
-        hir::RuntimeAbi::PrintlnU32
-        | hir::RuntimeAbi::PrintlnU16
-        | hir::RuntimeAbi::PrintlnU8
-        | hir::RuntimeAbi::PrintlnUsize => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::I64ExtendI32U);
-            f.instruction(&Instruction::Call(ctx.builtins.println_u64));
-        }
         hir::RuntimeAbi::PrintlnBool => {
             emit_expr(f, &args[0], ctx)?;
             f.instruction(&Instruction::Call(ctx.builtins.println_bool));

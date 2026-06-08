@@ -1,0 +1,32 @@
+import std.io.println_i8
+import std.io.println_u8
+import std.io.println_i16
+import std.io.println_u16
+import std.io.println_i32
+import std.io.println_u32
+import std.io.println_i64
+import std.io.println_u64
+import std.io.println_isize
+import std.io.println_usize
+import std.convert.i64_to_u64_wrapping
+
+// All integer println functions are implemented in Prim now. Cover zero,
+// negatives, the signed extremes, and unsigned values with the high bit
+// set (which only print correctly with unsigned division).
+fn main() {
+    println_i8(0i8)
+    println_i8(-42i8)
+    println_u8(255u8)
+    println_i16(-12345i16)
+    println_u16(54321u16)
+    println_i32(0i32)
+    println_i32(-2147483648)
+    println_i32(2147483647i32)
+    println_u32(4294967295u32)
+    println_i64(-9000000000000000000i64)
+    println_i64(9223372036854775807i64)
+    println_u64(12345u64)
+    println_u64(i64_to_u64_wrapping(0i64 - 1i64))
+    println_isize(-5isize)
+    println_usize(5usize)
+}
