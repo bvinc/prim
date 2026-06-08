@@ -153,6 +153,21 @@ pub enum RuntimeAbi {
     /// discipline now.
     Alloc,
     Free,
+    /// Integer conversion primitives (std.convert). One wasm operation backs
+    /// many named conversions; the source/destination types live in the std
+    /// function signatures, not here.
+    ConvNoop,
+    ConvTruncU8,
+    ConvTruncU16,
+    ConvSext8,
+    ConvSext16,
+    ConvExtI32S,
+    ConvExtI32U,
+    ConvWrapI64,
+    ConvWrapTruncU8,
+    ConvWrapTruncU16,
+    ConvWrapSext8,
+    ConvWrapSext16,
 }
 
 impl RuntimeAbi {
@@ -167,6 +182,18 @@ impl RuntimeAbi {
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
             "prim_rt_alloc" => Some(Self::Alloc),
             "prim_rt_free" => Some(Self::Free),
+            "prim_rt_conv_noop" => Some(Self::ConvNoop),
+            "prim_rt_conv_trunc_u8" => Some(Self::ConvTruncU8),
+            "prim_rt_conv_trunc_u16" => Some(Self::ConvTruncU16),
+            "prim_rt_conv_sext8" => Some(Self::ConvSext8),
+            "prim_rt_conv_sext16" => Some(Self::ConvSext16),
+            "prim_rt_conv_ext_i32_s" => Some(Self::ConvExtI32S),
+            "prim_rt_conv_ext_i32_u" => Some(Self::ConvExtI32U),
+            "prim_rt_conv_wrap_i64" => Some(Self::ConvWrapI64),
+            "prim_rt_conv_wrap_trunc_u8" => Some(Self::ConvWrapTruncU8),
+            "prim_rt_conv_wrap_trunc_u16" => Some(Self::ConvWrapTruncU16),
+            "prim_rt_conv_wrap_sext8" => Some(Self::ConvWrapSext8),
+            "prim_rt_conv_wrap_sext16" => Some(Self::ConvWrapSext16),
             "prim_rt_yield" => Some(Self::Yield),
             "prim_rt_println_i64" => Some(Self::PrintlnI64),
             "prim_rt_println_i32" => Some(Self::PrintlnI32),

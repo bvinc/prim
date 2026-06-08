@@ -1,0 +1,288 @@
+mod convert
+
+// Primitive integer conversions, one @runtime function per ordered pair.
+// Lossless conversions are named `src_to_dst`; conversions that can lose
+// information are named `src_to_dst_wrapping` (they keep the low bits,
+// reinterpreted per the destination type). These are the building blocks;
+// checked (`try_*` -> Option) and idiomatic wrappers are layered on top.
+
+// ---- from i8 ----
+@runtime("prim_rt_conv_trunc_u8")
+fn i8_to_u8_wrapping(x: i8) -> u8;
+
+@runtime("prim_rt_conv_noop")
+fn i8_to_i16(x: i8) -> i16;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn i8_to_u16_wrapping(x: i8) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn i8_to_i32(x: i8) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn i8_to_u32_wrapping(x: i8) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn i8_to_isize(x: i8) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn i8_to_usize_wrapping(x: i8) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i8_to_i64(x: i8) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i8_to_u64_wrapping(x: i8) -> u64;
+
+// ---- from u8 ----
+@runtime("prim_rt_conv_sext8")
+fn u8_to_i8_wrapping(x: u8) -> i8;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_i16(x: u8) -> i16;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_u16(x: u8) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_i32(x: u8) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_u32(x: u8) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_isize(x: u8) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn u8_to_usize(x: u8) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u8_to_i64(x: u8) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u8_to_u64(x: u8) -> u64;
+
+// ---- from i16 ----
+@runtime("prim_rt_conv_sext8")
+fn i16_to_i8_wrapping(x: i16) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn i16_to_u8_wrapping(x: i16) -> u8;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn i16_to_u16_wrapping(x: i16) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn i16_to_i32(x: i16) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn i16_to_u32_wrapping(x: i16) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn i16_to_isize(x: i16) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn i16_to_usize_wrapping(x: i16) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i16_to_i64(x: i16) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i16_to_u64_wrapping(x: i16) -> u64;
+
+// ---- from u16 ----
+@runtime("prim_rt_conv_sext8")
+fn u16_to_i8_wrapping(x: u16) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn u16_to_u8_wrapping(x: u16) -> u8;
+
+@runtime("prim_rt_conv_sext16")
+fn u16_to_i16_wrapping(x: u16) -> i16;
+
+@runtime("prim_rt_conv_noop")
+fn u16_to_i32(x: u16) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn u16_to_u32(x: u16) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn u16_to_isize(x: u16) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn u16_to_usize(x: u16) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u16_to_i64(x: u16) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u16_to_u64(x: u16) -> u64;
+
+// ---- from i32 ----
+@runtime("prim_rt_conv_sext8")
+fn i32_to_i8_wrapping(x: i32) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn i32_to_u8_wrapping(x: i32) -> u8;
+
+@runtime("prim_rt_conv_sext16")
+fn i32_to_i16_wrapping(x: i32) -> i16;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn i32_to_u16_wrapping(x: i32) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn i32_to_u32_wrapping(x: i32) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn i32_to_isize(x: i32) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn i32_to_usize_wrapping(x: i32) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i32_to_i64(x: i32) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn i32_to_u64_wrapping(x: i32) -> u64;
+
+// ---- from u32 ----
+@runtime("prim_rt_conv_sext8")
+fn u32_to_i8_wrapping(x: u32) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn u32_to_u8_wrapping(x: u32) -> u8;
+
+@runtime("prim_rt_conv_sext16")
+fn u32_to_i16_wrapping(x: u32) -> i16;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn u32_to_u16_wrapping(x: u32) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn u32_to_i32_wrapping(x: u32) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn u32_to_isize_wrapping(x: u32) -> isize;
+
+@runtime("prim_rt_conv_noop")
+fn u32_to_usize(x: u32) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u32_to_i64(x: u32) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn u32_to_u64(x: u32) -> u64;
+
+// ---- from isize ----
+@runtime("prim_rt_conv_sext8")
+fn isize_to_i8_wrapping(x: isize) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn isize_to_u8_wrapping(x: isize) -> u8;
+
+@runtime("prim_rt_conv_sext16")
+fn isize_to_i16_wrapping(x: isize) -> i16;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn isize_to_u16_wrapping(x: isize) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn isize_to_i32(x: isize) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn isize_to_u32_wrapping(x: isize) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn isize_to_usize_wrapping(x: isize) -> usize;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn isize_to_i64(x: isize) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_s")
+fn isize_to_u64_wrapping(x: isize) -> u64;
+
+// ---- from usize ----
+@runtime("prim_rt_conv_sext8")
+fn usize_to_i8_wrapping(x: usize) -> i8;
+
+@runtime("prim_rt_conv_trunc_u8")
+fn usize_to_u8_wrapping(x: usize) -> u8;
+
+@runtime("prim_rt_conv_sext16")
+fn usize_to_i16_wrapping(x: usize) -> i16;
+
+@runtime("prim_rt_conv_trunc_u16")
+fn usize_to_u16_wrapping(x: usize) -> u16;
+
+@runtime("prim_rt_conv_noop")
+fn usize_to_i32_wrapping(x: usize) -> i32;
+
+@runtime("prim_rt_conv_noop")
+fn usize_to_u32(x: usize) -> u32;
+
+@runtime("prim_rt_conv_noop")
+fn usize_to_isize_wrapping(x: usize) -> isize;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn usize_to_i64(x: usize) -> i64;
+
+@runtime("prim_rt_conv_ext_i32_u")
+fn usize_to_u64(x: usize) -> u64;
+
+// ---- from i64 ----
+@runtime("prim_rt_conv_wrap_sext8")
+fn i64_to_i8_wrapping(x: i64) -> i8;
+
+@runtime("prim_rt_conv_wrap_trunc_u8")
+fn i64_to_u8_wrapping(x: i64) -> u8;
+
+@runtime("prim_rt_conv_wrap_sext16")
+fn i64_to_i16_wrapping(x: i64) -> i16;
+
+@runtime("prim_rt_conv_wrap_trunc_u16")
+fn i64_to_u16_wrapping(x: i64) -> u16;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn i64_to_i32_wrapping(x: i64) -> i32;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn i64_to_u32_wrapping(x: i64) -> u32;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn i64_to_isize_wrapping(x: i64) -> isize;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn i64_to_usize_wrapping(x: i64) -> usize;
+
+@runtime("prim_rt_conv_noop")
+fn i64_to_u64_wrapping(x: i64) -> u64;
+
+// ---- from u64 ----
+@runtime("prim_rt_conv_wrap_sext8")
+fn u64_to_i8_wrapping(x: u64) -> i8;
+
+@runtime("prim_rt_conv_wrap_trunc_u8")
+fn u64_to_u8_wrapping(x: u64) -> u8;
+
+@runtime("prim_rt_conv_wrap_sext16")
+fn u64_to_i16_wrapping(x: u64) -> i16;
+
+@runtime("prim_rt_conv_wrap_trunc_u16")
+fn u64_to_u16_wrapping(x: u64) -> u16;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn u64_to_i32_wrapping(x: u64) -> i32;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn u64_to_u32_wrapping(x: u64) -> u32;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn u64_to_isize_wrapping(x: u64) -> isize;
+
+@runtime("prim_rt_conv_wrap_i64")
+fn u64_to_usize_wrapping(x: u64) -> usize;
+
+@runtime("prim_rt_conv_noop")
+fn u64_to_i64_wrapping(x: u64) -> i64;
+

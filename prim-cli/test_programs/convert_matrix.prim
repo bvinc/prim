@@ -1,0 +1,41 @@
+import std.io.println_i8
+import std.io.println_u8
+import std.io.println_i16
+import std.io.println_u16
+import std.io.println_i32
+import std.io.println_u32
+import std.io.println_i64
+import std.io.println_u64
+import std.convert.u8_to_i32
+import std.convert.i32_to_u32_wrapping
+import std.convert.i32_to_u8_wrapping
+import std.convert.i32_to_u16_wrapping
+import std.convert.i32_to_i8_wrapping
+import std.convert.i32_to_i16_wrapping
+import std.convert.i32_to_i64
+import std.convert.u32_to_u64
+import std.convert.i64_to_i32_wrapping
+import std.convert.i64_to_u8_wrapping
+import std.convert.i64_to_u16_wrapping
+import std.convert.i64_to_i8_wrapping
+import std.convert.i64_to_i16_wrapping
+import std.convert.u8_to_u16
+import std.convert.i8_to_i64
+
+fn main() {
+    println_i32(u8_to_i32(200u8))                  // 200  (noop)
+    println_u32(i32_to_u32_wrapping(0i32 - 1i32))  // 4294967295 (noop reinterpret)
+    println_u8(i32_to_u8_wrapping(300i32))         // 44   (trunc u8)
+    println_u16(i32_to_u16_wrapping(70000i32))     // 4464 (trunc u16)
+    println_i8(i32_to_i8_wrapping(200i32))         // -56  (sext8)
+    println_i16(i32_to_i16_wrapping(40000i32))     // -25536 (sext16)
+    println_i64(i32_to_i64(0i32 - 5i32))           // -5   (ext i32 s)
+    println_u64(u32_to_u64(4000000000u32))         // 4000000000 (ext i32 u)
+    println_i32(i64_to_i32_wrapping(4294967303i64))// 7    (wrap i64)
+    println_u8(i64_to_u8_wrapping(300i64))         // 44   (wrap+trunc u8)
+    println_u16(i64_to_u16_wrapping(70000i64))     // 4464 (wrap+trunc u16)
+    println_i8(i64_to_i8_wrapping(200i64))         // -56  (wrap+sext8)
+    println_i16(i64_to_i16_wrapping(40000i64))     // -25536 (wrap+sext16)
+    println_u16(u8_to_u16(200u8))                  // 200  (lossless widen)
+    println_i64(i8_to_i64(0i8 - 1i8))              // -1   (lossless sext)
+}

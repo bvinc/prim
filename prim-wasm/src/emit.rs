@@ -1084,6 +1084,64 @@ fn emit_runtime_call(
             emit_expr(f, &args[0], ctx)?;
             f.instruction(&Instruction::Drop);
         }
+        // Integer conversions (std.convert). A `u8`/`i32`/… all share the
+        // wasm `i32` representation, so most narrowings are a mask or a
+        // sign-extend and most widenings are a no-op or an i64 extend.
+        hir::RuntimeAbi::ConvNoop => {
+            emit_expr(f, &args[0], ctx)?;
+        }
+        hir::RuntimeAbi::ConvTruncU8 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Const(0xFF));
+            f.instruction(&Instruction::I32And);
+        }
+        hir::RuntimeAbi::ConvTruncU16 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Const(0xFFFF));
+            f.instruction(&Instruction::I32And);
+        }
+        hir::RuntimeAbi::ConvSext8 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Extend8S);
+        }
+        hir::RuntimeAbi::ConvSext16 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32Extend16S);
+        }
+        hir::RuntimeAbi::ConvExtI32S => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64ExtendI32S);
+        }
+        hir::RuntimeAbi::ConvExtI32U => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64ExtendI32U);
+        }
+        hir::RuntimeAbi::ConvWrapI64 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32WrapI64);
+        }
+        hir::RuntimeAbi::ConvWrapTruncU8 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32WrapI64);
+            f.instruction(&Instruction::I32Const(0xFF));
+            f.instruction(&Instruction::I32And);
+        }
+        hir::RuntimeAbi::ConvWrapTruncU16 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32WrapI64);
+            f.instruction(&Instruction::I32Const(0xFFFF));
+            f.instruction(&Instruction::I32And);
+        }
+        hir::RuntimeAbi::ConvWrapSext8 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32WrapI64);
+            f.instruction(&Instruction::I32Extend8S);
+        }
+        hir::RuntimeAbi::ConvWrapSext16 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I32WrapI64);
+            f.instruction(&Instruction::I32Extend16S);
+        }
     }
     Ok(())
 }
