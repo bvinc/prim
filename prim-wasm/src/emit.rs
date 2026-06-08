@@ -7,7 +7,7 @@ use crate::layout::{EnumLayout, StructLayout, emit_field_load, emit_field_store}
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
 use prim_compiler::hir;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use wasm_encoder::{BlockType, Function, Instruction, MemArg, ValType};
 
@@ -59,6 +59,14 @@ pub(crate) struct EmitCtx<'a> {
     pub vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
     pub scratch_base: u32,
     pub scratch_counter: Cell<u32>,
+    /// Number of wasm structured blocks (`block`/`loop`/`if`) currently open
+    /// at the emission cursor. Used to compute correct relative branch
+    /// targets for `break`.
+    pub ctrl_depth: Cell<u32>,
+    /// For each enclosing loop (innermost last), the `ctrl_depth` just before
+    /// its exit `block` was opened — i.e. that block's branch level. `break`
+    /// targets the innermost.
+    pub loop_exits: RefCell<Vec<u32>>,
     pub dbg_sites: &'a [DbgSite],
     pub dbg_counter: Cell<u32>,
     pub str_sites: &'a [StrSite],
@@ -105,10 +113,45 @@ pub(crate) fn build_emit_ctx<'a>(
         vtable_addr,
         scratch_base,
         scratch_counter: Cell::new(0),
+        ctrl_depth: Cell::new(0),
+        loop_exits: RefCell::new(Vec::new()),
         dbg_sites,
         dbg_counter: Cell::new(0),
         str_sites,
         str_counter: Cell::new(0),
+    }
+}
+
+impl EmitCtx<'_> {
+    /// Record that a wasm structured block has just been opened.
+    fn enter_ctrl(&self) {
+        self.ctrl_depth.set(self.ctrl_depth.get() + 1);
+    }
+
+    /// Record that a wasm structured block has just been closed (`end`).
+    fn exit_ctrl(&self) {
+        self.ctrl_depth.set(self.ctrl_depth.get() - 1);
+    }
+
+    /// Enter a loop whose exit `block` was opened at the current depth.
+    fn enter_loop(&self) {
+        self.loop_exits.borrow_mut().push(self.ctrl_depth.get());
+    }
+
+    fn exit_loop(&self) {
+        self.loop_exits.borrow_mut().pop();
+    }
+
+    /// Relative branch target for `break`: the distance from the current
+    /// depth out to the innermost enclosing loop's exit block. Accounts for
+    /// any `if`/`match` blocks between the `break` and the loop.
+    fn break_target(&self) -> u32 {
+        let exit_level = *self
+            .loop_exits
+            .borrow()
+            .last()
+            .expect("break outside of a loop");
+        self.ctrl_depth.get() - 1 - exit_level
     }
 }
 
@@ -211,28 +254,40 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             }
         }
         hir::Stmt::Loop { body, .. } => {
+            ctx.enter_loop();
             f.instruction(&Instruction::Block(BlockType::Empty));
+            ctx.enter_ctrl();
             f.instruction(&Instruction::Loop(BlockType::Empty));
+            ctx.enter_ctrl();
             emit_block(f, body, ctx)?;
             f.instruction(&Instruction::Br(0));
             f.instruction(&Instruction::End);
+            ctx.exit_ctrl();
             f.instruction(&Instruction::End);
+            ctx.exit_ctrl();
+            ctx.exit_loop();
         }
         hir::Stmt::While {
             condition, body, ..
         } => {
+            ctx.enter_loop();
             f.instruction(&Instruction::Block(BlockType::Empty));
+            ctx.enter_ctrl();
             f.instruction(&Instruction::Loop(BlockType::Empty));
+            ctx.enter_ctrl();
             emit_expr(f, condition, ctx)?;
             f.instruction(&Instruction::I32Eqz);
             f.instruction(&Instruction::BrIf(1));
             emit_block(f, body, ctx)?;
             f.instruction(&Instruction::Br(0));
             f.instruction(&Instruction::End);
+            ctx.exit_ctrl();
             f.instruction(&Instruction::End);
+            ctx.exit_ctrl();
+            ctx.exit_loop();
         }
         hir::Stmt::Break { .. } => {
-            f.instruction(&Instruction::Br(1));
+            f.instruction(&Instruction::Br(ctx.break_target()));
         }
     }
     Ok(())
@@ -339,14 +394,18 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 } else {
                     f.instruction(&Instruction::If(BlockType::Empty));
                 }
+                ctx.enter_ctrl();
                 emit_block(f, then_branch, ctx)?;
                 f.instruction(&Instruction::Else);
                 emit_block(f, else_block, ctx)?;
                 f.instruction(&Instruction::End);
+                ctx.exit_ctrl();
             } else {
                 f.instruction(&Instruction::If(BlockType::Empty));
+                ctx.enter_ctrl();
                 emit_block(f, then_branch, ctx)?;
                 f.instruction(&Instruction::End);
+                ctx.exit_ctrl();
             }
         }
         hir::ExprKind::Block(block) => {
@@ -776,6 +835,7 @@ fn emit_match_arm_chain(
             } else {
                 f.instruction(&Instruction::If(BlockType::Empty));
             }
+            ctx.enter_ctrl();
 
             emit_match_bindings(f, scrutinee_local, enum_id, *variant_idx, bindings, ctx);
             emit_expr(f, &arm.body, ctx)?;
@@ -783,6 +843,7 @@ fn emit_match_arm_chain(
             f.instruction(&Instruction::Else);
             emit_match_arm_chain(f, scrutinee_local, enum_id, arms, index + 1, result_ty, ctx)?;
             f.instruction(&Instruction::End);
+            ctx.exit_ctrl();
         }
     }
 

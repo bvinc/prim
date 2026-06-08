@@ -1,0 +1,79 @@
+import std.io.println_i32
+
+enum Sig { Go, Stop }
+
+// `break` must branch to its loop's exit regardless of how many `if`/`match`
+// blocks enclose it. Each function below exercises a different nesting and
+// returns the value that only a correctly-targeted break produces.
+
+// break inside an `if` in a single loop
+fn count_to(limit: i32) -> i32 {
+    let mut i = 0
+    loop {
+        i = i + 1
+        if i == limit { break }
+    }
+    i
+}
+
+// break inside nested `if`s
+fn nested_if() -> i32 {
+    let mut i = 0
+    loop {
+        i = i + 1
+        if i > 2 {
+            if i == 4 { break }
+        }
+    }
+    i
+}
+
+// break inside a `match` arm
+fn via_match() -> i32 {
+    let mut i = 0
+    loop {
+        i = i + 1
+        let s = if i == 3 { Sig.Stop } else { Sig.Go }
+        match s {
+            Sig.Stop => { break },
+            Sig.Go => {},
+        }
+    }
+    i
+}
+
+// nested loops: the inner break (inside an if) exits only the inner loop;
+// the outer break (inside an if) exits the outer loop.
+fn nested_loops() -> i32 {
+    let mut total = 0
+    let mut outer = 0
+    loop {
+        outer = outer + 1
+        let mut inner = 0
+        loop {
+            inner = inner + 1
+            if inner == 3 { break }
+            total = total + 1
+        }
+        if outer == 2 { break }
+    }
+    total
+}
+
+// while + break inside an if
+fn while_break() -> i32 {
+    let mut i = 0
+    while i < 100 {
+        i = i + 1
+        if i == 7 { break }
+    }
+    i
+}
+
+fn main() {
+    println_i32(count_to(5))     // 5
+    println_i32(nested_if())     // 4
+    println_i32(via_match())     // 3
+    println_i32(nested_loops())  // 4
+    println_i32(while_break())   // 7
+}
