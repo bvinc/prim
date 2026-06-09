@@ -16,3 +16,19 @@ fn alloc(n: usize) -> *mut u8;
 // reclaiming when a real allocator (or ownership-driven drop) lands.
 @runtime("prim_rt_free")
 fn free(p: *mut u8);
+
+// Typed (generic) allocation helpers. Same underlying allocator as `alloc`,
+// but returning/taking `*mut T` so callers don't need pointer casts.
+@runtime("prim_rt_alloc")
+fn alloc_bytes[T](n: usize) -> *mut T;
+
+@runtime("prim_rt_free")
+fn dealloc[T](p: *mut T);
+
+@runtime("prim_rt_memory_copy")
+fn copy_bytes[T](dst: *mut T, src: *mut T, n: usize);
+
+// alloc_array[T](count) — room for `count` values of type T.
+fn alloc_array[T](count: usize) -> *mut T {
+    alloc_bytes[T](count * size_of[T]())
+}

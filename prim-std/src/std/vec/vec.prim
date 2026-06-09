@@ -1,0 +1,55 @@
+mod vec
+
+import std.mem.alloc_array
+import std.mem.dealloc
+import std.mem.copy_bytes
+import std.mem.size_of
+import std.ptr.null
+import std.ptr.add
+import std.io.panic
+
+// A growable array. `ptr` points at `cap` slots of T; the first `len` are
+// live. Passed by handle (structs are reference types), so the mutating
+// functions update the caller's vector in place.
+struct Vec[T] {
+    ptr: *mut T,
+    len: usize,
+    cap: usize,
+}
+
+fn new[T]() -> Vec[T] {
+    Vec { ptr = null[T](), len = 0usize, cap = 0usize }
+}
+
+fn len[T](v: Vec[T]) -> usize {
+    v.len
+}
+
+fn push[T](v: Vec[T], value: T) {
+    if v.len == v.cap {
+        let new_cap = if v.cap == 0usize { 4usize } else { v.cap * 2usize }
+        let new_ptr = alloc_array[T](new_cap)
+        if v.len > 0usize {
+            copy_bytes[T](new_ptr, v.ptr, v.len * size_of[T]())
+        }
+        dealloc[T](v.ptr)
+        v.ptr = new_ptr
+        v.cap = new_cap
+    }
+    *add[T](v.ptr, v.len) = value
+    v.len = v.len + 1
+}
+
+fn get[T](v: Vec[T], i: usize) -> T {
+    if i >= v.len {
+        panic("Vec.get: index out of bounds")
+    }
+    *add[T](v.ptr, i)
+}
+
+fn set[T](v: Vec[T], i: usize, value: T) {
+    if i >= v.len {
+        panic("Vec.set: index out of bounds")
+    }
+    *add[T](v.ptr, i) = value
+}
