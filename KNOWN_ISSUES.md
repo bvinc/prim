@@ -11,17 +11,6 @@ later feature).
   scheduler doesn't propagate wasm traps to the exit code. A halting program and
   a trapping program are indistinguishable from the outside.
 
-- **Cross-module struct field lookup is broken (latent).** Each parsed file owns
-  its own string interner, so an `InternSymbol` (a bare `u32`) is only meaningful
-  within the interner that produced it. Field names persisted in the HIR
-  (`Field.name`, `ExprKind::Field`, `StructLit` fields) originate from different
-  files, so looking up a field on a struct defined in another module fails. Every
-  existing test that exercises field access defines the struct in the same file,
-  which hides it. wasm codegen currently sidesteps this with position-based field
-  lookup (`fields[0]` = `data`, etc.) instead of by name. The real fix is to
-  share one interner across the whole compilation — see the plan to unify
-  interning via `lasso::ThreadedRodeo`.
-
 ## Deferred design
 
 - **`free` does not reclaim memory.** The allocator is a bump allocator that
