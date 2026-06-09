@@ -1,0 +1,19 @@
+import std.io.println_u8
+import std.convert.i32_to_u8_wrapping
+
+// A primitive type can carry both methods (self) and associated functions
+// (no self), called the same way as on a struct or enum.
+impl u8 {
+    fn doubled(self) -> u8 {
+        self + self
+    }
+    fn from_i32(n: i32) -> u8 {
+        i32_to_u8_wrapping(n)
+    }
+}
+
+fn main() {
+    let x = 5u8
+    println_u8(x.doubled())        // 10 (method called on a primitive value)
+    println_u8(u8.from_i32(300))   // 44 (associated function on a primitive)
+}

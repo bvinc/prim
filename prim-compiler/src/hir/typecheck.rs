@@ -1059,8 +1059,6 @@ impl<'a> Checker<'a> {
                 // value (dynamic dispatch via vtable).
                 let recv_ty = self.check_expr(receiver, locals)?;
                 let owner = match &recv_ty {
-                    Type::Struct(id, _) => crate::hir::MethodOwner::Struct(*id),
-                    Type::Enum(id, _) => crate::hir::MethodOwner::Enum(*id),
                     Type::Trait(tid) => {
                         // Dynamic dispatch path. Find the method in the
                         // trait's declaration order to determine the vtable
@@ -1262,15 +1260,19 @@ impl<'a> Checker<'a> {
                         *ty = ret_ty.clone();
                         return Ok(ret_ty);
                     }
-                    _ => {
-                        return Err(self.error(
-                            *span,
-                            TypeCheckKind::Legacy(format!(
-                                "method call receiver must be a struct, enum, or trait type, got {}",
-                                recv_ty
-                            )),
-                        ));
-                    }
+                    // Static dispatch on a struct, enum, or primitive.
+                    other => match crate::hir::MethodOwner::of_type(other) {
+                        Some(owner) => owner,
+                        None => {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "method call receiver must be a struct, enum, primitive, or trait type, got {}",
+                                    recv_ty
+                                )),
+                            ));
+                        }
+                    },
                 };
                 let method_name = *method;
                 // Step 2: look up the impl method. It must take `self` — an
