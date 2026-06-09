@@ -79,6 +79,7 @@ pub(crate) fn emit_alloc() -> Function {
     let mut f = Function::new(vec![(1, ValType::I32)]);
     let size: u32 = 0;
     let ptr: u32 = 1;
+    const PAGE: i32 = 65536;
 
     // ptr = heap_ptr
     f.instruction(&Instruction::GlobalGet(HEAP_PTR_GLOBAL));
@@ -93,6 +94,29 @@ pub(crate) fn emit_alloc() -> Function {
     f.instruction(&Instruction::I32Const(-8));
     f.instruction(&Instruction::I32And);
     f.instruction(&Instruction::GlobalSet(HEAP_PTR_GLOBAL));
+
+    // Grow linear memory if the new heap pointer exceeds the current size:
+    //   if heap_ptr > memory.size*PAGE {
+    //       memory.grow((heap_ptr - memory.size*PAGE + PAGE-1) / PAGE)
+    //   }
+    f.instruction(&Instruction::GlobalGet(HEAP_PTR_GLOBAL));
+    f.instruction(&Instruction::MemorySize(0));
+    f.instruction(&Instruction::I32Const(PAGE));
+    f.instruction(&Instruction::I32Mul);
+    f.instruction(&Instruction::I32GtU);
+    f.instruction(&Instruction::If(BlockType::Empty));
+    f.instruction(&Instruction::GlobalGet(HEAP_PTR_GLOBAL));
+    f.instruction(&Instruction::MemorySize(0));
+    f.instruction(&Instruction::I32Const(PAGE));
+    f.instruction(&Instruction::I32Mul);
+    f.instruction(&Instruction::I32Sub); // deficit bytes
+    f.instruction(&Instruction::I32Const(PAGE - 1));
+    f.instruction(&Instruction::I32Add);
+    f.instruction(&Instruction::I32Const(PAGE));
+    f.instruction(&Instruction::I32DivU); // pages needed
+    f.instruction(&Instruction::MemoryGrow(0));
+    f.instruction(&Instruction::Drop); // ignore previous size / -1 on OOM
+    f.instruction(&Instruction::End);
 
     // return ptr
     f.instruction(&Instruction::LocalGet(ptr));

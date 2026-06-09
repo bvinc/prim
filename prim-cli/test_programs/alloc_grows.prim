@@ -1,0 +1,21 @@
+import std.io.println_u8
+import std.mem.alloc
+import std.ptr.byte_add
+
+// Allocating well past the initial 64 KB page must grow linear memory, and
+// the growth must not disturb earlier allocations.
+fn main() {
+    let first = alloc(16usize)
+    *first = 11u8
+
+    let mut p = alloc(1usize)
+    let mut i = 0
+    while i < 128 {
+        p = alloc(2048usize)                  // ~256 KB total
+        *byte_add[u8](p, 2047usize) = 99u8
+        i = i + 1
+    }
+
+    println_u8(*first)                         // 11 (earlier block intact)
+    println_u8(*byte_add[u8](p, 2047usize))    // 99 (high address writable)
+}
