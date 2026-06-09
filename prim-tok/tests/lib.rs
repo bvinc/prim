@@ -678,3 +678,22 @@ fn test_multiline_string_single_backslash_error() {
         _ => panic!("Expected UnexpectedCharacter error, got {:?}", result),
     }
 }
+
+#[test]
+fn test_range_dotdot_vs_float() {
+    // `0..5` is three tokens: the `..` must not be swallowed into a float.
+    let src = "0..5";
+    let tokens = Tokenizer::new(src).tokenize().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::IntLiteral);
+    assert_eq!(tokens[0].span.text(src), "0");
+    assert_eq!(tokens[1].kind, TokenKind::DotDot);
+    assert_eq!(tokens[1].span.text(src), "..");
+    assert_eq!(tokens[2].kind, TokenKind::IntLiteral);
+    assert_eq!(tokens[2].span.text(src), "5");
+
+    // A real decimal still lexes as one float.
+    let f = "0.5";
+    let ftoks = Tokenizer::new(f).tokenize().unwrap();
+    assert_eq!(ftoks[0].kind, TokenKind::FloatLiteral);
+    assert_eq!(ftoks[0].span.text(f), "0.5");
+}

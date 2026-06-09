@@ -1410,6 +1410,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Let) => self.parse_let_statement(),
             Some(TokenKind::Loop) => self.parse_loop_statement(),
             Some(TokenKind::While) => self.parse_while_statement(),
+            Some(TokenKind::For) => self.parse_for_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
             Some(TokenKind::Return) => self.parse_return_statement(),
             _ => {
@@ -1588,6 +1589,82 @@ impl<'a> Parser<'a> {
             body,
             span: Span::new(while_start, end.span.end()),
         })
+    }
+
+    /// `for i in a..b { body }` desugars to
+    /// `{ let mut i = a; while i < b { body; i = i + 1 } }`. The wrapping
+    /// block scopes the loop variable.
+    fn parse_for_statement(&mut self) -> Result<Stmt, ParseError> {
+        let for_start = self.consume(TokenKind::For, "Expected 'for'")?.span.start();
+        let var_span = self
+            .consume(TokenKind::Identifier, "Expected loop variable after 'for'")?
+            .span;
+        let var = self.ident(var_span);
+        self.consume(TokenKind::In, "Expected 'in' after the loop variable")?;
+        // Disallow struct literals so the body's `{` isn't read as one.
+        let (start, end) =
+            self.without_struct_literals(|p| -> Result<(Expr, Expr), ParseError> {
+                let start = p.parse_expression(Precedence::NONE)?;
+                p.consume(TokenKind::DotDot, "Expected '..' in for-loop range")?;
+                let end = p.parse_expression(Precedence::NONE)?;
+                Ok((start, end))
+            })?;
+        self.consume(TokenKind::LeftBrace, "Expected '{' to start for-loop body")?;
+        let mut body = self.parse_statement_list()?;
+        let end_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end for-loop body")?;
+        let span = Span::new(for_start, end_brace.span.end());
+
+        let ident_expr = || Expr {
+            span: var_span,
+            ty: Type::Undetermined,
+            kind: ExprKind::Ident(var),
+        };
+        // `i = i + 1` appended to the body.
+        body.push(Stmt::Assign {
+            target: var,
+            value: Expr {
+                span: var_span,
+                ty: Type::Undetermined,
+                kind: ExprKind::Binary {
+                    left: Box::new(ident_expr()),
+                    op: BinaryOp::Add,
+                    right: Box::new(Expr {
+                        span: var_span,
+                        ty: Type::Undetermined,
+                        kind: ExprKind::Int(1),
+                    }),
+                },
+            },
+        });
+        let while_stmt = Stmt::While {
+            condition: Expr {
+                span,
+                ty: Type::Undetermined,
+                kind: ExprKind::Binary {
+                    left: Box::new(ident_expr()),
+                    op: BinaryOp::Less,
+                    right: Box::new(end),
+                },
+            },
+            body,
+            span,
+        };
+        let let_stmt = Stmt::Let {
+            name: var,
+            mutable: true,
+            type_annotation: None,
+            value: start,
+        };
+        let block = Block {
+            stmts: vec![let_stmt, while_stmt],
+            expr: None,
+            span,
+        };
+        Ok(Stmt::Expr(Expr {
+            span,
+            ty: Type::Undetermined,
+            kind: ExprKind::Block(block),
+        }))
     }
 
     fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {

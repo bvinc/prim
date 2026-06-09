@@ -34,6 +34,7 @@ pub enum TokenKind {
     Else,
     Loop,
     While,
+    In,
     Break,
     Return,
     Match,
@@ -104,6 +105,7 @@ pub enum TokenKind {
     Semicolon,    // ;
     Ampersand,    // &
     Dot,          // .
+    DotDot,       // ..
     At,           // @
 
     // Special
@@ -302,8 +304,16 @@ impl<'a> Tokenizer<'a> {
             }
             Some('@') => self.emit_simple(TokenKind::At, start_pos),
             Some('.') => {
-                // Check if this is a standalone dot (for field access) or part of a number
-                if self.peek().is_none_or(|c| !c.is_ascii_digit()) {
+                // `..` (range), a standalone `.` (field access), or `.5`
+                // (a float starting with a dot).
+                if self.peek() == Some('.') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::DotDot,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else if self.peek().is_none_or(|c| !c.is_ascii_digit()) {
                     self.emit_simple(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5
@@ -446,7 +456,9 @@ impl<'a> Tokenizer<'a> {
                     self.advance();
                     continue;
                 }
-                if ch == '.' && !is_float {
+                // A `.` is a decimal point unless it begins `..` (a range),
+                // so `0..5` is `0`, `..`, `5` rather than `0.` `.5`.
+                if ch == '.' && !is_float && self.peek() != Some('.') {
                     is_float = true;
                     self.advance();
                     continue;
@@ -509,6 +521,7 @@ impl<'a> Tokenizer<'a> {
             "else" => TokenKind::Else,
             "loop" => TokenKind::Loop,
             "while" => TokenKind::While,
+            "in" => TokenKind::In,
             "break" => TokenKind::Break,
             "match" => TokenKind::Match,
             "return" => TokenKind::Return,

@@ -1,0 +1,12 @@
+import std.io.println_i32
+
+fn main() {
+    // range bounds from variables; loop var used in the body
+    let lo = 3
+    let hi = 7
+    let mut product = 1
+    for i in lo..hi {
+        product = product * i
+    }
+    println_i32(product)   // 3*4*5*6 = 360
+}
