@@ -144,6 +144,8 @@ pub struct Function {
 pub enum RuntimeAbi {
     Write,
     Yield,
+    /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
+    Trap,
     PrintlnBool,
     PrintlnF64,
     PrintlnF32,
@@ -217,6 +219,7 @@ impl RuntimeAbi {
     pub fn from_symbol(symbol: &str) -> Option<Self> {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
+            "prim_rt_trap" => Some(Self::Trap),
             "prim_rt_size_of" => Some(Self::SizeOf),
             "prim_rt_null" => Some(Self::Null),
             "prim_rt_ptr_byte_add" => Some(Self::PtrByteAdd),

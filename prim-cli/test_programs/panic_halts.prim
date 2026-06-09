@@ -1,0 +1,11 @@
+import std.io.println_i32
+import std.io.panic
+
+// panic prints its message and halts: the line after it never runs.
+// (It currently exits 0 — traps don't yet propagate a nonzero exit code
+// through the scheduler — so this is checked as a halting program.)
+fn main() {
+    println_i32(1)
+    panic("halting here")
+    println_i32(2)
+}

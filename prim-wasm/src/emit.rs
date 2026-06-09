@@ -948,6 +948,9 @@ fn emit_runtime_call(
         // Control returns to the scheduler's `on $yield` handler in `_start`,
         // which reschedules immediately (single-task case) or picks another
         // runnable continuation (future, when a queue exists).
+        hir::RuntimeAbi::Trap => {
+            f.instruction(&Instruction::Unreachable);
+        }
         hir::RuntimeAbi::Yield => {
             f.instruction(&Instruction::Suspend(ctx.builtins.yield_tag));
         }
