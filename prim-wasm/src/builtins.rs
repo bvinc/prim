@@ -18,6 +18,10 @@ pub(crate) struct Builtins {
     pub println_u64: u32,
     pub println_bool: u32,
     pub println_f64: u32,
+    /// Allocator for codegen-internal object boxes (struct / enum / string /
+    /// dyn). Defaults to the fallback bump allocator (`emit_alloc`); `lib.rs`
+    /// upgrades it to the real Prim allocator (`std.mem.alloc`) whenever that
+    /// module is linked, so all heap use shares a single allocator.
     pub alloc: u32,
     pub print_bytes: u32,
     /// Tag index for cooperative yield. Used by `std.rt.yield` which

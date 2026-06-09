@@ -129,12 +129,13 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     //   2: __println_u64
     //   3: __println_bool
     //   4: __println_f64
-    //   5: __alloc
+    //   5: __alloc (fallback bump allocator; builtins.alloc is upgraded to
+    //      std.mem.alloc below when that module is linked)
     //   6: __print_bytes
     //   7+: user functions
     //   last: _start
     let fd_write_idx: u32 = 0;
-    let builtins = Builtins {
+    let mut builtins = Builtins {
         println_i64: 1,
         println_u64: 2,
         println_bool: 3,
@@ -179,6 +180,28 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 main_func_type = Some(type_idx);
             }
             next_idx += 1;
+        }
+    }
+
+    // Route codegen-internal object allocations (struct / enum / string / dyn
+    // boxes) through the real Prim allocator rather than the bump allocator, so
+    // the whole program shares one heap. `alloc` is std.mem.alloc, signature
+    // (usize) -> *mut u8, which matches the bump allocator's call convention.
+    for func in &program.functions {
+        if func.runtime.is_some() || !func.type_params.is_empty() {
+            continue;
+        }
+        let Some(sym) = program.symbols.get(func.name.0 as usize) else {
+            continue;
+        };
+        if program.interner.resolve(&sym.name) != "alloc" {
+            continue;
+        }
+        let m = &program.modules[sym.module.0 as usize].name;
+        if m.len() == 2 && m[0] == "std" && m[1] == "mem" {
+            if let Some(idx) = func_map.get(&func.id) {
+                builtins.alloc = *idx;
+            }
         }
     }
 

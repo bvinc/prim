@@ -206,11 +206,6 @@ pub enum RuntimeAbi {
     /// which must live in a `usize` global because globals take a literal init
     /// and there is no pointer literal.
     FromAddr,
-    /// Heap allocation backed by the bump allocator. `Free` does not reclaim
-    /// yet (see std.mem); it exists so call sites can establish ownership
-    /// discipline now.
-    Alloc,
-    Free,
     /// Integer conversion primitives (std.convert). One wasm operation backs
     /// many named conversions; the source/destination types live in the std
     /// function signatures, not here.
@@ -241,8 +236,8 @@ impl RuntimeAbi {
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
             "prim_rt_at" => Some(Self::At),
             "prim_rt_from_addr" => Some(Self::FromAddr),
-            "prim_rt_alloc" => Some(Self::Alloc),
-            "prim_rt_free" => Some(Self::Free),
+            // prim_rt_alloc / prim_rt_free intentionally have no mapping: the
+            // allocator is now Prim code (std.mem), called as a normal function.
             "prim_rt_conv_noop" => Some(Self::ConvNoop),
             "prim_rt_conv_trunc_u8" => Some(Self::ConvTruncU8),
             "prim_rt_conv_trunc_u16" => Some(Self::ConvTruncU16),

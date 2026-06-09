@@ -1084,16 +1084,6 @@ fn emit_runtime_call(
         hir::RuntimeAbi::PtrAddr | hir::RuntimeAbi::FromAddr => {
             emit_expr(f, &args[0], ctx)?;
         }
-        hir::RuntimeAbi::Alloc => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Call(ctx.builtins.alloc));
-        }
-        hir::RuntimeAbi::Free => {
-            // Bump allocator: free does not reclaim memory yet. Evaluate the
-            // pointer argument for any side effects, then discard it.
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Drop);
-        }
         // Integer conversions (std.convert). A `u8`/`i32`/… all share the
         // wasm `i32` representation, so most narrowings are a mask or a
         // sign-extend and most widenings are a no-op or an i64 extend.
