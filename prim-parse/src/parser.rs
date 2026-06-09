@@ -1376,44 +1376,55 @@ impl<'a> Parser<'a> {
             Some(TokenKind::While) => self.parse_while_statement(),
             Some(TokenKind::Break) => self.parse_break_statement(),
             Some(TokenKind::Return) => self.parse_return_statement(),
-            Some(TokenKind::Identifier) => {
-                // Check if this is an assignment (identifier followed by '=')
-                // We need to look ahead to distinguish `x = value` from `x + y`
-                let saved_pos = self.current;
-                let ident_token = self.advance();
-                let ident_span = ident_token.span;
-                if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
-                    let target = self.ident(ident_span);
-                    self.advance(); // consume '='
-                    let value = self.parse_expression(Precedence::NONE)?;
-                    Ok(Stmt::Assign { target, value })
-                } else {
-                    // Not an assignment, backtrack and parse as expression
-                    self.current = saved_pos;
-                    let expr = self.parse_expression(Precedence::NONE)?;
-                    Ok(Stmt::Expr(expr))
-                }
-            }
             _ => {
-                // Expression statement (no semicolon required).
-                // If the expression is `*<ptr>` and the next token is `=`,
-                // it's a deref-assignment (write through a pointer).
+                // Parse an expression, then decide: a trailing `=` makes it an
+                // assignment whose left side must be an lvalue (a variable, a
+                // struct field, or a dereference); otherwise it's an
+                // expression statement.
                 let expr = self.parse_expression(Precedence::NONE)?;
-                if matches!(self.peek_kind(), Some(TokenKind::Equals)) {
-                    match expr.kind {
-                        ExprKind::Dereference(inner) => {
-                            self.advance(); // consume '='
-                            let value = self.parse_expression(Precedence::NONE)?;
-                            Ok(Stmt::DerefAssign { ptr: *inner, value })
-                        }
-                        _ => Err(ParseError::UnexpectedToken {
-                            expected: "identifier or `*ptr` on left of `=`".to_string(),
-                            found: TokenKind::Equals,
-                            span: expr.span,
-                        }),
+                if !matches!(self.peek_kind(), Some(TokenKind::Equals)) {
+                    return Ok(Stmt::Expr(expr));
+                }
+                let lhs_span = expr.span;
+                self.advance(); // consume '='
+                let value = self.parse_expression(Precedence::NONE)?;
+                match expr.kind {
+                    ExprKind::Ident(target) => Ok(Stmt::Assign { target, value }),
+                    ExprKind::Dereference(inner) => Ok(Stmt::DerefAssign { ptr: *inner, value }),
+                    ExprKind::FieldAccess { object, field } => Ok(Stmt::FieldAssign {
+                        object: *object,
+                        field,
+                        value,
+                    }),
+                    ExprKind::Path(mut path) if path.segments.len() >= 2 => {
+                        let field = path.segments.pop().expect("field segment");
+                        let object = if path.segments.len() == 1 {
+                            Expr {
+                                span: path.segments[0].span,
+                                ty: Type::Undetermined,
+                                kind: ExprKind::Ident(path.segments[0]),
+                            }
+                        } else {
+                            let span = path.segments[0]
+                                .span
+                                .cover(path.segments.last().expect("path").span);
+                            Expr {
+                                span,
+                                ty: Type::Undetermined,
+                                kind: ExprKind::Path(path),
+                            }
+                        };
+                        Ok(Stmt::FieldAssign {
+                            object,
+                            field,
+                            value,
+                        })
                     }
-                } else {
-                    Ok(Stmt::Expr(expr))
+                    _ => Err(ParseError::UnexpectedToken {
+                        expected: "a variable, field, or `*ptr` on the left of `=`".to_string(),
+                        found: TokenKind::Equals,
+                        span: lhs_span,
+                    }),
                 }
             }
         }

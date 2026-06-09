@@ -1075,6 +1075,39 @@ impl<'a> LoweringContext<'a> {
                     span,
                 }
             }
+            Stmt::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
+                let span = self.span_id(object.span, file_id);
+                // If the assignment's root is a local, it must be `mut`.
+                let root = match &object.kind {
+                    ExprKind::Ident(id) => Some(*id),
+                    ExprKind::Path(p) => p.segments.first().copied(),
+                    _ => None,
+                };
+                if let Some(root) = root {
+                    let root_name = self.interner.resolve(&root.sym).to_string();
+                    if let Some(binding) = self.local_scope.get(&root_name).copied() {
+                        if !binding.mutable {
+                            self.errors.push(LoweringError::AssignToImmutable {
+                                name: root_name,
+                                file: file_id,
+                                span: root.span,
+                            });
+                        }
+                    }
+                }
+                let object_hir = self.lower_expr(object, module, file_id, ast, module_scope);
+                let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
+                hir::Stmt::FieldAssign {
+                    object: object_hir,
+                    field: field.sym,
+                    value: value_hir,
+                    span,
+                }
+            }
             Stmt::Expr(expr) => {
                 hir::Stmt::Expr(self.lower_expr(expr, module, file_id, ast, module_scope))
             }

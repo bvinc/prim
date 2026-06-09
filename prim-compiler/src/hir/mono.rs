@@ -103,6 +103,10 @@ impl Mono<'_> {
                 self.rewrite_expr(ptr, subst);
                 self.rewrite_expr(value, subst);
             }
+            Stmt::FieldAssign { object, value, .. } => {
+                self.rewrite_expr(object, subst);
+                self.rewrite_expr(value, subst);
+            }
             Stmt::Expr(e) => self.rewrite_expr(e, subst),
             Stmt::Loop { body, .. } => self.rewrite_block(body, subst),
             Stmt::While {
@@ -393,6 +397,10 @@ impl Mono<'_> {
             Stmt::Assign { value, .. } => self.substitute_expr(value, subst),
             Stmt::DerefAssign { ptr, value, .. } => {
                 self.substitute_expr(ptr, subst);
+                self.substitute_expr(value, subst);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                self.substitute_expr(object, subst);
                 self.substitute_expr(value, subst);
             }
             Stmt::Expr(e) => self.substitute_expr(e, subst),

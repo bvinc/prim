@@ -407,6 +407,13 @@ pub enum Stmt {
         value: Expr,
         span: SpanId,
     },
+    /// `object.field = value` — store to a struct field.
+    FieldAssign {
+        object: Expr,
+        field: InternSymbol,
+        value: Expr,
+        span: SpanId,
+    },
     Expr(Expr),
     Loop {
         body: Block,

@@ -42,6 +42,10 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
             collect_locals_expr(ptr, locals);
             collect_locals_expr(value, locals);
         }
+        hir::Stmt::FieldAssign { object, value, .. } => {
+            collect_locals_expr(object, locals);
+            collect_locals_expr(value, locals);
+        }
         hir::Stmt::Expr(e) => collect_locals_expr(e, locals),
         hir::Stmt::Loop { body, .. } => collect_locals_block(body, locals),
         hir::Stmt::While {
@@ -158,6 +162,10 @@ fn collect_scratch_types_stmt(
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
             collect_scratch_types_expr(ptr, runtime, out);
+            collect_scratch_types_expr(value, runtime, out);
+        }
+        hir::Stmt::FieldAssign { object, value, .. } => {
+            collect_scratch_types_expr(object, runtime, out);
             collect_scratch_types_expr(value, runtime, out);
         }
         hir::Stmt::Expr(e) => collect_scratch_types_expr(e, runtime, out),
@@ -294,6 +302,10 @@ fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
             collect_dbg_prefixes_expr(ptr, out);
             collect_dbg_prefixes_expr(value, out);
         }
+        hir::Stmt::FieldAssign { object, value, .. } => {
+            collect_dbg_prefixes_expr(object, out);
+            collect_dbg_prefixes_expr(value, out);
+        }
         hir::Stmt::Expr(e) => collect_dbg_prefixes_expr(e, out),
         hir::Stmt::Loop { body, .. } => collect_dbg_prefixes_block(body, out),
         hir::Stmt::While {
@@ -399,6 +411,10 @@ fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
             collect_str_literals_expr(ptr, out);
+            collect_str_literals_expr(value, out);
+        }
+        hir::Stmt::FieldAssign { object, value, .. } => {
+            collect_str_literals_expr(object, out);
             collect_str_literals_expr(value, out);
         }
         hir::Stmt::Expr(e) => collect_str_literals_expr(e, out),

@@ -247,6 +247,32 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             };
             emit_field_store(f, &pointee, 0);
         }
+        hir::Stmt::FieldAssign {
+            object,
+            field,
+            value,
+            ..
+        } => {
+            // Push the struct pointer, look up the field's offset/type, push
+            // the value, then store it into the field.
+            let field_layout = match &object.ty {
+                hir::Type::Struct(id, _) => ctx
+                    .struct_layouts
+                    .get(id)
+                    .and_then(|layout| layout.fields.get(field).cloned()),
+                _ => None,
+            };
+            emit_expr(f, object, ctx)?;
+            match field_layout {
+                Some((offset, ty)) => {
+                    emit_expr(f, value, ctx)?;
+                    emit_field_store(f, &ty, offset);
+                }
+                None => {
+                    f.instruction(&Instruction::Unreachable);
+                }
+            }
+        }
         hir::Stmt::Expr(expr) => {
             emit_expr(f, expr, ctx)?;
             if produces_value(&expr.ty) {

@@ -282,6 +282,13 @@ pub enum Stmt {
         target: Ident,
         value: Expr,
     },
+    /// `object.field = value` — write to a struct field (possibly nested,
+    /// e.g. `a.b.c = value`, where `object` is `a.b`).
+    FieldAssign {
+        object: Expr,
+        field: Ident,
+        value: Expr,
+    },
     /// `*ptr_expr = value` — write through a pointer.
     DerefAssign {
         ptr: Expr,

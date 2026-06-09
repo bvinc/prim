@@ -918,6 +918,55 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            Stmt::FieldAssign {
+                object,
+                field,
+                value,
+                span,
+            } => {
+                let object_ty = self.check_expr(object, locals)?;
+                let (struct_id, type_args) = match object_ty {
+                    Type::Struct(id, args) => (id, args),
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(format!(
+                                "left of `.{} =` must be a struct, found {}",
+                                self.program.interner.resolve(field),
+                                self.type_name(&other)
+                            )),
+                        ));
+                    }
+                };
+                let field_ty = self
+                    .struct_fields
+                    .get(&struct_id)
+                    .and_then(|fields| fields.get(field))
+                    .ok_or_else(|| {
+                        self.error(
+                            *span,
+                            TypeCheckKind::UnknownField {
+                                struct_id,
+                                field: *field,
+                            },
+                        )
+                    })?;
+                let expected = Self::substitute_params_with_slice(field_ty, &type_args);
+                self.apply_expected(value, &expected);
+                let val_ty = self.check_expr(value, locals)?;
+                if self.unify(&expected, &val_ty).is_none() {
+                    let expected_name = self.type_name(&expected);
+                    let found_name = self.type_name(&val_ty);
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: expected_name,
+                            found: found_name,
+                        },
+                    ));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2010,6 +2059,10 @@ impl<'a> Checker<'a> {
             }
             Stmt::DerefAssign { ptr, value, .. } => {
                 self.finalize_expr(ptr);
+                self.finalize_expr(value);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                self.finalize_expr(object);
                 self.finalize_expr(value);
             }
         }

@@ -1,0 +1,18 @@
+import std.io.println_i32
+
+struct Counter { n: i32 }
+struct Pair { a: Counter, b: i32 }
+
+// Struct field assignment, including nested fields and in-place updates.
+fn main() {
+    let mut p = Pair { a = Counter { n = 0 }, b = 100 }
+    p.b = 7
+    p.a.n = 42
+    let mut i = 0
+    while i < 3 {
+        p.a.n = p.a.n + 1
+        i = i + 1
+    }
+    println_i32(p.b)     // 7
+    println_i32(p.a.n)   // 45
+}
