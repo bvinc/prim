@@ -1,0 +1,146 @@
+mod mem
+
+// The raw pointer intrinsics, declared locally rather than imported from
+// std.ptr: std.ptr depends on std.mem (for size_of), so the allocator — which
+// lives in std.mem — cannot import std.ptr without forming a cycle. These are
+// the same @runtime primitives; the allocator only needs the byte-level ones.
+@runtime("prim_rt_ptr_byte_add")
+fn byte_add[T](p: *mut T, n: usize) -> *mut T;
+
+@runtime("prim_rt_ptr_byte_sub")
+fn byte_sub[T](p: *mut T, n: usize) -> *mut T;
+
+@runtime("prim_rt_at")
+fn at[T](base: *mut u8, off: usize) -> *mut T;
+
+// dlmalloc-style allocator, written in Prim.
+//
+// Memory is carved into *chunks*. Every chunk begins with a two-word header
+// and is laid out (wasm32, WORD = 4 bytes) as:
+//
+//   offset 0:  prev_foot   size of the previous chunk, valid only when that
+//                          chunk is free (otherwise these bytes belong to the
+//                          previous chunk's payload)
+//   offset 4:  head        this chunk's size OR'd with the low status bits
+//                          PINUSE (prev chunk in use) and CINUSE (this chunk
+//                          in use)
+//   offset 8:  fd          free list forward link  (only while free)
+//   offset 12: bk          free list back link     (only while free)
+//
+// A chunk pointer points at offset 0; the user payload starts at offset 8
+// (chunk2mem). Sizes are always a multiple of 8, so the low three bits of
+// `head` are free for status flags.
+//
+// The functions below are the chunk vocabulary the allocator is built from —
+// pure header reads/writes and address arithmetic, no policy. They take and
+// return raw `*mut u8` chunk addresses and use at[T] to view the typed header
+// fields without any reinterpret cast.
+
+// ---- layout constants (wasm32) ----
+let WORD: usize = 4usize;
+let TWO_WORDS: usize = 8usize;
+let CHUNK_OVERHEAD: usize = 4usize;
+let MIN_CHUNK_SIZE: usize = 16usize;
+let MIN_REQUEST: usize = 11usize;
+let ALIGN_MASK: usize = 7usize;
+
+// ---- head status bits ----
+let PINUSE: usize = 1usize;
+let CINUSE: usize = 2usize;
+let FLAG_BITS: usize = 7usize;
+
+// ---- header field access ----
+
+fn chunk_head(c: *mut u8) -> usize {
+    *at[usize](c, 4usize)
+}
+
+fn set_chunk_head(c: *mut u8, h: usize) {
+    *at[usize](c, 4usize) = h
+}
+
+fn chunk_prev_foot(c: *mut u8) -> usize {
+    *at[usize](c, 0usize)
+}
+
+fn set_chunk_prev_foot(c: *mut u8, v: usize) {
+    *at[usize](c, 0usize) = v
+}
+
+fn chunk_fd(c: *mut u8) -> *mut u8 {
+    *at[*mut u8](c, 8usize)
+}
+
+fn set_chunk_fd(c: *mut u8, p: *mut u8) {
+    *at[*mut u8](c, 8usize) = p
+}
+
+fn chunk_bk(c: *mut u8) -> *mut u8 {
+    *at[*mut u8](c, 12usize)
+}
+
+fn set_chunk_bk(c: *mut u8, p: *mut u8) {
+    *at[*mut u8](c, 12usize) = p
+}
+
+// ---- derived header reads ----
+
+// Size of this chunk in bytes, with the status flags masked off.
+fn chunksize(c: *mut u8) -> usize {
+    chunk_head(c) & !7usize
+}
+
+// Is this chunk currently allocated?
+fn cinuse(c: *mut u8) -> bool {
+    (chunk_head(c) & 2usize) != 0usize
+}
+
+// Is the physically previous chunk currently allocated?
+fn pinuse(c: *mut u8) -> bool {
+    (chunk_head(c) & 1usize) != 0usize
+}
+
+// ---- chunk <-> payload, and neighbour navigation ----
+
+// Payload pointer for a chunk (what alloc hands back).
+fn chunk2mem(c: *mut u8) -> *mut u8 {
+    byte_add[u8](c, 8usize)
+}
+
+// Recover the chunk header from a payload pointer (what free receives).
+fn mem2chunk(m: *mut u8) -> *mut u8 {
+    byte_sub[u8](m, 8usize)
+}
+
+// The chunk `s` bytes past `c`.
+fn chunk_plus_offset(c: *mut u8, s: usize) -> *mut u8 {
+    byte_add[u8](c, s)
+}
+
+// The physically adjacent chunk that follows `c`.
+fn next_chunk(c: *mut u8) -> *mut u8 {
+    byte_add[u8](c, chunksize(c))
+}
+
+// The physically adjacent chunk that precedes `c` (valid only when that
+// chunk is free, so its size is recorded in this chunk's prev_foot).
+fn prev_chunk(c: *mut u8) -> *mut u8 {
+    byte_sub[u8](c, chunk_prev_foot(c))
+}
+
+// Is the chunk after `c` in use? (Reads the next chunk's PINUSE bit.)
+fn next_pinuse(c: *mut u8) -> bool {
+    pinuse(next_chunk(c))
+}
+
+// ---- request sizing ----
+
+// Round a user request up to the chunk size that will satisfy it: add the
+// one-word overhead, align to 8, and never go below the minimum chunk size.
+fn request2size(req: usize) -> usize {
+    if req < 11usize {
+        16usize
+    } else {
+        (req + 4usize + 7usize) & !7usize
+    }
+}
