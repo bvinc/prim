@@ -1,8 +1,21 @@
 mod string
 
+import std.vec.Vec
+
 @repr("C")
 struct String {
     data: *const u8,
     len: usize,
     cap: usize,
+}
+
+// Build a String from a byte vector. The buffer is handed over as-is (the
+// *mut u8 of the vector becomes the String's *const u8 data), so this is how
+// dynamic text is assembled: push bytes into a Vec[u8], then wrap it.
+fn from_vec(bytes: Vec[u8]) -> String {
+    String {
+        data = bytes.ptr,
+        len = bytes.len,
+        cap = bytes.cap,
+    }
 }

@@ -1,0 +1,19 @@
+import std.io.print_str
+import std.io.println_usize
+import std.vec.new
+import std.vec.push
+import std.string.from_vec
+import std.convert.i32_to_u8_wrapping
+
+// Assemble text at runtime: push bytes into a Vec[u8], wrap it as a String.
+fn main() {
+    let bytes = new[u8]()
+    let mut c = 65i32              // 'A'
+    while c < 70i32 {             // through 'E'
+        push(bytes, i32_to_u8_wrapping(c))
+        c = c + 1
+    }
+    let s = from_vec(bytes)
+    print_str(s)                  // ABCDE
+    println_usize(s.len)          // 5
+}
