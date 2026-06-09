@@ -199,6 +199,13 @@ pub enum RuntimeAbi {
     /// right width. This is how header fields are read out of a raw byte
     /// region without a reinterpret cast.
     At,
+    /// `from_addr[T](a) -> *mut T` — the pointer with numeric address `a`. The
+    /// dual of `PtrAddr` (`*mut T -> usize`) and a no-op at the wasm level (a
+    /// pointer *is* its i32 address). Needed to recover a pointer from integer
+    /// state that can't itself be pointer-typed — e.g. the allocator's root,
+    /// which must live in a `usize` global because globals take a literal init
+    /// and there is no pointer literal.
+    FromAddr,
     /// Heap allocation backed by the bump allocator. `Free` does not reclaim
     /// yet (see std.mem); it exists so call sites can establish ownership
     /// discipline now.
@@ -233,6 +240,7 @@ impl RuntimeAbi {
             "prim_rt_ptr_byte_offset" => Some(Self::PtrByteOffset),
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
             "prim_rt_at" => Some(Self::At),
+            "prim_rt_from_addr" => Some(Self::FromAddr),
             "prim_rt_alloc" => Some(Self::Alloc),
             "prim_rt_free" => Some(Self::Free),
             "prim_rt_conv_noop" => Some(Self::ConvNoop),

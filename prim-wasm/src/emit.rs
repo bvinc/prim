@@ -1081,7 +1081,7 @@ fn emit_runtime_call(
             emit_expr(f, &args[1], ctx)?;
             f.instruction(&Instruction::I32Sub);
         }
-        hir::RuntimeAbi::PtrAddr => {
+        hir::RuntimeAbi::PtrAddr | hir::RuntimeAbi::FromAddr => {
             emit_expr(f, &args[0], ctx)?;
         }
         hir::RuntimeAbi::Alloc => {
