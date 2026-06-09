@@ -5,7 +5,7 @@ struct Pair { a: Counter, b: i32 }
 
 // Struct field assignment, including nested fields and in-place updates.
 fn main() {
-    let mut p = Pair { a = Counter { n = 0 }, b = 100 }
+    let p = Pair { a = Counter { n = 0 }, b = 100 }
     p.b = 7
     p.a.n = 42
     let mut i = 0
