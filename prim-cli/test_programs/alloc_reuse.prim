@@ -1,0 +1,45 @@
+import std.io.println_bool
+import std.mem.alloc
+import std.mem.free
+import std.ptr.addr
+
+// Exercise the dlmalloc allocator's reuse paths. All allocation happens before
+// any println (println allocates a scratch buffer), so the heap state is
+// deterministic. Each check confirms a freed region is handed back out.
+fn main() {
+    // Small reuse via smallbins. The guard keeps `a` away from the top chunk
+    // so freeing it lands in a bin rather than coalescing into the wilderness.
+    let a = alloc(32usize)
+    let g1 = alloc(32usize)
+    free(a)
+    let b = alloc(32usize)
+    let r1 = addr[u8](a) == addr[u8](b) // reused: true
+
+    // Large reuse via treebins (chunk size >= 256).
+    let c = alloc(2000usize)
+    let g2 = alloc(32usize)
+    free(c)
+    let d = alloc(2000usize)
+    let r2 = addr[u8](c) == addr[u8](d) // reused: true
+
+    // Forward coalescing: x and y are adjacent; freeing y then x merges them
+    // into one free chunk, which a larger request then reuses at x's address.
+    let x = alloc(64usize)
+    let y = alloc(64usize)
+    let z = alloc(64usize)
+    free(y)
+    free(x)
+    let w = alloc(120usize)
+    let r3 = addr[u8](w) == addr[u8](x) // coalesced reuse: true
+
+    println_bool(r1)
+    println_bool(r2)
+    println_bool(r3)
+
+    free(b)
+    free(d)
+    free(g1)
+    free(g2)
+    free(z)
+    free(w)
+}

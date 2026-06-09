@@ -3,7 +3,7 @@ mod mem
 // The raw pointer intrinsics, declared locally rather than imported from
 // std.ptr: std.ptr depends on std.mem (for size_of), so the allocator — which
 // lives in std.mem — cannot import std.ptr without forming a cycle. These are
-// the same @runtime primitives; the allocator only needs the byte-level ones.
+// the same @runtime primitives the rest of std uses.
 @runtime("prim_rt_ptr_byte_add")
 fn byte_add[T](p: *mut T, n: usize) -> *mut T;
 
@@ -13,43 +13,110 @@ fn byte_sub[T](p: *mut T, n: usize) -> *mut T;
 @runtime("prim_rt_at")
 fn at[T](base: *mut u8, off: usize) -> *mut T;
 
+@runtime("prim_rt_from_addr")
+fn from_addr[T](a: usize) -> *mut T;
+
+@runtime("prim_rt_ptr_addr")
+fn addr[T](p: *mut T) -> usize;
+
+@runtime("prim_rt_memory_grow")
+fn mem_grow(pages: usize) -> isize;
+
+@runtime("prim_rt_memory_fill")
+fn mem_fill(dst: *mut u8, val: u8, n: usize);
+
+@runtime("prim_rt_conv_noop")
+fn isize_to_usize(x: isize) -> usize;
+
+@runtime("prim_rt_ctz_u32")
+fn ctz(x: usize) -> usize;
+
+@runtime("prim_rt_clz_u32")
+fn clz(x: usize) -> usize;
+
+// ============================================================================
 // dlmalloc-style allocator, written in Prim.
 //
 // Memory is carved into *chunks*. Every chunk begins with a two-word header
 // and is laid out (wasm32, WORD = 4 bytes) as:
 //
 //   offset 0:  prev_foot   size of the previous chunk, valid only when that
-//                          chunk is free (otherwise these bytes belong to the
-//                          previous chunk's payload)
-//   offset 4:  head        this chunk's size OR'd with the low status bits
-//                          PINUSE (prev chunk in use) and CINUSE (this chunk
-//                          in use)
-//   offset 8:  fd          free list forward link  (only while free)
-//   offset 12: bk          free list back link     (only while free)
+//                          chunk is free
+//   offset 4:  head        this chunk's size OR'd with status bits PINUSE
+//                          (prev chunk in use) and CINUSE (this chunk in use)
+//   offset 8:  fd          free-list forward link   (only while free)
+//   offset 12: bk          free-list back link      (only while free)
+//
+// A chunk large enough for a treebin additionally uses:
+//   offset 16: child0      tree left child
+//   offset 20: child1      tree right child
+//   offset 24: parent      tree parent (or the treebin slot, for a root)
+//   offset 28: index       treebin index
 //
 // A chunk pointer points at offset 0; the user payload starts at offset 8
 // (chunk2mem). Sizes are always a multiple of 8, so the low three bits of
 // `head` are free for status flags.
 //
-// The functions below are the chunk vocabulary the allocator is built from —
-// pure header reads/writes and address arithmetic, no policy. They take and
-// return raw `*mut u8` chunk addresses and use at[T] to view the typed header
-// fields without any reinterpret cast.
+// Free chunks are kept in segregated lists. Small sizes (< 256 bytes) go in
+// one of 32 exact-size circular lists (smallbins). Larger sizes go in a
+// bitwise digital tree (treebins), indexed so that a best fit is an O(log n)
+// descent. A `smallmap`/`treemap` bitmap records which bins are non-empty. A
+// designated victim (dv) caches the last split remainder, and a top chunk is
+// the wilderness extended from linear memory via memory.grow.
+//
+// Single contiguous segment: in this runtime the allocator is the only thing
+// that grows linear memory (the scheduler uses wasm continuations, not the
+// heap), and memory.grow appends pages, so the heap is one contiguous region
+// that only ever extends. That removes dlmalloc's multi-segment and mmap
+// machinery. Footers and the runtime security checks are likewise omitted.
+// ============================================================================
 
-// ---- layout constants (wasm32) ----
-let WORD: usize = 4usize;
-let TWO_WORDS: usize = 8usize;
-let CHUNK_OVERHEAD: usize = 4usize;
+// ---- layout / status constants (wasm32) ----
 let MIN_CHUNK_SIZE: usize = 16usize;
-let MIN_REQUEST: usize = 11usize;
-let ALIGN_MASK: usize = 7usize;
-
-// ---- head status bits ----
+let MIN_LARGE_SIZE: usize = 256usize;
 let PINUSE: usize = 1usize;
 let CINUSE: usize = 2usize;
-let FLAG_BITS: usize = 7usize;
+let INUSE_BITS: usize = 3usize;
+let PAGE: usize = 65536usize;
 
-// ---- header field access ----
+// ---- malloc_state field offsets ----
+let M_SMALLMAP: usize = 0usize;
+let M_TREEMAP: usize = 4usize;
+let M_DVSIZE: usize = 8usize;
+let M_TOPSIZE: usize = 12usize;
+let M_DV: usize = 16usize;
+let M_TOP: usize = 20usize;
+let M_SEGBASE: usize = 24usize;
+let M_SEGSIZE: usize = 28usize;
+let M_SMALLBINS: usize = 32usize;
+// 32 smallbins * 16 bytes = 512, so treebins start at 32 + 512 = 544.
+let M_TREEBINS: usize = 544usize;
+// 32 treebin roots * 4 bytes = 128, so the state is 544 + 128 = 672 bytes.
+let MSTATE_SIZE: usize = 672usize;
+
+// Root of the allocator state: the address of malloc_state, or 0 before the
+// first allocation initializes it. Must be a usize (globals take a literal
+// initializer and there is no pointer literal); from_addr recovers the
+// pointer.
+let mut GM: usize = 0usize;
+
+// ---- tiny pointer helpers ----
+
+fn null8() -> *mut u8 {
+    from_addr[u8](0usize)
+}
+
+fn is_null(p: *mut u8) -> bool {
+    addr[u8](p) == 0usize
+}
+
+fn ptr_eq(a: *mut u8, b: *mut u8) -> bool {
+    addr[u8](a) == addr[u8](b)
+}
+
+// ============================================================================
+// Chunk vocabulary — pure header reads/writes and address arithmetic.
+// ============================================================================
 
 fn chunk_head(c: *mut u8) -> usize {
     *at[usize](c, 4usize)
@@ -83,8 +150,6 @@ fn set_chunk_bk(c: *mut u8, p: *mut u8) {
     *at[*mut u8](c, 12usize) = p
 }
 
-// ---- derived header reads ----
-
 // Size of this chunk in bytes, with the status flags masked off.
 fn chunksize(c: *mut u8) -> usize {
     chunk_head(c) & !7usize
@@ -99,8 +164,6 @@ fn cinuse(c: *mut u8) -> bool {
 fn pinuse(c: *mut u8) -> bool {
     (chunk_head(c) & 1usize) != 0usize
 }
-
-// ---- chunk <-> payload, and neighbour navigation ----
 
 // Payload pointer for a chunk (what alloc hands back).
 fn chunk2mem(c: *mut u8) -> *mut u8 {
@@ -128,13 +191,6 @@ fn prev_chunk(c: *mut u8) -> *mut u8 {
     byte_sub[u8](c, chunk_prev_foot(c))
 }
 
-// Is the chunk after `c` in use? (Reads the next chunk's PINUSE bit.)
-fn next_pinuse(c: *mut u8) -> bool {
-    pinuse(next_chunk(c))
-}
-
-// ---- request sizing ----
-
 // Round a user request up to the chunk size that will satisfy it: add the
 // one-word overhead, align to 8, and never go below the minimum chunk size.
 fn request2size(req: usize) -> usize {
@@ -143,4 +199,721 @@ fn request2size(req: usize) -> usize {
     } else {
         (req + 4usize + 7usize) & !7usize
     }
+}
+
+// ---- header status setters ----
+
+fn set_foot(p: *mut u8, s: usize) {
+    set_chunk_prev_foot(chunk_plus_offset(p, s), s)
+}
+
+fn clear_pinuse(p: *mut u8) {
+    set_chunk_head(p, chunk_head(p) & !1usize)
+}
+
+// Mark p free with size s and PINUSE set, recording its foot for the next
+// chunk's backward coalescing.
+fn set_free_chunk(p: *mut u8, s: usize) {
+    set_chunk_head(p, s | 1usize)
+    set_foot(p, s)
+}
+
+// Mark p free with size s and clear the following chunk's PINUSE bit.
+fn set_free_with_pinuse(p: *mut u8, s: usize, n: *mut u8) {
+    clear_pinuse(n)
+    set_free_chunk(p, s)
+}
+
+// Mark p in use, size s, prev known in use. Does not touch the next chunk.
+fn set_inuse_pinuse(p: *mut u8, s: usize) {
+    set_chunk_head(p, s | 3usize)
+}
+
+// Mark p in use, size s, prev known in use, and set the next chunk's PINUSE.
+fn set_inuse_and_pinuse(p: *mut u8, s: usize) {
+    set_chunk_head(p, s | 3usize)
+    let n = chunk_plus_offset(p, s)
+    set_chunk_head(n, chunk_head(n) | 1usize)
+}
+
+// ============================================================================
+// malloc_state accessors
+// ============================================================================
+
+fn ms() -> *mut u8 {
+    from_addr[u8](GM)
+}
+
+fn smallmap() -> usize {
+    *at[usize](ms(), 0usize)
+}
+fn set_smallmap(v: usize) {
+    *at[usize](ms(), 0usize) = v
+}
+fn treemap() -> usize {
+    *at[usize](ms(), 4usize)
+}
+fn set_treemap(v: usize) {
+    *at[usize](ms(), 4usize) = v
+}
+fn dvsize() -> usize {
+    *at[usize](ms(), 8usize)
+}
+fn set_dvsize(v: usize) {
+    *at[usize](ms(), 8usize) = v
+}
+fn topsize() -> usize {
+    *at[usize](ms(), 12usize)
+}
+fn set_topsize(v: usize) {
+    *at[usize](ms(), 12usize) = v
+}
+fn dv() -> *mut u8 {
+    *at[*mut u8](ms(), 16usize)
+}
+fn set_dv(p: *mut u8) {
+    *at[*mut u8](ms(), 16usize) = p
+}
+fn top() -> *mut u8 {
+    *at[*mut u8](ms(), 20usize)
+}
+fn set_top(p: *mut u8) {
+    *at[*mut u8](ms(), 20usize) = p
+}
+fn segsize() -> usize {
+    *at[usize](ms(), 28usize)
+}
+fn set_segsize(v: usize) {
+    *at[usize](ms(), 28usize) = v
+}
+
+// smallbin i is a sentinel "chunk" whose fd/bk are the list head/tail.
+fn smallbin_at(i: usize) -> *mut u8 {
+    byte_add[u8](ms(), 32usize + i * 16usize)
+}
+
+fn treebin(i: usize) -> *mut u8 {
+    *at[*mut u8](ms(), 544usize + i * 4usize)
+}
+fn set_treebin(i: usize, p: *mut u8) {
+    *at[*mut u8](ms(), 544usize + i * 4usize) = p
+}
+
+// ---- bin bitmap ----
+
+fn smallmap_marked(i: usize) -> bool {
+    (smallmap() & (1usize << i)) != 0usize
+}
+fn mark_smallmap(i: usize) {
+    set_smallmap(smallmap() | (1usize << i))
+}
+fn clear_smallmap(i: usize) {
+    set_smallmap(smallmap() & !(1usize << i))
+}
+fn treemap_marked(i: usize) -> bool {
+    (treemap() & (1usize << i)) != 0usize
+}
+fn mark_treemap(i: usize) {
+    set_treemap(treemap() | (1usize << i))
+}
+fn clear_treemap(i: usize) {
+    set_treemap(treemap() & !(1usize << i))
+}
+
+fn is_small(s: usize) -> bool {
+    s < 256usize
+}
+fn small_index(s: usize) -> usize {
+    s >> 3usize
+}
+fn small_index2size(i: usize) -> usize {
+    i << 3usize
+}
+
+// ============================================================================
+// tree chunk accessors
+// ============================================================================
+
+fn tchild(p: *mut u8, idx: usize) -> *mut u8 {
+    *at[*mut u8](p, 16usize + idx * 4usize)
+}
+fn set_tchild(p: *mut u8, idx: usize, c: *mut u8) {
+    *at[*mut u8](p, 16usize + idx * 4usize) = c
+}
+fn tparent(p: *mut u8) -> *mut u8 {
+    *at[*mut u8](p, 24usize)
+}
+fn set_tparent(p: *mut u8, c: *mut u8) {
+    *at[*mut u8](p, 24usize) = c
+}
+fn tindex(p: *mut u8) -> usize {
+    *at[usize](p, 28usize)
+}
+fn set_tindex(p: *mut u8, i: usize) {
+    *at[usize](p, 28usize) = i
+}
+
+// The leftmost existing child of a tree node, or null.
+fn leftmost_child(t: *mut u8) -> *mut u8 {
+    let c0 = tchild(t, 0usize)
+    if !is_null(c0) {
+        c0
+    } else {
+        tchild(t, 1usize)
+    }
+}
+
+// Treebin index for a chunk size. Splits each power-of-two range into two
+// bins by the next bit down, matching dlmalloc's compute_tree_index.
+fn compute_tree_index(s: usize) -> usize {
+    let x = s >> 8usize
+    if x == 0usize {
+        0usize
+    } else if x > 65535usize {
+        31usize
+    } else {
+        let k = 31usize - clz(x)
+        let hi = k << 1usize
+        let lo = (s >> (k + 7usize)) & 1usize
+        hi | lo
+    }
+}
+
+// Left shift applied to a size when descending the tree for index `i`, so the
+// relevant size bit is at the top of the word at each level.
+fn leftshift_for_tree_index(i: usize) -> usize {
+    if i == 31usize {
+        0usize
+    } else {
+        25usize - (i >> 1usize)
+    }
+}
+
+// ============================================================================
+// free-list insert / unlink
+// ============================================================================
+
+fn insert_small_chunk(p: *mut u8, s: usize) {
+    let i = small_index(s)
+    let b = smallbin_at(i)
+    let mut fwd = b
+    if !smallmap_marked(i) {
+        mark_smallmap(i)
+    } else {
+        fwd = chunk_fd(b)
+    }
+    set_chunk_fd(b, p)
+    set_chunk_bk(fwd, p)
+    set_chunk_fd(p, fwd)
+    set_chunk_bk(p, b)
+}
+
+fn unlink_small_chunk(p: *mut u8, s: usize) {
+    let fwd = chunk_fd(p)
+    let bck = chunk_bk(p)
+    let i = small_index(s)
+    if ptr_eq(fwd, bck) {
+        clear_smallmap(i)
+    } else {
+        set_chunk_bk(fwd, bck)
+        set_chunk_fd(bck, fwd)
+    }
+}
+
+// Remove the first real chunk p from smallbin i (b is the sentinel).
+fn unlink_first_small_chunk(b: *mut u8, p: *mut u8, i: usize) {
+    let fwd = chunk_fd(p)
+    if ptr_eq(b, fwd) {
+        clear_smallmap(i)
+    } else {
+        set_chunk_fd(b, fwd)
+        set_chunk_bk(fwd, b)
+    }
+}
+
+fn insert_large_chunk(x: *mut u8, s: usize) {
+    let i = compute_tree_index(s)
+    set_tindex(x, i)
+    set_tchild(x, 0usize, null8())
+    set_tchild(x, 1usize, null8())
+    if !treemap_marked(i) {
+        mark_treemap(i)
+        set_treebin(i, x)
+        // Root: parent points at the (non-null) treebin slot sentinel; its
+        // exact value is never dereferenced, only tested for non-null.
+        set_tparent(x, byte_add[u8](ms(), 544usize + i * 4usize))
+        set_chunk_fd(x, x)
+        set_chunk_bk(x, x)
+    } else {
+        let mut t = treebin(i)
+        let mut k = s << leftshift_for_tree_index(i)
+        let mut placed = false
+        while !placed {
+            if chunksize(t) != s {
+                let dir = (k >> 31usize) & 1usize
+                let c = tchild(t, dir)
+                k = k << 1usize
+                if !is_null(c) {
+                    t = c
+                } else {
+                    set_tchild(t, dir, x)
+                    set_tparent(x, t)
+                    set_chunk_fd(x, x)
+                    set_chunk_bk(x, x)
+                    placed = true
+                }
+            } else {
+                // Same size: splice onto t's fd/bk list, not the tree.
+                let f = chunk_fd(t)
+                set_chunk_fd(t, x)
+                set_chunk_bk(f, x)
+                set_chunk_fd(x, f)
+                set_chunk_bk(x, t)
+                set_tparent(x, null8())
+                placed = true
+            }
+        }
+    }
+}
+
+fn unlink_large_chunk(x: *mut u8) {
+    let xp = tparent(x)
+    let mut r = null8()
+    if !ptr_eq(chunk_bk(x), x) {
+        // x has same-size siblings on its fd/bk list; relink around it and
+        // promote x->bk into x's structural tree slot.
+        let f = chunk_fd(x)
+        r = chunk_bk(x)
+        set_chunk_bk(f, r)
+        set_chunk_fd(r, f)
+    } else {
+        // No siblings: find a replacement among descendants (rightmost path).
+        let mut rp = tchild(x, 1usize)
+        if !is_null(rp) {
+            r = rp
+        } else {
+            rp = tchild(x, 0usize)
+            if !is_null(rp) {
+                r = rp
+            }
+        }
+        if !is_null(r) {
+            // Walk to the deepest child, detach it, use it as replacement.
+            let mut cont = true
+            while cont {
+                let c1 = tchild(r, 1usize)
+                if !is_null(c1) {
+                    r = c1
+                } else {
+                    let c0 = tchild(r, 0usize)
+                    if !is_null(c0) {
+                        r = c0
+                    } else {
+                        cont = false
+                    }
+                }
+            }
+            detach_replacement(r)
+        }
+    }
+    if !is_null(xp) {
+        let i = tindex(x)
+        if ptr_eq(treebin(i), x) {
+            set_treebin(i, r)
+            if is_null(r) {
+                clear_treemap(i)
+            }
+        } else if ptr_eq(tchild(xp, 0usize), x) {
+            set_tchild(xp, 0usize, r)
+        } else {
+            set_tchild(xp, 1usize, r)
+        }
+        if !is_null(r) {
+            set_tparent(r, xp)
+            let c0 = tchild(x, 0usize)
+            if !is_null(c0) {
+                set_tchild(r, 0usize, c0)
+                set_tparent(c0, r)
+            }
+            let c1 = tchild(x, 1usize)
+            if !is_null(c1) {
+                set_tchild(r, 1usize, c1)
+                set_tparent(c1, r)
+            }
+        }
+    }
+}
+
+// Detach the chosen replacement node r from its parent (it is a leaf along
+// the rightmost descent, so it has no children to rehome).
+fn detach_replacement(r: *mut u8) {
+    let rp = tparent(r)
+    if !is_null(rp) {
+        if ptr_eq(tchild(rp, 0usize), r) {
+            set_tchild(rp, 0usize, null8())
+        } else {
+            set_tchild(rp, 1usize, null8())
+        }
+    }
+}
+
+fn insert_chunk(p: *mut u8, s: usize) {
+    if is_small(s) {
+        insert_small_chunk(p, s)
+    } else {
+        insert_large_chunk(p, s)
+    }
+}
+
+fn unlink_chunk(p: *mut u8, s: usize) {
+    if is_small(s) {
+        unlink_small_chunk(p, s)
+    } else {
+        unlink_large_chunk(p)
+    }
+}
+
+// dv (designated victim) is always a small chunk; on replacement it goes
+// back into the smallbins.
+fn replace_dv(p: *mut u8, s: usize) {
+    let old = dvsize()
+    if old != 0usize {
+        insert_small_chunk(dv(), old)
+    }
+    set_dvsize(s)
+    set_dv(p)
+}
+
+// ============================================================================
+// initialization
+// ============================================================================
+
+fn init_mstate() {
+    // Initial heap: 4 pages (256 KiB). malloc_state takes the first 672 bytes;
+    // the rest becomes the top chunk.
+    let pages = 4usize
+    let prev = mem_grow(pages)
+    let base = isize_to_usize(prev) * 65536usize
+    GM = base
+    mem_fill(from_addr[u8](base), 0u8, 672usize)
+
+    // Empty every smallbin: its sentinel's fd/bk point at itself.
+    let mut i = 0usize
+    while i < 32usize {
+        let b = smallbin_at(i)
+        set_chunk_fd(b, b)
+        set_chunk_bk(b, b)
+        i = i + 1usize
+    }
+
+    let total = pages * 65536usize
+    set_segsize(total)
+    set_dv(null8())
+    set_dvsize(0usize)
+
+    let topstart = base + 672usize
+    let t = from_addr[u8](topstart)
+    set_top(t)
+    let tsize = total - 672usize
+    set_topsize(tsize)
+    set_chunk_head(t, tsize | 1usize)
+}
+
+fn init_if_needed() {
+    if GM == 0usize {
+        init_mstate()
+    }
+}
+
+// ============================================================================
+// growth and the three allocation sources (dv, top, sys)
+// ============================================================================
+
+fn alloc_from_top(nb: usize) -> *mut u8 {
+    let p = top()
+    let rsize = topsize() - nb
+    set_topsize(rsize)
+    let r = chunk_plus_offset(p, nb)
+    set_top(r)
+    set_chunk_head(r, rsize | 1usize)
+    set_inuse_pinuse(p, nb)
+    chunk2mem(p)
+}
+
+// Grow linear memory and extend the (contiguous) top chunk, then serve nb.
+fn sys_alloc(nb: usize) -> *mut u8 {
+    let need = nb + 16usize
+    let have = topsize()
+    let deficit = need - have
+    let pages = (deficit + 65535usize) / 65536usize
+    let prev = mem_grow(pages)
+    if prev < 0isize {
+        return null8()
+    }
+    let added = pages * 65536usize
+    set_segsize(segsize() + added)
+    set_topsize(topsize() + added)
+    set_chunk_head(top(), topsize() | 1usize)
+    alloc_from_top(nb)
+}
+
+fn alloc_from_dv(nb: usize) -> *mut u8 {
+    let p = dv()
+    let dvs = dvsize()
+    let rsize = dvs - nb
+    if rsize >= 16usize {
+        let r = chunk_plus_offset(p, nb)
+        set_dv(r)
+        set_dvsize(rsize)
+        set_free_chunk(r, rsize)
+        set_inuse_pinuse(p, nb)
+    } else {
+        set_dvsize(0usize)
+        set_dv(null8())
+        set_inuse_and_pinuse(p, dvs)
+    }
+    chunk2mem(p)
+}
+
+// ============================================================================
+// tree allocation
+// ============================================================================
+
+// Smallest tree chunk, used to satisfy a small request when smallbins and dv
+// can't and the tree is non-empty.
+fn tmalloc_small(nb: usize) -> *mut u8 {
+    let i = ctz(treemap())
+    let mut t = treebin(i)
+    let mut v = t
+    let mut rsize = chunksize(t) - nb
+    let mut cur = leftmost_child(t)
+    while !is_null(cur) {
+        let trem = chunksize(cur) - nb
+        if trem < rsize {
+            rsize = trem
+            v = cur
+        }
+        cur = leftmost_child(cur)
+    }
+    let r = chunk_plus_offset(v, nb)
+    unlink_large_chunk(v)
+    if rsize < 16usize {
+        set_inuse_and_pinuse(v, rsize + nb)
+    } else {
+        set_inuse_pinuse(v, nb)
+        set_free_chunk(r, rsize)
+        replace_dv(r, rsize)
+    }
+    chunk2mem(v)
+}
+
+// Best fit for a large request via a tree descent, with a fallback to the
+// smallest larger non-empty treebin.
+fn tmalloc_large(nb: usize) -> *mut u8 {
+    let mut v = null8()
+    let mut rsize = 0usize - nb
+    let idx = compute_tree_index(nb)
+    let mut t = treebin(idx)
+
+    if !is_null(t) {
+        let mut sizebits = nb << leftshift_for_tree_index(idx)
+        let mut rst = null8()
+        let mut go = true
+        while go {
+            let trem = chunksize(t) - nb
+            if trem < rsize {
+                rsize = trem
+                v = t
+                if rsize == 0usize {
+                    go = false
+                }
+            }
+            if go {
+                let rt = tchild(t, 1usize)
+                let dir = (sizebits >> 31usize) & 1usize
+                t = tchild(t, dir)
+                if !is_null(rt) && !ptr_eq(rt, t) {
+                    rst = rt
+                }
+                if is_null(t) {
+                    t = rst
+                    go = false
+                } else {
+                    sizebits = sizebits << 1usize
+                }
+            }
+        }
+    }
+
+    // Nothing in idx's tree: start from the smallest larger non-empty bin.
+    if is_null(t) && is_null(v) {
+        let leftbits = treemap() & !((1usize << (idx + 1usize)) - 1usize)
+        if leftbits != 0usize {
+            t = treebin(ctz(leftbits))
+        }
+    }
+
+    // Descend leftmost through the fallback tree for the smallest fit.
+    while !is_null(t) {
+        let trem = chunksize(t) - nb
+        if trem < rsize {
+            rsize = trem
+            v = t
+        }
+        t = leftmost_child(t)
+    }
+
+    if is_null(v) {
+        return null8()
+    }
+    let r = chunk_plus_offset(v, nb)
+    unlink_large_chunk(v)
+    if rsize < 16usize {
+        set_inuse_and_pinuse(v, rsize + nb)
+    } else {
+        set_inuse_pinuse(v, nb)
+        set_free_chunk(r, rsize)
+        insert_chunk(r, rsize)
+    }
+    chunk2mem(v)
+}
+
+// ============================================================================
+// public API: alloc / free and the typed conveniences
+// ============================================================================
+
+// alloc(n) — a pointer to n freshly allocated bytes (8-byte aligned), or null
+// if memory is exhausted.
+fn alloc(nbytes: usize) -> *mut u8 {
+    init_if_needed()
+    let nb = request2size(nbytes)
+
+    if nbytes < 245usize {
+        // Small request: try the exact bin and its immediate neighbour.
+        let idx = small_index(nb)
+        let smallbits = smallmap() >> idx
+        if (smallbits & 3usize) != 0usize {
+            let mut i = idx
+            if (smallbits & 1usize) == 0usize {
+                i = idx + 1usize
+            }
+            let b = smallbin_at(i)
+            let p = chunk_fd(b)
+            unlink_first_small_chunk(b, p, i)
+            set_inuse_and_pinuse(p, small_index2size(i))
+            return chunk2mem(p)
+        }
+        if nb > dvsize() {
+            if smallbits != 0usize {
+                // A larger smallbin is non-empty: take its first chunk, split.
+                let leftbits = smallmap() & !((1usize << idx) - 1usize)
+                let i = ctz(leftbits)
+                let b = smallbin_at(i)
+                let p = chunk_fd(b)
+                unlink_first_small_chunk(b, p, i)
+                let bsize = small_index2size(i)
+                let rsize = bsize - nb
+                if rsize < 16usize {
+                    set_inuse_and_pinuse(p, bsize)
+                } else {
+                    set_inuse_pinuse(p, nb)
+                    let r = chunk_plus_offset(p, nb)
+                    set_free_chunk(r, rsize)
+                    replace_dv(r, rsize)
+                }
+                return chunk2mem(p)
+            } else if treemap() != 0usize {
+                let mem = tmalloc_small(nb)
+                if !is_null(mem) {
+                    return mem
+                }
+            }
+        }
+    } else if treemap() != 0usize {
+        let mem = tmalloc_large(nb)
+        if !is_null(mem) {
+            return mem
+        }
+    }
+
+    if nb <= dvsize() {
+        return alloc_from_dv(nb)
+    }
+    if nb < topsize() {
+        return alloc_from_top(nb)
+    }
+    sys_alloc(nb)
+}
+
+// free(mem) — release a prior allocation, coalescing with free neighbours.
+fn free(mem: *mut u8) {
+    if is_null(mem) {
+        return
+    }
+    let mut p = mem2chunk(mem)
+    let mut psize = chunksize(p)
+    let next = chunk_plus_offset(p, psize)
+
+    // Coalesce backward into the previous chunk if it is free.
+    if !pinuse(p) {
+        let prevsize = chunk_prev_foot(p)
+        let prev = byte_sub[u8](p, prevsize)
+        psize = psize + prevsize
+        p = prev
+        if !ptr_eq(p, dv()) {
+            unlink_chunk(p, prevsize)
+        } else if (chunk_head(next) & 3usize) == 3usize {
+            // prev is dv and next is fully in use: just grow dv.
+            set_dvsize(psize)
+            set_free_with_pinuse(p, psize, next)
+            return
+        }
+    }
+
+    // Coalesce forward.
+    if !cinuse(next) {
+        if ptr_eq(next, top()) {
+            let tsize = topsize() + psize
+            set_topsize(tsize)
+            set_top(p)
+            set_chunk_head(p, tsize | 1usize)
+            if ptr_eq(p, dv()) {
+                set_dv(null8())
+                set_dvsize(0usize)
+            }
+            return
+        } else if ptr_eq(next, dv()) {
+            let dsize = dvsize() + psize
+            set_dvsize(dsize)
+            set_dv(p)
+            set_free_chunk(p, dsize)
+            return
+        } else {
+            let nsize = chunksize(next)
+            psize = psize + nsize
+            unlink_chunk(next, nsize)
+            set_free_chunk(p, psize)
+            if ptr_eq(p, dv()) {
+                set_dvsize(psize)
+                return
+            }
+        }
+    } else {
+        set_free_with_pinuse(p, psize, next)
+    }
+    insert_chunk(p, psize)
+}
+
+// Typed allocation conveniences. at[T] views the fresh bytes as T; dealloc
+// drops back to a raw pointer (from_addr of the address) to free.
+fn alloc_bytes[T](n: usize) -> *mut T {
+    at[T](alloc(n), 0usize)
+}
+
+fn dealloc[T](p: *mut T) {
+    free(from_addr[u8](addr[T](p)))
+}
+
+fn alloc_array[T](count: usize) -> *mut T {
+    alloc_bytes[T](count * size_of[T]())
 }

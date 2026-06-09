@@ -2,8 +2,13 @@ import std.io.println_isize
 import std.wasm.memory.grow
 
 fn main() {
-    // Module starts with 1 page. memory.grow returns the previous count.
-    println_isize(grow(0usize))   // 1
-    println_isize(grow(2usize))   // 1
-    println_isize(grow(0usize))   // 3
+    // memory.grow returns the previous page count and appends `pages` pages.
+    // Capture all three results up front: println itself allocates (which can
+    // grow memory), so we must measure before any printing. Deltas are checked
+    // rather than absolute counts, which depend on the allocator's own growth.
+    let a = grow(0usize) // current page count
+    let b = grow(2usize) // == a, and grows by 2
+    let c = grow(0usize) // == a + 2
+    println_isize(b - a) // 0
+    println_isize(c - a) // 2
 }

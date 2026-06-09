@@ -1,0 +1,42 @@
+import std.io.println_usize
+import std.io.println_bool
+import std.mem.alloc
+import std.mem.free
+import std.ptr.at
+
+// Allocate well past the initial 4-page heap to force memory growth via
+// sys_alloc, writing a distinct sentinel into each block and reading it back
+// to confirm the blocks are real, distinct, and survive growth. Keeping every
+// block live (no frees) guarantees fresh memory each time.
+fn main() {
+    let n = 400usize
+    let mut blocks = alloc(n * 4usize) // array of n block pointers (as usize)
+    let mut i = 0usize
+    while i < n {
+        // 4096 bytes each * 400 = 1.6 MB, far beyond the 256 KiB initial heap.
+        let p = alloc(4096usize)
+        *at[usize](p, 0usize) = i * 7usize + 1usize // sentinel at start
+        *at[usize](p, 4092usize) = i * 13usize + 2usize // sentinel at end
+        *at[usize](blocks, i * 4usize) = i // remember nothing fancy; recompute
+        *at[*mut u8](blocks, i * 4usize) = p
+        i = i + 1usize
+    }
+
+    // Verify every block still holds its sentinels.
+    let mut ok = true
+    i = 0usize
+    while i < n {
+        let p = *at[*mut u8](blocks, i * 4usize)
+        let start = *at[usize](p, 0usize)
+        let end = *at[usize](p, 4092usize)
+        if start != i * 7usize + 1usize {
+            ok = false
+        }
+        if end != i * 13usize + 2usize {
+            ok = false
+        }
+        i = i + 1usize
+    }
+    println_bool(ok) // true: all sentinels intact across growth
+    println_usize(n) // 400
+}

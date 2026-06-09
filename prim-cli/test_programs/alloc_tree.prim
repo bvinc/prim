@@ -1,0 +1,59 @@
+import std.io.println_bool
+import std.io.println_usize
+import std.mem.alloc
+import std.mem.free
+import std.ptr.at
+
+// Stress the treebins (large free chunks) and unlink_large_chunk's tree
+// rebalancing. Each large block is separated by a live guard so that freeing
+// it cannot coalesce with a neighbour — it must go into a treebin, building
+// trees with varied sizes and same-size sibling lists. The blocks are then
+// freed in a scrambled order (exercising root/child/sibling removal) and the
+// space reallocated and checked.
+fn main() {
+    let k = 40usize
+    let big = alloc(k * 4usize) // table of block pointers
+
+    // Allocate varied large blocks, each followed by a small live guard.
+    let mut i = 0usize
+    while i < k {
+        let sz = 260usize + (i % 8usize) * 64usize // 260..708, repeats -> siblings
+        let p = alloc(sz)
+        *at[usize](p, 0usize) = i * 9usize + 1usize
+        *at[*mut u8](big, i * 4usize) = p
+        let guard = alloc(16usize)
+        *at[usize](guard, 0usize) = 7usize // keep guard live and written
+        i = i + 1usize
+    }
+
+    // Free in a scrambled order: stride 13 (coprime with 40) hits every slot.
+    let mut j = 0usize
+    while j < k {
+        let idx = (j * 13usize) % k
+        free(*at[*mut u8](big, idx * 4usize))
+        j = j + 1usize
+    }
+
+    // Reallocate the same sizes; they should be served from the treebins.
+    // Write and read back a fresh sentinel to confirm the memory is usable.
+    let mut ok = true
+    i = 0usize
+    while i < k {
+        let sz = 260usize + (i % 8usize) * 64usize
+        let p = alloc(sz)
+        *at[usize](p, 0usize) = i * 5usize + 3usize
+        *at[*mut u8](big, i * 4usize) = p
+        i = i + 1usize
+    }
+    i = 0usize
+    while i < k {
+        let p = *at[*mut u8](big, i * 4usize)
+        if *at[usize](p, 0usize) != i * 5usize + 3usize {
+            ok = false
+        }
+        i = i + 1usize
+    }
+
+    println_bool(ok) // true
+    println_usize(k) // 40
+}
