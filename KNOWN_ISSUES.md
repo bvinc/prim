@@ -13,11 +13,6 @@ later feature).
 
 ## Deferred design
 
-- **`free` does not reclaim memory.** The allocator is a bump allocator that
-  grows linear memory via `memory.grow`; `free` is a no-op. Vec and String leak
-  their old buffers on regrow. A real free-list allocator (or ownership-driven
-  drop) is the flagship remaining runtime work.
-
 - **`*const u8` read/write friction.** There's no ergonomic way to read/write
   through a `*const` pointer, which blocks a richer `String` API (push_str,
   concat, eq). Options: add `*const` read helpers, or make `String.data` a
