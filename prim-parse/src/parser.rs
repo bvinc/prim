@@ -1280,7 +1280,11 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Type::Struct(name, type_args))
             }
-            TokenKind::UnaryStar => {
+            // A `*` in type position is always a pointer. The tokenizer emits
+            // `UnaryStar` when spacing disambiguates, but `Star` (infix
+            // multiply) inside e.g. a turbofish `at[*mut u8]`; both mean the
+            // same thing here.
+            TokenKind::UnaryStar | TokenKind::Star => {
                 self.advance(); // consume '*'
                 let mutable = match self.peek_kind() {
                     Some(TokenKind::Const) => {
