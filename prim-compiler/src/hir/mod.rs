@@ -193,6 +193,12 @@ pub enum RuntimeAbi {
     PtrByteSub,
     PtrByteOffset,
     PtrAddr,
+    /// `at[T](base, off) -> *mut T` — a typed pointer to the value of type `T`
+    /// at `base + off` bytes. Runtime-identical to `PtrByteAdd` (an `i32`
+    /// address add); `T` only types the result so a following deref loads the
+    /// right width. This is how header fields are read out of a raw byte
+    /// region without a reinterpret cast.
+    At,
     /// Heap allocation backed by the bump allocator. `Free` does not reclaim
     /// yet (see std.mem); it exists so call sites can establish ownership
     /// discipline now.
@@ -226,6 +232,7 @@ impl RuntimeAbi {
             "prim_rt_ptr_byte_sub" => Some(Self::PtrByteSub),
             "prim_rt_ptr_byte_offset" => Some(Self::PtrByteOffset),
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
+            "prim_rt_at" => Some(Self::At),
             "prim_rt_alloc" => Some(Self::Alloc),
             "prim_rt_free" => Some(Self::Free),
             "prim_rt_conv_noop" => Some(Self::ConvNoop),

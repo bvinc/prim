@@ -1,0 +1,20 @@
+import std.io.println_usize
+import std.io.println_u8
+import std.mem.alloc
+import std.ptr.at
+
+// Treat one raw byte buffer as a structured record using at[T]: a usize, a
+// byte, and a stored pointer, each at a chosen offset. The pointer is written
+// into memory and read back as a chasable *mut u8 (the dlmalloc fd/bk pattern)
+// with no reinterpret cast and no int->ptr fabrication.
+fn main() {
+    let buf = alloc(64usize)
+
+    *at[usize](buf, 0usize) = 1000usize
+    *at[u8](buf, 8usize) = 42u8
+    *at[*mut u8](buf, 16usize) = buf
+
+    let again = *at[*mut u8](buf, 16usize)
+    println_usize(*at[usize](again, 0usize))
+    println_u8(*at[u8](buf, 8usize))
+}

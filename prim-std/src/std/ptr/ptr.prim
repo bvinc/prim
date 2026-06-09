@@ -120,6 +120,16 @@ fn byte_offset[T](p: *mut T, n: isize) -> *mut T;
 @runtime("prim_rt_ptr_addr")
 fn addr[T](p: *mut T) -> usize;
 
+// at[T](base, off) — a typed pointer to the T that lives `off` bytes into the
+// raw region `base`. Deref it to load (`*at[usize](p, k)`) or store
+// (`*at[usize](p, k) = v`) a value of the chosen width. This is how a byte
+// buffer is read/written as structured data — header fields, packed records,
+// allocator chunks — without ever reinterpreting one pointee type as another.
+// At runtime it is a single address add; the following deref is one load/store
+// of T's width.
+@runtime("prim_rt_at")
+fn at[T](base: *mut u8, off: usize) -> *mut T;
+
 fn add[T](p: *mut T, n: usize) -> *mut T {
     byte_add[T](p, n * size_of[T]())
 }

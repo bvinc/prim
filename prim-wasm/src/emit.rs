@@ -1071,7 +1071,7 @@ fn emit_runtime_call(
         hir::RuntimeAbi::Null => {
             f.instruction(&Instruction::I32Const(0));
         }
-        hir::RuntimeAbi::PtrByteAdd | hir::RuntimeAbi::PtrByteOffset => {
+        hir::RuntimeAbi::PtrByteAdd | hir::RuntimeAbi::PtrByteOffset | hir::RuntimeAbi::At => {
             emit_expr(f, &args[0], ctx)?;
             emit_expr(f, &args[1], ctx)?;
             f.instruction(&Instruction::I32Add);
