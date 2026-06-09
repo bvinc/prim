@@ -6,19 +6,19 @@ enum Shape {
 }
 
 trait Area {
-    fn area(s: Shape) -> i32;
-    fn scaled_area(s: Shape, k: i32) -> i32;
+    fn area(self) -> i32;
+    fn scaled_area(self, k: i32) -> i32;
 }
 
 impl Area for Shape {
-    fn area(s: Shape) -> i32 {
-        match s {
+    fn area(self) -> i32 {
+        match self {
             Shape.Square { side } => side * side,
             Shape.Rect { w, h } => w * h,
         }
     }
-    fn scaled_area(s: Shape, k: i32) -> i32 {
-        match s {
+    fn scaled_area(self, k: i32) -> i32 {
+        match self {
             Shape.Square { side } => side * side * k,
             Shape.Rect { w, h } => w * h * k,
         }

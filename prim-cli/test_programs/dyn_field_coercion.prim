@@ -3,11 +3,11 @@ import std.io.println_i32
 struct Counter { n: i32 }
 
 trait Greeter {
-    fn greet(g: Greeter) -> i32;
+    fn greet(self) -> i32;
 }
 
 impl Greeter for Counter {
-    fn greet(c: Counter) -> i32 { c.n }
+    fn greet(self) -> i32 { self.n }
 }
 
 // A struct that holds a trait-typed field.

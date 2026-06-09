@@ -48,7 +48,7 @@ pub struct Program {
     /// by lowering each `impl Trait for Type { fn ... }` block, where the
     /// receiver type is a struct or an enum. Method calls in expressions
     /// look up here at typecheck time to resolve static dispatch.
-    pub impl_methods: std::collections::HashMap<(MethodOwner, InternSymbol), FuncId>,
+    pub impl_methods: std::collections::HashMap<(MethodOwner, InternSymbol), ImplFn>,
     /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
     /// Used to generate vtables and to dispatch dynamic method calls.
     pub impls: std::collections::HashMap<(TraitId, StructId), Vec<FuncId>>,
@@ -61,12 +61,65 @@ pub struct Program {
     pub spans: Vec<(FileId, Span)>,
 }
 
-/// The concrete type an `impl` block attaches methods to. Both struct and
-/// enum receivers resolve method calls through `Program::impl_methods`.
+/// The type an `impl` block attaches functions to: a struct, an enum, or a
+/// primitive. Both methods and associated functions resolve through
+/// `Program::impl_methods`, keyed by `(owner, name)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MethodOwner {
     Struct(StructId),
     Enum(EnumId),
+    Prim(PrimKind),
+}
+
+/// Primitive types usable as `impl` targets (e.g. `impl u8 { ... }`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PrimKind {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    Usize,
+    Isize,
+    Bool,
+    F32,
+    F64,
+}
+
+impl MethodOwner {
+    /// The owner a receiver/target type resolves to, if any.
+    pub fn of_type(ty: &Type) -> Option<MethodOwner> {
+        Some(match ty {
+            Type::Struct(id, _) => MethodOwner::Struct(*id),
+            Type::Enum(id, _) => MethodOwner::Enum(*id),
+            Type::U8 => MethodOwner::Prim(PrimKind::U8),
+            Type::I8 => MethodOwner::Prim(PrimKind::I8),
+            Type::U16 => MethodOwner::Prim(PrimKind::U16),
+            Type::I16 => MethodOwner::Prim(PrimKind::I16),
+            Type::U32 => MethodOwner::Prim(PrimKind::U32),
+            Type::I32 => MethodOwner::Prim(PrimKind::I32),
+            Type::U64 => MethodOwner::Prim(PrimKind::U64),
+            Type::I64 => MethodOwner::Prim(PrimKind::I64),
+            Type::Usize => MethodOwner::Prim(PrimKind::Usize),
+            Type::Isize => MethodOwner::Prim(PrimKind::Isize),
+            Type::Bool => MethodOwner::Prim(PrimKind::Bool),
+            Type::F32 => MethodOwner::Prim(PrimKind::F32),
+            Type::F64 => MethodOwner::Prim(PrimKind::F64),
+            _ => return None,
+        })
+    }
+}
+
+/// An `impl` function: its `FuncId` plus whether it takes a `self` receiver
+/// (a method, called `value.m(..)`) or not (an associated function, called
+/// `Type.f(..)`).
+#[derive(Clone, Copy, Debug)]
+pub struct ImplFn {
+    pub func: FuncId,
+    pub is_method: bool,
 }
 
 #[derive(Clone, Debug)]

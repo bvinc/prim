@@ -353,13 +353,11 @@ fn test_parse_trait_and_impl_syntax() {
             .iter()
             .any(|t| interner.resolve(&t.name.sym).trim() == "Marker")
     );
-    assert!(
-        program
-            .impls
-            .iter()
-            .any(|im| interner.resolve(&im.trait_name.sym).trim() == "Marker"
-                && interner.resolve(&im.struct_name.sym).trim() == "Point")
-    );
+    assert!(program.impls.iter().any(|im| {
+        im.trait_name
+            .is_some_and(|t| interner.resolve(&t.sym).trim() == "Marker")
+            && matches!(&im.target, Type::Struct(s, _) if interner.resolve(s).trim() == "Point")
+    }));
 }
 
 #[test]
@@ -378,13 +376,12 @@ fn test_parse_trait_with_method_and_impl_body() {
         .expect("trait Greeter present");
     assert_eq!(tr.methods.len(), 1);
     assert_eq!(interner.resolve(&tr.methods[0].name.sym), "hello");
-    assert!(
-        program.impls.iter().any(
-            |im| interner.resolve(&im.trait_name.sym).trim() == "Greeter"
-                && interner.resolve(&im.struct_name.sym).trim() == "Point"
-                && !im.methods.is_empty()
-        )
-    );
+    assert!(program.impls.iter().any(|im| {
+        im.trait_name
+            .is_some_and(|t| interner.resolve(&t.sym).trim() == "Greeter")
+            && matches!(&im.target, Type::Struct(s, _) if interner.resolve(s).trim() == "Point")
+            && !im.methods.is_empty()
+    }));
 }
 
 #[test]

@@ -6,14 +6,14 @@ struct Vec2 {
 }
 
 trait Math {
-    fn shifted(v: Vec2, dx: i32, dy: i32) -> i32;
+    fn shifted(self, dx: i32, dy: i32) -> i32;
 }
 
 impl Math for Vec2 {
-    fn shifted(v: Vec2, dx: i32, dy: i32) -> i32 {
+    fn shifted(self, dx: i32, dy: i32) -> i32 {
         // Return x + dx + y + dy — exercises method with multiple args
         // beyond the receiver.
-        v.x + dx + v.y + dy
+        self.x + dx + self.y + dy
     }
 }
 

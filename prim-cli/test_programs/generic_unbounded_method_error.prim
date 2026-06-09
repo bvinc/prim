@@ -2,7 +2,7 @@
 // fail typecheck — there's no trait to look up the method in.
 
 trait Ord {
-    fn lt(self: Ord, other: Ord) -> bool;
+    fn lt(self, other: Ord) -> bool;
 }
 
 fn bad[T](a: T, b: T) -> bool {

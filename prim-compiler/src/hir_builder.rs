@@ -66,6 +66,13 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    /// `Type.f(...)` where `f` takes `self` — a method must be called on a
+    /// value, not the type.
+    NotAssociatedFn {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -115,6 +122,13 @@ impl std::fmt::Display for LoweringError {
                     name
                 )
             }
+            LoweringError::NotAssociatedFn { name, .. } => {
+                write!(
+                    f,
+                    "'{}' is a method, not an associated function; call it on a value",
+                    name
+                )
+            }
         }
     }
 }
@@ -134,7 +148,8 @@ impl LoweringError {
             | LoweringError::UnknownMethod { span, .. }
             | LoweringError::UnknownRuntimeAbi { span, .. }
             | LoweringError::NotAnEnum { span, .. }
-            | LoweringError::InvalidImplTarget { span, .. } => *span,
+            | LoweringError::InvalidImplTarget { span, .. }
+            | LoweringError::NotAssociatedFn { span, .. } => *span,
         }
     }
 
@@ -150,7 +165,8 @@ impl LoweringError {
             | LoweringError::UnknownMethod { file, .. }
             | LoweringError::UnknownRuntimeAbi { file, .. }
             | LoweringError::NotAnEnum { file, .. }
-            | LoweringError::InvalidImplTarget { file, .. } => *file,
+            | LoweringError::InvalidImplTarget { file, .. }
+            | LoweringError::NotAssociatedFn { file, .. } => *file,
         }
     }
 }
@@ -172,6 +188,14 @@ pub fn lower_to_hir(
     } else {
         Err(ctx.errors)
     }
+}
+
+/// Why an `impl` target type failed to resolve to a `MethodOwner`.
+enum TargetError {
+    /// The named type isn't in scope.
+    Unknown(String),
+    /// Resolved, but isn't a struct, enum, or primitive.
+    Invalid(String),
 }
 
 /// Local variable binding (param or let).
@@ -249,10 +273,12 @@ struct LoweringContext<'a> {
     /// Type-param scope of the function currently being populated.
     /// Resolved name → `TypeParamId`. Cleared between functions.
     current_type_params: HashMap<String, hir::TypeParamId>,
-    /// `(receiver type, method name)` → impl method FuncId. Built when
-    /// lowering each `impl ... for Type { fn ... }` block; the receiver is a
-    /// struct or an enum.
-    impl_methods: HashMap<(hir::MethodOwner, hir::InternSymbol), FuncId>,
+    /// The type `Self` (and a bare `self` param) resolves to while lowering an
+    /// `impl`/`trait` body. `None` outside one.
+    current_self_type: Option<hir::Type>,
+    /// `(receiver type, fn name)` → impl function. Built when lowering each
+    /// `impl ... { fn ... }` block; the owner is a struct, enum, or primitive.
+    impl_methods: HashMap<(hir::MethodOwner, hir::InternSymbol), hir::ImplFn>,
     /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
     /// Vtables back dynamic dispatch, which is struct-only for now.
     impls: HashMap<(hir::TraitId, StructId), Vec<FuncId>>,
@@ -288,6 +314,7 @@ impl<'a> LoweringContext<'a> {
             trait_ids: HashMap::new(),
             enum_ids: HashMap::new(),
             current_type_params: HashMap::new(),
+            current_self_type: None,
             impl_methods: HashMap::new(),
             impls: HashMap::new(),
             stdlib_string_struct: None,
@@ -450,28 +477,30 @@ impl<'a> LoweringContext<'a> {
             let module_id = module.id;
             for file in &module.files {
                 for im in &file.ast.impls {
-                    let struct_name = self.interner.resolve(&im.struct_name.sym).to_string();
-                    let Some(struct_res_id) = self
-                        .module_scopes
-                        .get(&module_id)
-                        .and_then(|scope| scope.get(&struct_name).copied())
-                    else {
-                        self.errors.push(LoweringError::UnknownName {
-                            name: struct_name,
-                            file: file.file_id,
-                            span: im.struct_name.span,
-                        });
-                        continue;
-                    };
-                    let Some(owner) = self.method_owner(struct_res_id) else {
-                        self.errors.push(LoweringError::InvalidImplTarget {
-                            name: struct_name,
-                            file: file.file_id,
-                            span: im.struct_name.span,
-                        });
-                        continue;
+                    let owner = match self.resolve_target_owner(&im.target, module_id) {
+                        Ok(owner) => owner,
+                        Err(TargetError::Unknown(name)) => {
+                            self.errors.push(LoweringError::UnknownName {
+                                name,
+                                file: file.file_id,
+                                span: im.span,
+                            });
+                            continue;
+                        }
+                        Err(TargetError::Invalid(name)) => {
+                            self.errors.push(LoweringError::InvalidImplTarget {
+                                name,
+                                file: file.file_id,
+                                span: im.span,
+                            });
+                            continue;
+                        }
                     };
                     for m in &im.methods {
+                        let is_method = matches!(
+                            m.parameters.first(),
+                            Some(p) if p.type_annotation == Type::SelfType
+                        );
                         let fid = FuncId(self.functions.len() as u32);
                         let symbol_id =
                             self.insert_symbol(module_id, m.name.sym, SymbolKind::Function(fid));
@@ -489,9 +518,17 @@ impl<'a> LoweringContext<'a> {
                             span,
                             runtime: None,
                         });
-                        // Record (owner, method-name) → FuncId. Duplicate
-                        // impls for the same (owner, name) are a hard error.
-                        if self.impl_methods.insert((owner, m.name.sym), fid).is_some() {
+                        // Record (owner, fn-name) → ImplFn. Duplicate impls for
+                        // the same (owner, name) are a hard error.
+                        let impl_fn = hir::ImplFn {
+                            func: fid,
+                            is_method,
+                        };
+                        if self
+                            .impl_methods
+                            .insert((owner, m.name.sym), impl_fn)
+                            .is_some()
+                        {
                             let method_name = self.interner.resolve(&m.name.sym).to_string();
                             self.errors.push(LoweringError::DuplicateImplMethod {
                                 name: method_name,
@@ -514,6 +551,101 @@ impl<'a> LoweringContext<'a> {
         self.enum_ids
             .get(&res_id)
             .map(|&eid| hir::MethodOwner::Enum(eid))
+    }
+
+    /// Resolve an `impl` target type (a struct/enum name or a primitive) to
+    /// its `MethodOwner`. Pure: callers decide whether to report the error.
+    fn resolve_target_owner(
+        &self,
+        target: &Type,
+        module_id: ModuleId,
+    ) -> Result<hir::MethodOwner, TargetError> {
+        if let Type::Struct(sym, args) = target {
+            if args.is_empty() {
+                let name = self.interner.resolve(sym).to_string();
+                let Some(res) = self
+                    .module_scopes
+                    .get(&module_id)
+                    .and_then(|scope| scope.get(&name).copied())
+                else {
+                    return Err(TargetError::Unknown(name));
+                };
+                return self.method_owner(res).ok_or(TargetError::Invalid(name));
+            }
+        }
+        let prim = match target {
+            Type::U8 => hir::PrimKind::U8,
+            Type::I8 => hir::PrimKind::I8,
+            Type::U16 => hir::PrimKind::U16,
+            Type::I16 => hir::PrimKind::I16,
+            Type::U32 => hir::PrimKind::U32,
+            Type::I32 => hir::PrimKind::I32,
+            Type::U64 => hir::PrimKind::U64,
+            Type::I64 => hir::PrimKind::I64,
+            Type::Usize => hir::PrimKind::Usize,
+            Type::Isize => hir::PrimKind::Isize,
+            Type::Bool => hir::PrimKind::Bool,
+            Type::F32 => hir::PrimKind::F32,
+            Type::F64 => hir::PrimKind::F64,
+            _ => return Err(TargetError::Invalid("this type".to_string())),
+        };
+        Ok(hir::MethodOwner::Prim(prim))
+    }
+
+    /// The owner an associated-call head (`Type` in `Type.f(..)`) names: a
+    /// primitive keyword, or a struct/enum in scope. `None` if it isn't a
+    /// type (e.g. a module), so the caller falls back to a qualified call.
+    fn assoc_call_owner(
+        &self,
+        head: &prim_parse::Ident,
+        module_scope: &ModuleScope,
+    ) -> Option<hir::MethodOwner> {
+        let name = self.interner.resolve(&head.sym);
+        let prim = match name {
+            "u8" => Some(hir::PrimKind::U8),
+            "i8" => Some(hir::PrimKind::I8),
+            "u16" => Some(hir::PrimKind::U16),
+            "i16" => Some(hir::PrimKind::I16),
+            "u32" => Some(hir::PrimKind::U32),
+            "i32" => Some(hir::PrimKind::I32),
+            "u64" => Some(hir::PrimKind::U64),
+            "i64" => Some(hir::PrimKind::I64),
+            "usize" => Some(hir::PrimKind::Usize),
+            "isize" => Some(hir::PrimKind::Isize),
+            "bool" => Some(hir::PrimKind::Bool),
+            "f32" => Some(hir::PrimKind::F32),
+            "f64" => Some(hir::PrimKind::F64),
+            _ => None,
+        };
+        if let Some(prim) = prim {
+            return Some(hir::MethodOwner::Prim(prim));
+        }
+        let res = module_scope.get(name).copied()?;
+        self.method_owner(res)
+    }
+
+    /// The concrete HIR type a `MethodOwner` denotes — what `Self` and a bare
+    /// `self` parameter resolve to inside that impl.
+    fn owner_self_type(owner: hir::MethodOwner) -> hir::Type {
+        match owner {
+            hir::MethodOwner::Struct(sid) => hir::Type::Struct(sid, Vec::new()),
+            hir::MethodOwner::Enum(eid) => hir::Type::Enum(eid, Vec::new()),
+            hir::MethodOwner::Prim(kind) => match kind {
+                hir::PrimKind::U8 => hir::Type::U8,
+                hir::PrimKind::I8 => hir::Type::I8,
+                hir::PrimKind::U16 => hir::Type::U16,
+                hir::PrimKind::I16 => hir::Type::I16,
+                hir::PrimKind::U32 => hir::Type::U32,
+                hir::PrimKind::I32 => hir::Type::I32,
+                hir::PrimKind::U64 => hir::Type::U64,
+                hir::PrimKind::I64 => hir::Type::I64,
+                hir::PrimKind::Usize => hir::Type::Usize,
+                hir::PrimKind::Isize => hir::Type::Isize,
+                hir::PrimKind::Bool => hir::Type::Bool,
+                hir::PrimKind::F32 => hir::Type::F32,
+                hir::PrimKind::F64 => hir::Type::F64,
+            },
+        }
     }
 
     fn populate_items(&mut self) {
@@ -661,6 +793,9 @@ impl<'a> LoweringContext<'a> {
                     let name = self.interner.resolve(&t.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let tid = *self.trait_ids.get(&res_id).expect("missing trait id");
+                    // In a trait declaration `Self`/`self` is the trait type
+                    // (the receiver is a fat pointer for dynamic dispatch).
+                    self.current_self_type = Some(hir::Type::Trait(tid));
                     let methods: Vec<hir::TraitMethodSig> = t
                         .methods
                         .iter()
@@ -691,39 +826,38 @@ impl<'a> LoweringContext<'a> {
                         hir_trait.method_idx = method_idx;
                     }
                 }
+                self.current_self_type = None;
 
                 // Populate impl method bodies. The (struct, method) → FuncId
                 // map was built in pass 3; here we fill in params/ret/body
                 // mirroring how regular functions are populated above.
                 for im in &ast.impls {
-                    let struct_name = self.interner.resolve(&im.struct_name.sym).to_string();
-                    let Some(struct_res_id) = self
-                        .module_scopes
-                        .get(&module_id)
-                        .and_then(|scope| scope.get(&struct_name).copied())
-                    else {
+                    let Ok(owner) = self.resolve_target_owner(&im.target, module_id) else {
                         continue;
                     };
-                    let Some(owner) = self.method_owner(struct_res_id) else {
-                        continue;
-                    };
+                    // `Self` and a bare `self` param resolve to the target type
+                    // while lowering this impl's bodies.
+                    self.current_self_type = Some(Self::owner_self_type(owner));
                     // Resolve the trait so we can index into its method order
                     // for the vtable. Vtables (dynamic dispatch) are built for
-                    // struct receivers only; enums use static dispatch.
-                    let trait_name = self.interner.resolve(&im.trait_name.sym).to_string();
-                    let trait_res_id = self
-                        .module_scopes
-                        .get(&module_id)
-                        .and_then(|scope| scope.get(&trait_name).copied());
-                    let tid = trait_res_id.and_then(|id| self.trait_ids.get(&id).copied());
+                    // struct receivers only; enums/primitives use static
+                    // dispatch.
+                    let tid = im.trait_name.and_then(|t| {
+                        let trait_name = self.interner.resolve(&t.sym).to_string();
+                        self.module_scopes
+                            .get(&module_id)
+                            .and_then(|scope| scope.get(&trait_name).copied())
+                            .and_then(|id| self.trait_ids.get(&id).copied())
+                    });
                     if let (Some(tid), hir::MethodOwner::Struct(sid)) = (tid, owner) {
                         let trait_def = self.traits.get(tid.0 as usize).cloned();
                         if let Some(trait_def) = trait_def {
                             let mut method_fids: Vec<FuncId> =
                                 Vec::with_capacity(trait_def.methods.len());
                             for trait_m in &trait_def.methods {
-                                if let Some(&fid) = self.impl_methods.get(&(owner, trait_m.name)) {
-                                    method_fids.push(fid);
+                                if let Some(impl_fn) = self.impl_methods.get(&(owner, trait_m.name))
+                                {
+                                    method_fids.push(impl_fn.func);
                                 } else {
                                     // Missing impl for this method — leave
                                     // the slot with a sentinel; typecheck
@@ -736,9 +870,11 @@ impl<'a> LoweringContext<'a> {
                         }
                     }
                     for m in &im.methods {
-                        let Some(&fid) = self.impl_methods.get(&(owner, m.name.sym)) else {
+                        let Some(impl_fn) = self.impl_methods.get(&(owner, m.name.sym)).copied()
+                        else {
                             continue;
                         };
+                        let fid = impl_fn.func;
                         self.local_scope.clear();
                         let params: Vec<Param> = m
                             .parameters
@@ -774,6 +910,7 @@ impl<'a> LoweringContext<'a> {
                             hir_func.span = span;
                         }
                     }
+                    self.current_self_type = None;
                 }
             }
         }
@@ -1177,6 +1314,49 @@ impl<'a> LoweringContext<'a> {
                         ty: self.lower_type(&expr.ty, module_scope),
                         span,
                     };
+                }
+                // Associated call: `Type.f(args)` where the head names a
+                // struct/enum/primitive and `f` is one of its associated
+                // functions (no `self`).
+                if path.segments.len() == 2 {
+                    if let Some(owner) = self.assoc_call_owner(&path.segments[0], module_scope) {
+                        let fn_name = path.segments[1];
+                        let lowered_args: Vec<hir::Expr> = args
+                            .iter()
+                            .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                            .collect();
+                        let lowered_type_args: Vec<hir::Type> = type_args
+                            .iter()
+                            .map(|t| self.lower_type(t, module_scope))
+                            .collect();
+                        return match self.impl_methods.get(&(owner, fn_name.sym)).copied() {
+                            Some(impl_fn) if !impl_fn.is_method => hir::Expr {
+                                kind: hir::ExprKind::Call {
+                                    func: impl_fn.func,
+                                    type_args: lowered_type_args,
+                                    args: lowered_args,
+                                },
+                                ty: self.lower_type(&expr.ty, module_scope),
+                                span,
+                            },
+                            Some(_) => {
+                                self.errors.push(LoweringError::NotAssociatedFn {
+                                    name: self.interner.resolve(&fn_name.sym).to_string(),
+                                    file: file_id,
+                                    span: fn_name.span,
+                                });
+                                error()
+                            }
+                            None => {
+                                self.errors.push(LoweringError::UnknownFunction {
+                                    name: self.interner.resolve(&fn_name.sym).to_string(),
+                                    file: file_id,
+                                    span: fn_name.span,
+                                });
+                                error()
+                            }
+                        };
+                    }
                 }
                 let call_span = path.segments.last().expect("empty path").span;
                 let fid = self
@@ -1766,6 +1946,10 @@ impl<'a> LoweringContext<'a> {
                 mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, module_scope)),
             },
+            Type::SelfType => self
+                .current_self_type
+                .clone()
+                .unwrap_or(hir::Type::Undetermined),
             Type::Undetermined => hir::Type::Undetermined,
             Type::U8 => hir::Type::U8,
             Type::I8 => hir::Type::I8,

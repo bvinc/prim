@@ -1273,14 +1273,26 @@ impl<'a> Checker<'a> {
                     }
                 };
                 let method_name = *method;
-                // Step 2: look up the impl method.
+                // Step 2: look up the impl method. It must take `self` — an
+                // associated function can't be called on a value.
                 let func = match self
                     .program
                     .impl_methods
                     .get(&(owner, method_name))
                     .copied()
                 {
-                    Some(f) => f,
+                    Some(impl_fn) if impl_fn.is_method => impl_fn.func,
+                    Some(_) => {
+                        let name = self.program.interner.resolve(&method_name).to_string();
+                        let type_name = self.type_name(&recv_ty);
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(format!(
+                                "'{}' is an associated function of {}, not a method; call it as {}.{}(...)",
+                                name, type_name, type_name, name
+                            )),
+                        ));
+                    }
                     None => {
                         let name = self.program.interner.resolve(&method_name).to_string();
                         let type_name = self.type_name(&recv_ty);

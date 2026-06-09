@@ -3,12 +3,12 @@ import std.io.println_i32
 struct Value { n: i32 }
 
 trait Ord {
-    fn lt(self: Ord, other: Ord) -> bool;
+    fn lt(self, other: Ord) -> bool;
 }
 
 impl Ord for Value {
-    fn lt(a: Value, b: Value) -> bool {
-        a.n < b.n
+    fn lt(self, other: Value) -> bool {
+        self.n < other.n
     }
 }
 

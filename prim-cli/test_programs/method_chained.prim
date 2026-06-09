@@ -5,18 +5,18 @@ struct Box {
 }
 
 trait Spawn {
-    fn inner(b: Box) -> Box;
-    fn value(b: Box) -> i32;
+    fn inner(self) -> Box;
+    fn value(self) -> i32;
 }
 
 impl Spawn for Box {
-    fn inner(b: Box) -> Box {
+    fn inner(self) -> Box {
         // Return a fresh Box with the squared value — exercises a method
         // that returns a struct so the result can be chained.
-        Box { v = b.v * b.v }
+        Box { v = self.v * self.v }
     }
-    fn value(b: Box) -> i32 {
-        b.v
+    fn value(self) -> i32 {
+        self.v
     }
 }
 

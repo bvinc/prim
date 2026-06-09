@@ -275,6 +275,17 @@ impl<'a> Parser<'a> {
                 span: self.current_span(),
             });
         }
+        // A primitive type keyword is only valid in expression position as the
+        // head of an associated call, e.g. `u8.from_i32(x)`. Lower it to an
+        // identifier so the path/call machinery resolves it like `Type.f(..)`.
+        if self.peek_is_primitive_type() && self.peek_kind_at(1) == Some(TokenKind::Dot) {
+            let span = self.advance().span;
+            return Ok(Expr {
+                span,
+                ty: Type::Undetermined,
+                kind: ExprKind::Ident(self.ident(span)),
+            });
+        }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
                 let span = self.advance().span;
@@ -958,7 +969,7 @@ impl<'a> Parser<'a> {
                 .span;
             let mname = self.ident(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
-            let parameters = self.parse_parameter_list()?;
+            let parameters = self.parse_method_params()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
             let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
@@ -990,15 +1001,28 @@ impl<'a> Parser<'a> {
             .consume(TokenKind::Impl, "Expected 'impl'")?
             .span
             .start();
-        let trait_name_span = self
-            .consume(TokenKind::Identifier, "Expected trait name after 'impl'")?
-            .span;
-        let trait_name = self.ident(trait_name_span);
-        self.consume(TokenKind::For, "Expected 'for' in impl")?;
-        let struct_name_span = self
-            .consume(TokenKind::Identifier, "Expected type name after 'for'")?
-            .span;
-        let struct_name = self.ident(struct_name_span);
+        // `impl Trait for Type { ... }` or inherent `impl Type { ... }`. Parse
+        // the first type, then if `for` follows it was the trait name.
+        let first = self.parse_type()?;
+        let (trait_name, target) = if matches!(self.peek_kind(), Some(TokenKind::For)) {
+            self.advance(); // consume 'for'
+            let trait_ident = match first {
+                Type::Struct(sym, ref args) if args.is_empty() => Ident {
+                    sym,
+                    span: self.previous().span,
+                },
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "a trait name before 'for'".to_string(),
+                        found: TokenKind::For,
+                        span: self.current_span(),
+                    });
+                }
+            };
+            (Some(trait_ident), self.parse_type()?)
+        } else {
+            (None, first)
+        };
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
 
         // Parse zero or more method bodies: fn name(params) [-> type] { statements }
@@ -1010,7 +1034,7 @@ impl<'a> Parser<'a> {
                 .span;
             let mname = self.ident(mname_span);
             self.consume(TokenKind::LeftParen, "Expected '(' after method name")?;
-            let parameters = self.parse_parameter_list()?;
+            let parameters = self.parse_method_params()?;
             self.consume(TokenKind::RightParen, "Expected ')' after parameters")?;
             let return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
                 self.advance();
@@ -1032,7 +1056,7 @@ impl<'a> Parser<'a> {
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end impl body")?;
         Ok(crate::ImplDefinition {
             trait_name,
-            struct_name,
+            target,
             methods,
             span: crate::Span::new(span_start, right_brace.span.end()),
         })
@@ -1134,6 +1158,41 @@ impl<'a> Parser<'a> {
         Ok(parameters)
     }
 
+    /// Like `parse_parameter_list`, but a leading bare `self` is recognized as
+    /// the method receiver — a parameter typed `Self`. Its presence is what
+    /// makes a function in an `impl`/`trait` a method rather than an
+    /// associated function.
+    fn parse_method_params(&mut self) -> Result<Vec<Parameter>, ParseError> {
+        let mut parameters = Vec::new();
+        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+            return Ok(parameters);
+        }
+
+        let leading_self = matches!(self.peek_kind(), Some(TokenKind::Identifier))
+            && self.peek().map(|t| t.span.text(self.source)) == Some("self");
+        if leading_self {
+            let span = self.advance().span;
+            parameters.push(Parameter {
+                name: self.ident(span),
+                type_annotation: Type::SelfType,
+            });
+            // `(self)` — no further parameters.
+            if !matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                return Ok(parameters);
+            }
+            self.advance(); // consume ',' after self
+        }
+
+        // First non-self parameter, then the comma-separated rest.
+        parameters.push(self.parse_parameter()?);
+        while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+            self.advance(); // consume ','
+            parameters.push(self.parse_parameter()?);
+        }
+
+        Ok(parameters)
+    }
+
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
         let name_span = self
             .consume(TokenKind::Identifier, "Expected parameter name")?
@@ -1172,6 +1231,9 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Identifier => {
                 let span = self.advance().span;
+                if span.text(self.source) == "Self" {
+                    return Ok(Type::SelfType);
+                }
                 let name = self.intern(span);
                 // Optional generic instantiation: `Pair[i32]` or `Map[K, V]`.
                 let type_args = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
@@ -1701,6 +1763,32 @@ impl<'a> Parser<'a> {
 
     fn peek_kind(&self) -> Option<TokenKind> {
         self.tokens.get(self.current).map(|t| t.kind)
+    }
+
+    fn peek_kind_at(&self, offset: usize) -> Option<TokenKind> {
+        self.tokens.get(self.current + offset).map(|t| t.kind)
+    }
+
+    /// True if the current token is a primitive type keyword (`u8`, `i32`, …).
+    fn peek_is_primitive_type(&self) -> bool {
+        matches!(
+            self.peek_kind(),
+            Some(
+                TokenKind::U8
+                    | TokenKind::I8
+                    | TokenKind::U16
+                    | TokenKind::I16
+                    | TokenKind::U32
+                    | TokenKind::I32
+                    | TokenKind::U64
+                    | TokenKind::I64
+                    | TokenKind::Usize
+                    | TokenKind::Isize
+                    | TokenKind::F32
+                    | TokenKind::F64
+                    | TokenKind::Bool
+            )
+        )
     }
 
     fn previous(&self) -> &Token {

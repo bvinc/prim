@@ -490,10 +490,15 @@ fn collect_exports(files: &[ModuleFile], interner: &prim_parse::Interner) -> Exp
             let name = interner.resolve(&t.name.sym).to_string();
             exports.insert(name, ResSymbolKind::Trait);
         }
-        for im in &file.ast.impls {
-            let trait_name = interner.resolve(&im.trait_name.sym);
-            let struct_name = interner.resolve(&im.struct_name.sym);
-            let name = format!("impl {} for {}", trait_name, struct_name);
+        for (i, im) in file.ast.impls.iter().enumerate() {
+            // Impls have no addressable name; the synthetic key just needs to
+            // be unique within the module (impl resolution walks `ast.impls`
+            // directly, not these exports).
+            let trait_name = im
+                .trait_name
+                .map(|t| interner.resolve(&t.sym).to_string())
+                .unwrap_or_else(|| "inherent".to_string());
+            let name = format!("impl#{} {}", i, trait_name);
             exports.insert(name, ResSymbolKind::Impl);
         }
     }

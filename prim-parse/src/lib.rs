@@ -52,6 +52,10 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
+    /// `Self` (and a bare `self` parameter): the type an `impl`/`trait` is
+    /// for. Resolved to the concrete target (in an impl) or the trait type
+    /// (in a trait declaration) during HIR lowering.
+    SelfType,
     Undetermined, // Type not yet determined during parsing
 }
 
@@ -410,8 +414,10 @@ pub struct TraitDefinition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDefinition {
-    pub trait_name: Ident,
-    pub struct_name: Ident,
+    /// `Some` for `impl Trait for Type`; `None` for an inherent `impl Type`.
+    pub trait_name: Option<Ident>,
+    /// The type being implemented (a struct/enum name or a primitive).
+    pub target: Type,
     pub methods: Vec<ImplMethod>,
     pub span: Span,
 }

@@ -1,7 +1,7 @@
 struct NotOrd { n: i32 }
 
 trait Ord {
-    fn lt(self: Ord, other: Ord) -> bool;
+    fn lt(self, other: Ord) -> bool;
 }
 
 enum Slot[T: Ord] {

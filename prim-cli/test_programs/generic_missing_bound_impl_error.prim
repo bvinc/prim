@@ -4,7 +4,7 @@
 struct NotOrd { n: i32 }
 
 trait Ord {
-    fn lt(self: Ord, other: Ord) -> bool;
+    fn lt(self, other: Ord) -> bool;
 }
 
 fn min[T: Ord](a: T, b: T) -> T {

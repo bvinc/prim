@@ -4,18 +4,18 @@ struct Counter { n: i32 }
 struct Doubler { n: i32 }
 
 trait Yieldable {
-    fn yield_value(y: Yieldable) -> i32;
+    fn yield_value(self) -> i32;
 }
 
 impl Yieldable for Counter {
-    fn yield_value(c: Counter) -> i32 {
-        c.n
+    fn yield_value(self) -> i32 {
+        self.n
     }
 }
 
 impl Yieldable for Doubler {
-    fn yield_value(d: Doubler) -> i32 {
-        d.n + d.n
+    fn yield_value(self) -> i32 {
+        self.n + self.n
     }
 }
 

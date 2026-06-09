@@ -256,11 +256,12 @@ impl Mono<'_> {
                     Type::Struct(sid, _) => sid,
                     other => panic!("TraitBoundCall substituted to non-struct: {:?}", other),
                 };
-                let impl_fid = *self
+                let impl_fid = self
                     .program
                     .impl_methods
                     .get(&(super::MethodOwner::Struct(sid), *method))
-                    .expect("missing impl method after substitution");
+                    .expect("missing impl method after substitution")
+                    .func;
                 let receiver_owned =
                     std::mem::replace(receiver.as_mut(), placeholder_expr(expr.span));
                 let mut new_args = Vec::with_capacity(args.len() + 1);

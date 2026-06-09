@@ -4,7 +4,7 @@
 struct NotAGreeter { n: i32 }
 
 trait Greeter {
-    fn greet(g: Greeter) -> i32;
+    fn greet(self) -> i32;
 }
 
 fn use_it(g: Greeter) -> i32 {

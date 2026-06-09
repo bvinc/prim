@@ -1,0 +1,33 @@
+import std.io.println_i32
+import std.io.println_u8
+import std.convert.i32_to_u8_wrapping
+
+struct Counter { n: i32 }
+
+// Inherent impl (no trait): a mix of an associated function and methods,
+// using the Self type in return position.
+impl Counter {
+    fn make(start: i32) -> Self {
+        Counter { n = start }
+    }
+    fn get(self) -> i32 {
+        self.n
+    }
+    fn bumped(self) -> Self {
+        Counter { n = self.n + 1 }
+    }
+}
+
+// Associated function on a primitive type.
+impl u8 {
+    fn from_i32(n: i32) -> u8 {
+        i32_to_u8_wrapping(n)
+    }
+}
+
+fn main() {
+    let c = Counter.make(41)        // associated call
+    println_i32(c.get())            // 41 (method)
+    println_i32(c.bumped().get())   // 42 (Self return, chained method)
+    println_u8(u8.from_i32(300))    // 44 (primitive associated call)
+}

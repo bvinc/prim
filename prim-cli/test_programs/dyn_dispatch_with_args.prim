@@ -3,16 +3,16 @@ import std.io.println_i32
 struct Adder { base: i32 }
 
 trait Computable {
-    fn shift(c: Computable, by: i32) -> i32;
-    fn combine(c: Computable, x: i32, y: i32) -> i32;
+    fn shift(self, by: i32) -> i32;
+    fn combine(self, x: i32, y: i32) -> i32;
 }
 
 impl Computable for Adder {
-    fn shift(a: Adder, by: i32) -> i32 {
-        a.base + by
+    fn shift(self, by: i32) -> i32 {
+        self.base + by
     }
-    fn combine(a: Adder, x: i32, y: i32) -> i32 {
-        a.base + x + y
+    fn combine(self, x: i32, y: i32) -> i32 {
+        self.base + x + y
     }
 }
 
