@@ -1,0 +1,4 @@
+fn main() {
+    // `&&` desugars to an `if` whose condition must be bool.
+    let x = 1 && true
+}

@@ -544,6 +544,11 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         }
         hir::ExprKind::BitNot(operand) => {
             emit_expr(f, operand, ctx)?;
+            if matches!(operand.ty, hir::Type::Bool) {
+                // Logical NOT: bool is 0/1, so `== 0` flips it.
+                f.instruction(&Instruction::I32Eqz);
+                return Ok(());
+            }
             match hir_type_to_valtype(&expr.ty) {
                 ValType::I32 => {
                     f.instruction(&Instruction::I32Const(-1));

@@ -1645,7 +1645,11 @@ impl<'a> Checker<'a> {
             }
             ExprKind::BitNot(operand) => {
                 let operand_ty = self.check_expr(operand, locals)?;
-                if self.is_integer(&operand_ty) || matches!(operand_ty, Type::IntVar) {
+                if matches!(operand_ty, Type::Bool) {
+                    // `!` is logical NOT on a bool.
+                    *ty = Type::Bool;
+                    Ok(Type::Bool)
+                } else if self.is_integer(&operand_ty) || matches!(operand_ty, Type::IntVar) {
                     *ty = operand_ty.clone();
                     Ok(operand_ty)
                 } else {

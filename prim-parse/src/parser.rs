@@ -12,6 +12,8 @@ pub struct Precedence(pub i32);
 
 impl Precedence {
     pub const NONE: Precedence = Precedence(0);
+    pub const LOGICAL_OR: Precedence = Precedence(4); // ||
+    pub const LOGICAL_AND: Precedence = Precedence(6); // &&
     pub const EQUALITY: Precedence = Precedence(10); // == !=
     pub const COMPARISON: Precedence = Precedence(15); // > < >= <=
     // Bitwise operators bind TIGHTER than comparison/equality — Rust-style,
@@ -499,6 +501,40 @@ impl<'a> Parser<'a> {
         let Some(kind) = self.peek_kind() else {
             return Ok(left);
         };
+
+        // Short-circuit `&&` / `||` desugar to `if`, so the right operand is
+        // only evaluated when needed: `a && b` → `if a { b } else { false }`,
+        // `a || b` → `if a { true } else { b }`.
+        if matches!(kind, TokenKind::AmpAmp | TokenKind::PipePipe) {
+            let precedence = get_precedence_for_token(kind);
+            self.advance();
+            let right = self.parse_expression(precedence)?;
+            let span = left.span.cover(right.span);
+            let block = |e: Expr| Block {
+                span: e.span,
+                stmts: Vec::new(),
+                expr: Some(Box::new(e)),
+            };
+            let bool_lit = |b: bool| Expr {
+                span,
+                ty: Type::Undetermined,
+                kind: ExprKind::Bool(b),
+            };
+            let (then_branch, else_branch) = if kind == TokenKind::AmpAmp {
+                (block(right), block(bool_lit(false)))
+            } else {
+                (block(bool_lit(true)), block(right))
+            };
+            return Ok(Expr {
+                span,
+                ty: Type::Undetermined,
+                kind: ExprKind::If {
+                    condition: Box::new(left),
+                    then_branch,
+                    else_branch: Some(else_branch),
+                },
+            });
+        }
 
         // Binary operators
         if let Some(binary_op) = token_to_binary_op(kind) {
@@ -1990,6 +2026,8 @@ fn token_to_primitive_type(token_kind: TokenKind) -> Option<Type> {
 /// Get precedence for a specific token kind - standalone function
 fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
     match token_kind {
+        TokenKind::PipePipe => Precedence::LOGICAL_OR,
+        TokenKind::AmpAmp => Precedence::LOGICAL_AND,
         TokenKind::DoubleEquals | TokenKind::NotEquals => Precedence::EQUALITY,
         TokenKind::Greater | TokenKind::GreaterEquals | TokenKind::Less | TokenKind::LessEquals => {
             Precedence::COMPARISON

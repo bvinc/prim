@@ -86,7 +86,11 @@ pub enum TokenKind {
     Caret,      // ^
     LeftShift,  // <<
     RightShift, // >>
-    Bang,       // !  (unary bitwise NOT, Rust-style)
+    Bang,       // !  (bitwise NOT on integers, logical NOT on bool)
+
+    // Logical (short-circuit)
+    AmpAmp,   // &&
+    PipePipe, // ||
 
     // Punctuation
     LeftParen,    // (
@@ -262,7 +266,18 @@ impl<'a> Tokenizer<'a> {
                     self.emit_simple(TokenKind::Bang, start_pos)
                 }
             }
-            Some('|') => self.emit_simple(TokenKind::Pipe, start_pos),
+            Some('|') => {
+                if self.peek() == Some('|') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::PipePipe,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else {
+                    self.emit_simple(TokenKind::Pipe, start_pos)
+                }
+            }
             Some('^') => self.emit_simple(TokenKind::Caret, start_pos),
             Some('(') => self.emit_simple(TokenKind::LeftParen, start_pos),
             Some(')') => self.emit_simple(TokenKind::RightParen, start_pos),
@@ -273,7 +288,18 @@ impl<'a> Tokenizer<'a> {
             Some(',') => self.emit_simple(TokenKind::Comma, start_pos),
             Some(':') => self.emit_simple(TokenKind::Colon, start_pos),
             Some(';') => self.emit_simple(TokenKind::Semicolon, start_pos),
-            Some('&') => self.emit_simple(TokenKind::Ampersand, start_pos),
+            Some('&') => {
+                if self.peek() == Some('&') {
+                    self.advance();
+                    self.advance();
+                    Ok(Some(Token {
+                        kind: TokenKind::AmpAmp,
+                        span: Span::new(start_pos, self.position),
+                    }))
+                } else {
+                    self.emit_simple(TokenKind::Ampersand, start_pos)
+                }
+            }
             Some('@') => self.emit_simple(TokenKind::At, start_pos),
             Some('.') => {
                 // Check if this is a standalone dot (for field access) or part of a number
