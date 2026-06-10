@@ -258,12 +258,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_prefix()?;
 
         // Parse infix expressions while precedence is sufficient
-        while self
-            .peek_kind()
-            .map(get_precedence_for_token)
-            .unwrap_or(Precedence::NONE)
-            > min_precedence
-        {
+        while self.next_infix_precedence() > min_precedence {
             left = self.parse_infix(left)?;
         }
 
@@ -338,8 +333,11 @@ impl<'a> Parser<'a> {
                 let span = self.advance().span;
                 let ident = self.ident(span);
 
-                // Check if this is a function call
-                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+                // Check if this is a function call. The `(` must be glued to
+                // the name (no whitespace) — `f(x)` is a call, `f (x)` and a
+                // `(` on the next line are not, so a line can't be silently
+                // absorbed as a call of the previous one.
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) && self.glued_to_prev() {
                     self.advance(); // consume '('
                     let args = self.parse_argument_list()?;
                     let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -594,6 +592,15 @@ impl<'a> Parser<'a> {
                 };
                 self.advance(); // consume '['
                 let type_args = self.parse_type_arg_list()?;
+                // The call args must be glued to the `]`: `f[T](x)`, never
+                // `f[T] (x)` or a `(` on the next line.
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) && !self.glued_to_prev() {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "'(' immediately after type arguments (no space)".to_string(),
+                        found: TokenKind::LeftParen,
+                        span: self.current_span(),
+                    });
+                }
                 self.consume(TokenKind::LeftParen, "Expected '(' after type arguments")?;
                 let args = self.parse_argument_list()?;
                 let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -1927,6 +1934,39 @@ impl<'a> Parser<'a> {
         self.peek()
             .map(|t| t.span)
             .unwrap_or_else(|| Span::new(self.source.len(), self.source.len()))
+    }
+
+    /// True when the current token is glued to the previous one — no
+    /// whitespace (or comment) between them. This is what distinguishes a call
+    /// `(` / turbofish `[` from a parenthesized group / array on the next line:
+    /// `f(x)` is a call, but `f (x)` and `f\n(x)` are not. Mirrors the lexer's
+    /// existing spacing rules for `*` (deref vs multiply) and `-`.
+    fn glued_to_prev(&self) -> bool {
+        if self.current == 0 {
+            return false;
+        }
+        match (self.peek(), self.tokens.get(self.current - 1)) {
+            (Some(next), Some(prev)) => next.span.start() == prev.span.end(),
+            _ => false,
+        }
+    }
+
+    /// Precedence of the next infix/postfix token. A `(` or `[` that is not
+    /// glued to the preceding token is not a call/turbofish — it ends the
+    /// current expression (and begins a new grouped expression), so it reports
+    /// no precedence.
+    fn next_infix_precedence(&self) -> Precedence {
+        match self.peek_kind() {
+            Some(kind @ (TokenKind::LeftParen | TokenKind::LeftBracket)) => {
+                if self.glued_to_prev() {
+                    get_precedence_for_token(kind)
+                } else {
+                    Precedence::NONE
+                }
+            }
+            Some(kind) => get_precedence_for_token(kind),
+            None => Precedence::NONE,
+        }
     }
 
     fn is_same_line(&self, left_end: usize, right_start: usize) -> bool {

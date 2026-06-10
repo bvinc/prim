@@ -28,6 +28,62 @@ fn test_error_same_line_statements() {
 }
 
 #[test]
+fn test_call_must_be_glued_to_name() {
+    // A `(` separated from the name by whitespace is not a call, so `id (5)`
+    // is two adjacent expressions on one line — a same-line statement error
+    // rather than a silent call.
+    let source = "fn main() {\n    id (5usize)\n}";
+    let (result, diagnostics) = parse(source, &Interner::new());
+    assert!(result.is_err());
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("statements on the same line")),
+        "expected a same-line diagnostic, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn test_glued_call_still_parses() {
+    // The adjacent form is still a call.
+    let source = "fn main() { id(5usize) }";
+    let (program, _) = parse_ok(source);
+    let body = &program.functions[0].body;
+    let call = body.expr.as_ref().expect("trailing call expression");
+    assert!(
+        matches!(call.kind, ExprKind::FunctionCall { .. }),
+        "expected FunctionCall, got {:?}",
+        call.kind
+    );
+}
+
+#[test]
+fn test_paren_line_is_grouping_not_call() {
+    // A parenthesized expression on the line after a complete statement is its
+    // own grouped expression, not a call of the previous line. Before call
+    // adjacency was enforced this glued into `id(5usize)(a + 1usize)`.
+    let source = "fn f() -> usize {\n    let a = id(5usize)\n    (a + 1usize)\n}";
+    let (program, _) = parse_ok(source);
+    let body = &program.functions[0].body;
+    assert_eq!(body.stmts.len(), 1, "the let is the only statement");
+    let trailing = body.expr.as_ref().expect("trailing grouped expression");
+    assert!(
+        matches!(trailing.kind, ExprKind::Binary { .. }),
+        "expected a grouped Binary, got {:?}",
+        trailing.kind
+    );
+}
+
+#[test]
+fn test_turbofish_args_must_be_glued() {
+    // The call args must be glued to the closing `]`: `f[T](x)`, never
+    // `f[T] (x)`.
+    let source = "fn main() { f[u8] (1usize) }";
+    let (result, _diagnostics) = parse(source, &Interner::new());
+    assert!(result.is_err(), "f[u8] (x) with a space should not parse");
+}
+
+#[test]
 fn test_parse_let_statement() {
     let source = "fn main() { let x: u32 = 42 }";
     let (program, interner) = parse_ok(source);

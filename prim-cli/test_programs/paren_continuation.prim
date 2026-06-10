@@ -1,0 +1,19 @@
+import std.io.println_usize
+
+fn id(x: usize) -> usize {
+    x
+}
+
+// A `(` is a call only when glued to the name. Here the parenthesized line
+// follows a complete statement, so it is its own grouped expression (the
+// block's trailing value) rather than a call of `id(5)`. Before call-adjacency
+// was enforced, `id(5usize)` ⏎ `(a + 1usize)` glued into `id(5usize)(a + 1usize)`
+// and failed to parse.
+fn f() -> usize {
+    let a = id(5usize)
+    (a + 1usize)
+}
+
+fn main() {
+    println_usize(f()) // 6
+}
