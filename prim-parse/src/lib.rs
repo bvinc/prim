@@ -304,6 +304,17 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+    /// `for var in start..end { body }`. Kept as a structured node and
+    /// lowered to a `while` loop during HIR building, where hidden range
+    /// temporaries and the loop variable get fresh symbols that user code
+    /// cannot name or shadow.
+    For {
+        var: Ident,
+        start: Expr,
+        end: Expr,
+        body: Vec<Stmt>,
+        span: Span,
+    },
     Break {
         span: Span,
     },

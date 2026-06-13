@@ -1602,9 +1602,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `for i in a..b { body }` desugars to
-    /// `{ let mut i = a; while i < b { body; i = i + 1 } }`. The wrapping
-    /// block scopes the loop variable.
+    /// `for var in start..end { body }`. Parsed into a structured `Stmt::For`
+    /// node; the hygienic lowering to a `while` loop happens in the HIR
+    /// builder, which can mint fresh symbols for the loop variable and the
+    /// range bound so neither the bounds nor the body can capture them.
     fn parse_for_statement(&mut self) -> Result<Stmt, ParseError> {
         let for_start = self.consume(TokenKind::For, "Expected 'for'")?.span.start();
         let var_span = self
@@ -1621,61 +1622,17 @@ impl<'a> Parser<'a> {
                 Ok((start, end))
             })?;
         self.consume(TokenKind::LeftBrace, "Expected '{' to start for-loop body")?;
-        let mut body = self.parse_statement_list()?;
+        let body = self.parse_statement_list()?;
         let end_brace = self.consume(TokenKind::RightBrace, "Expected '}' to end for-loop body")?;
         let span = Span::new(for_start, end_brace.span.end());
 
-        let ident_expr = || Expr {
-            span: var_span,
-            ty: Type::Undetermined,
-            kind: ExprKind::Ident(var),
-        };
-        // `i = i + 1` appended to the body.
-        body.push(Stmt::Assign {
-            target: var,
-            value: Expr {
-                span: var_span,
-                ty: Type::Undetermined,
-                kind: ExprKind::Binary {
-                    left: Box::new(ident_expr()),
-                    op: BinaryOp::Add,
-                    right: Box::new(Expr {
-                        span: var_span,
-                        ty: Type::Undetermined,
-                        kind: ExprKind::Int(1),
-                    }),
-                },
-            },
-        });
-        let while_stmt = Stmt::While {
-            condition: Expr {
-                span,
-                ty: Type::Undetermined,
-                kind: ExprKind::Binary {
-                    left: Box::new(ident_expr()),
-                    op: BinaryOp::Less,
-                    right: Box::new(end),
-                },
-            },
+        Ok(Stmt::For {
+            var,
+            start,
+            end,
             body,
             span,
-        };
-        let let_stmt = Stmt::Let {
-            name: var,
-            mutable: true,
-            type_annotation: None,
-            value: start,
-        };
-        let block = Block {
-            stmts: vec![let_stmt, while_stmt],
-            expr: None,
-            span,
-        };
-        Ok(Stmt::Expr(Expr {
-            span,
-            ty: Type::Undetermined,
-            kind: ExprKind::Block(block),
-        }))
+        })
     }
 
     fn parse_break_statement(&mut self) -> Result<Stmt, ParseError> {

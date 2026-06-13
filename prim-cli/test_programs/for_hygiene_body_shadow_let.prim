@@ -1,0 +1,18 @@
+import std.io.println_i32
+
+// Hygiene: an immutable binding in the body that happens to share the loop
+// variable's name must be legal -- the loop's increment targets the loop
+// variable, not the user's binding.
+//
+// KNOWN ISSUE: the for-desugar's appended `i = i + 1` resolves to the inner
+// `let i`, so the program is rejected with "Cannot assign to immutable
+// variable 'i'", pointing at the `for` line for an assignment the user never
+// wrote. A correct build compiles and runs 3 times.
+fn main() {
+    let mut sum = 0
+    for i in 0..3 {
+        let i = 99
+        sum = sum + 1
+    }
+    println_i32(sum)   // 3
+}

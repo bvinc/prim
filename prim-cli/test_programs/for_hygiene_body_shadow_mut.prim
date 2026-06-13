@@ -1,0 +1,22 @@
+import std.io.println_i32
+
+// Hygiene: the loop's own counter increment must be independent of any binding
+// the body introduces. A `let mut` in the body that shadows the loop variable
+// must not capture the increment.
+//
+// KNOWN ISSUE: the for-desugar appends `i = i + 1` as a body statement resolved
+// in the body scope, so the inner `let mut i` absorbs the increment, the real
+// counter never advances, and the loop runs forever. The `guard` exists only so
+// a buggy build terminates (printing 11) instead of hanging; a correct build
+// runs exactly 3 times and never trips it.
+fn main() {
+    let mut seen = 0
+    let mut guard = 0
+    for i in 0..3 {
+        let mut i = 99
+        seen = seen + 1
+        guard = guard + 1
+        if guard > 10 { break }
+    }
+    println_i32(seen)   // 3
+}

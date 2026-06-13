@@ -1109,6 +1109,23 @@ impl<'a> LoweringContext<'a> {
                 body: self.lower_stmt_list(body, module, file_id, ast, module_scope),
                 span: self.span_id(*span, file_id),
             },
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+                span,
+            } => self.lower_for(
+                var,
+                start,
+                end,
+                body,
+                *span,
+                module,
+                file_id,
+                ast,
+                module_scope,
+            ),
             Stmt::Break { span } => hir::Stmt::Break {
                 span: self.span_id(*span, file_id),
             },
@@ -1119,6 +1136,108 @@ impl<'a> LoweringContext<'a> {
                 span: self.span_id(*span, file_id),
             },
         }
+    }
+
+    /// Lower `for var in start..end { body }` to a hygienic `while` loop:
+    ///
+    /// ```text
+    /// {
+    ///     let mut var = <start>;
+    ///     let for$end  = <end>;
+    ///     while var < for$end {
+    ///         <body>
+    ///         var = var + 1;
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The bounds are lowered in the enclosing scope, before `var` exists, so
+    /// `0..n` resolves `n` to the outer binding and the end is evaluated once.
+    /// The loop variable and the `for$end` temporary get fresh symbols; the
+    /// condition and increment reference them by `SymbolId`, so a shadowing
+    /// `let var` in the body cannot capture either. `for$end` is never inserted
+    /// into the local scope, so no source name can resolve to it.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_for(
+        &mut self,
+        var: &prim_parse::Ident,
+        start: &prim_parse::Expr,
+        end: &prim_parse::Expr,
+        body: &[Stmt],
+        span: prim_parse::Span,
+        module: ModuleId,
+        file_id: FileId,
+        ast: &prim_parse::Program,
+        module_scope: &ModuleScope,
+    ) -> hir::Stmt {
+        let span_id = self.span_id(span, file_id);
+        let mk = |kind| hir::Expr {
+            kind,
+            ty: hir::Type::Undetermined,
+            span: span_id,
+        };
+
+        // Bounds are lowered before the loop variable enters scope.
+        let start_hir = self.lower_expr(start, module, file_id, ast, module_scope);
+        let end_hir = self.lower_expr(end, module, file_id, ast, module_scope);
+        let end_name = self.interner.get_or_intern("for$end");
+        let end_sym = self.insert_symbol(module, end_name, SymbolKind::Local);
+
+        // The loop variable is visible to the body but scoped to the loop.
+        self.local_scope.push();
+        let loop_sym = self.insert_symbol(module, var.sym, SymbolKind::Local);
+        self.local_scope.insert(
+            self.interner.resolve(&var.sym).to_string(),
+            LocalBinding {
+                symbol: loop_sym,
+                mutable: true,
+            },
+        );
+        let mut while_body = self.lower_stmt_list(body, module, file_id, ast, module_scope);
+        self.local_scope.pop();
+
+        // `var = var + 1`, built against the loop symbol directly.
+        while_body.stmts.push(hir::Stmt::Assign {
+            target: loop_sym,
+            value: mk(hir::ExprKind::Binary {
+                op: hir::BinaryOp::Add,
+                left: Box::new(mk(hir::ExprKind::Ident(loop_sym))),
+                right: Box::new(mk(hir::ExprKind::Int(1))),
+            }),
+            span: span_id,
+        });
+
+        let while_stmt = hir::Stmt::While {
+            condition: mk(hir::ExprKind::Binary {
+                op: hir::BinaryOp::Less,
+                left: Box::new(mk(hir::ExprKind::Ident(loop_sym))),
+                right: Box::new(mk(hir::ExprKind::Ident(end_sym))),
+            }),
+            body: while_body,
+            span: span_id,
+        };
+
+        let block = hir::Block {
+            stmts: vec![
+                hir::Stmt::Let {
+                    name: loop_sym,
+                    mutable: true,
+                    ty: hir::Type::Undetermined,
+                    value: start_hir,
+                    span: span_id,
+                },
+                hir::Stmt::Let {
+                    name: end_sym,
+                    mutable: false,
+                    ty: hir::Type::Undetermined,
+                    value: end_hir,
+                    span: span_id,
+                },
+                while_stmt,
+            ],
+            expr: None,
+        };
+        hir::Stmt::Expr(mk(hir::ExprKind::Block(block)))
     }
 
     fn lower_stmt_list(

@@ -1,0 +1,25 @@
+import std.io.println_i32
+
+// Hygiene: the range bound is evaluated exactly once, before the loop starts.
+// Mutating the variable used in the bound from inside the body must not change
+// how many iterations run.
+//
+// KNOWN ISSUE: the for-desugar embeds the end expression directly in the while
+// condition, so it is re-read every iteration. Here the body shrinks `limit`,
+// so the loop variable meets the moving bound early and runs 3 times (printing
+// 3) instead of the 5 iterations the original bound called for.
+//
+// The `guard` only exists so a buggy build terminates instead of looping; a
+// correct build never trips it.
+fn main() {
+    let mut limit = 5
+    let mut sum = 0
+    let mut guard = 0
+    for i in 0..limit {
+        sum = sum + 1
+        limit = limit - 1
+        guard = guard + 1
+        if guard > 50 { break }
+    }
+    println_i32(sum)   // 5
+}

@@ -1,0 +1,17 @@
+import std.io.println_i32
+
+// Hygiene: the range bound is evaluated in the *enclosing* scope, so a bound
+// that names the same identifier as the loop variable must see the outer
+// binding, not the loop variable being introduced.
+//
+// KNOWN ISSUE: the for-desugar lowers the end expression inside the loop
+// variable's scope, so `0..n` resolves to the loop variable and the loop
+// becomes `while n < n` -> runs zero times, printing 0.
+fn main() {
+    let n = 3
+    let mut count = 0
+    for n in 0..n {
+        count = count + 1
+    }
+    println_i32(count)   // 3
+}
