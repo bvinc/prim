@@ -1642,9 +1642,13 @@ impl<'a> Parser<'a> {
 
     fn parse_return_statement(&mut self) -> Result<Stmt, ParseError> {
         let span = self.consume(TokenKind::Return, "Expected 'return'")?.span;
-        // Bare `return` ends at `;` or end-of-block; otherwise parse the value.
-        let value = match self.peek_kind() {
-            None | Some(TokenKind::Semicolon | TokenKind::RightBrace) => None,
+        // Go-style: `return` is statement-ending, so its value must begin on the
+        // same line — a newline after `return` is a bare return (as if a
+        // semicolon were inserted), never a grab of the next line.
+        let value = match self.peek() {
+            None => None,
+            Some(next) if matches!(next.kind, TokenKind::Semicolon | TokenKind::RightBrace) => None,
+            Some(next) if !self.is_same_line(span.end(), next.span.start()) => None,
             _ => Some(self.parse_expression(Precedence::NONE)?),
         };
         Ok(Stmt::Return { value, span })
@@ -1912,7 +1916,24 @@ impl<'a> Parser<'a> {
     /// glued to the preceding token is not a call/turbofish — it ends the
     /// current expression (and begins a new grouped expression), so it reports
     /// no precedence.
+    ///
+    /// Line continuation follows Go's rule: a newline ends the current
+    /// expression whenever the token before it is "statement-ending" (an
+    /// identifier, literal, `return`/`break`, or a closing `)`/`]`/`}`), as if
+    /// a semicolon had been inserted there. So `a\n+ b` is two statements but
+    /// `a +\nb` continues, and `foo()\n.bar()` breaks the chain while
+    /// `foo().\nbar()` keeps it. Continuation is decided purely by the last
+    /// token of the line, never by how the next line starts.
     fn next_infix_precedence(&self) -> Precedence {
+        if self.current > 0 {
+            if let (Some(prev), Some(next)) = (self.tokens.get(self.current - 1), self.peek()) {
+                if !self.is_same_line(prev.span.end(), next.span.start())
+                    && is_statement_ending(prev.kind)
+                {
+                    return Precedence::NONE;
+                }
+            }
+        }
         match self.peek_kind() {
             Some(kind @ (TokenKind::LeftParen | TokenKind::LeftBracket)) => {
                 if self.glued_to_prev() {
@@ -2121,6 +2142,44 @@ fn get_precedence_for_token(token_kind: TokenKind) -> Precedence {
         TokenKind::Dot => Precedence::CALL, // Field access has same precedence as function calls
         _ => Precedence::NONE,
     }
+}
+
+/// Token kinds that can end a statement, mirroring Go's line-continuation rule:
+/// identifiers, literals, the `return`/`break` keywords, and the closing
+/// delimiters `)`/`]`/`}`. A newline after any of these terminates the
+/// statement; a newline after anything else (a binary operator, `(`, `.`,
+/// `,`, `=`, ...) is a continuation. (Primitive type keywords count too, since
+/// they appear as identifiers in expression position, e.g. `u8.from_i32`.)
+fn is_statement_ending(token_kind: TokenKind) -> bool {
+    matches!(
+        token_kind,
+        TokenKind::IntLiteral
+            | TokenKind::FloatLiteral
+            | TokenKind::StringLiteral
+            | TokenKind::CharLiteral
+            | TokenKind::MultilineStringSegment
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Identifier
+            | TokenKind::U8
+            | TokenKind::I8
+            | TokenKind::U16
+            | TokenKind::I16
+            | TokenKind::U32
+            | TokenKind::I32
+            | TokenKind::U64
+            | TokenKind::I64
+            | TokenKind::Usize
+            | TokenKind::Isize
+            | TokenKind::F32
+            | TokenKind::F64
+            | TokenKind::Bool
+            | TokenKind::Return
+            | TokenKind::Break
+            | TokenKind::RightParen
+            | TokenKind::RightBracket
+            | TokenKind::RightBrace
+    )
 }
 
 #[cfg(test)]

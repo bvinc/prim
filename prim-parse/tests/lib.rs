@@ -1612,3 +1612,82 @@ fn test_if_condition_with_comparison() {
         _ => panic!("Expected if expression, got {:?}", &main_func.body.expr),
     }
 }
+
+#[test]
+fn test_go_continuation_after_trailing_operator() {
+    // A line ending in a binary operator continues onto the next line.
+    let source = "fn main() {\n    let x = 1 +\n        2\n}";
+    let (program, _) = parse_ok(source);
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let { value, .. } => assert!(
+            matches!(value.kind, ExprKind::Binary { .. }),
+            "expected `1 + 2` to parse as one binary expression, got {:?}",
+            value.kind
+        ),
+        other => panic!("expected let, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_go_chain_continues_on_trailing_dot() {
+    // A line ending in `.` continues the chain onto the next line.
+    let source = "fn main() {\n    let a = p.\n        x\n}";
+    let (program, _) = parse_ok(source);
+    match &program.functions[0].body.stmts[0] {
+        // `p.x` spanning the trailing `.` parses as one two-segment access
+        // (a path here, since both sides are identifiers), not a bare `p`.
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Path(path) => assert_eq!(
+                path.segments.len(),
+                2,
+                "expected `p.x` to continue across the trailing dot, got {value:?}"
+            ),
+            other => panic!("expected `p.x` access, got {other:?}"),
+        },
+        other => panic!("expected let, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_go_chain_breaks_on_leading_dot() {
+    // A line ending in an identifier ends the statement, so a `.` starting the
+    // next line is not a continuation — it is a parse error.
+    let source = "fn main() {\n    let a = p\n        .x\n}";
+    let (result, _) = parse(source, &Interner::new());
+    assert!(
+        result.is_err(),
+        "expected leading-dot continuation to be rejected"
+    );
+}
+
+#[test]
+fn test_go_return_newline_is_bare_return() {
+    // `return` ends a statement, so a value on the next line is not captured.
+    let source = "fn f() -> i32 {\n    return\n    42\n}";
+    let (program, _) = parse_ok(source);
+    let has_bare_return = program.functions[0]
+        .body
+        .stmts
+        .iter()
+        .any(|s| matches!(s, Stmt::Return { value: None, .. }));
+    assert!(
+        has_bare_return,
+        "expected `return` to parse as a bare return"
+    );
+}
+
+#[test]
+fn test_go_return_value_on_same_line() {
+    // A value on the same line as `return` is captured.
+    let source = "fn f() -> i32 {\n    return 42\n}";
+    let (program, _) = parse_ok(source);
+    let has_value_return = program.functions[0]
+        .body
+        .stmts
+        .iter()
+        .any(|s| matches!(s, Stmt::Return { value: Some(_), .. }));
+    assert!(
+        has_value_return,
+        "expected `return 42` to capture its value"
+    );
+}

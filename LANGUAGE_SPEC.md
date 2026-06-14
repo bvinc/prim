@@ -123,19 +123,59 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 5. Equality `==`
 
 ### Statement Termination
-Statements can be terminated by:
-- Semicolon `;` (optional, explicit termination)
+Statements are terminated by:
+- A newline (the usual case — no semicolon needed)
+- Semicolon `;` (explicit; only required to put two statements on one line)
 - Closing brace `}` (end of block)
 
-When no semicolon is present, the parser treats the current statement as complete as soon as the next token cannot continue it, then starts a new statement.
-
-Examples:
 ```prim
 fn main() {
     let x = 1
     let y = 2
-    println(x + y)  // brace termination
+    println(x + y)
 }
+```
+
+### Line Continuation
+Prim follows Go's rule for deciding whether a newline ends a statement or
+continues it onto the next line. The decision depends only on the **last token
+of the line**, never on how the next line starts:
+
+- A newline **ends** the statement when the last token can end one: an
+  identifier, a literal, `return`/`break`, or a closing `)`, `]`, or `}`.
+- A newline **continues** the statement when the last token cannot end one: a
+  binary operator, `=`, `,`, `.`, or an open `(`, `[`, or `{`.
+
+So a long expression must break **after** an operator, not before it:
+
+```prim
+let x = 1 +      // ends in `+` → continues
+    2 +
+    3            // ends in `3` → statement ends here
+
+let y = 1
+    + 2          // previous line ended in `1` → `let y = 1` is complete;
+                 // `+ 2` is a separate statement
+```
+
+`return` ends a statement, so its value must begin on the same line; a newline
+right after `return` is a bare return:
+
+```prim
+return value     // returns `value`
+return           // bare return — the next line is a new statement
+```
+
+Method chains continue only when the line ends with the `.`, since a line that
+ends in `)` is already a complete statement:
+
+```prim
+let a = x.
+    foo().
+    bar()        // continues: each line ends in `.`
+
+let b = x
+    .foo()       // does NOT continue: `x` ends the statement, `.foo()` is an error
 ```
 
 ## Built-in Functions
