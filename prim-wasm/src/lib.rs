@@ -19,7 +19,7 @@ mod types;
 mod walks;
 
 use crate::builtins::{
-    Builtins, emit_alloc, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
+    Builtins, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
     emit_println_u64, emit_rt_resume,
 };
 use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
@@ -120,7 +120,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let println_i64_type = types.register(vec![ValType::I64], vec![]);
     let println_bool_type = types.register(vec![ValType::I32], vec![]);
     let println_f64_type = types.register(vec![ValType::F64], vec![]);
-    let alloc_type = types.register(vec![ValType::I32], vec![ValType::I32]);
     let print_bytes_type = types.register(vec![ValType::I32, ValType::I32], vec![]);
 
     // Function index layout:
@@ -129,10 +128,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     //   2: __println_u64
     //   3: __println_bool
     //   4: __println_f64
-    //   5: __alloc (fallback bump allocator; builtins.alloc is upgraded to
-    //      std.mem.alloc below when that module is linked)
-    //   6: __print_bytes
-    //   7+: user functions (the `@entry` function is exported as `_start`)
+    //   5: __print_bytes
+    //   6+: user functions (the `@entry` function is exported as `_start`)
     //   last: __rt_resume
     let fd_write_idx: u32 = 0;
     let mut builtins = Builtins {
@@ -140,8 +137,11 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         println_u64: 2,
         println_bool: 3,
         println_f64: 4,
-        alloc: 5,
-        print_bytes: 6,
+        print_bytes: 5,
+        // Object allocation routes through std.mem.alloc, resolved below. It is
+        // always linked (the prelude force-loads std.io, which imports std.mem),
+        // so there is no fallback allocator.
+        alloc: u32::MAX,
         yield_tag: 0,
         cont_table: 1, // table 1 is the scheduler's task table
         rt_resume: 0,  // resolved once the function layout is known
@@ -153,7 +153,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut func_map: HashMap<hir::FuncId, u32> = HashMap::new();
     let mut runtime_map: HashMap<hir::FuncId, hir::RuntimeAbi> = HashMap::new();
     let mut user_func_types: Vec<u32> = Vec::new();
-    let mut next_idx: u32 = 7;
+    let mut next_idx: u32 = 6;
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
@@ -188,9 +188,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     }
 
     // Route codegen-internal object allocations (struct / enum / string / dyn
-    // boxes) through the real Prim allocator rather than the bump allocator, so
-    // the whole program shares one heap. `alloc` is std.mem.alloc, signature
-    // (usize) -> *mut u8, which matches the bump allocator's call convention.
+    // boxes) through the Prim allocator `std.mem.alloc` (signature
+    // (usize) -> *mut u8) so the whole program shares one heap.
     for func in &program.functions {
         if func.runtime.is_some() || !func.type_params.is_empty() {
             continue;
@@ -208,6 +207,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             }
         }
     }
+    assert!(
+        builtins.alloc != u32::MAX,
+        "std.mem.alloc must be linked (the prelude force-loads std.io -> std.mem)"
+    );
 
     // `__rt_resume` (backs std.rt.resume) is the last emitted function, after
     // the user functions; reserve its index and (i32)->(i32) type here.
@@ -352,8 +355,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         }
     }
 
-    let heap_start: i32 = ((cursor + 7) & !7).max(1024) as i32;
-
     let mut module = Module::new();
 
     // Type section
@@ -374,7 +375,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     functions.function(println_i64_type); // __println_u64
     functions.function(println_bool_type); // __println_bool
     functions.function(println_f64_type); // __println_f64
-    functions.function(alloc_type); // __alloc
     functions.function(print_bytes_type); // __print_bytes
     for &type_idx in &user_func_types {
         functions.function(type_idx);
@@ -436,16 +436,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     });
     module.section(&tags);
 
-    // Global section: heap pointer first (wasm index 0), then user globals.
+    // Global section: the user's globals (the allocator's `GM`, user `global`
+    // declarations, ...). The heap is managed entirely by `std.mem` via
+    // `memory.grow`, so the module has no runtime heap-pointer global.
     let mut globals = GlobalSection::new();
-    globals.global(
-        GlobalType {
-            val_type: ValType::I32,
-            mutable: true,
-            shared: false,
-        },
-        &ConstExpr::i32_const(heap_start),
-    );
     let mut global_wasm_idx: HashMap<hir::GlobalId, u32> = HashMap::new();
     for (i, g) in program.globals.iter().enumerate() {
         let val_type = hir_type_to_valtype(&g.ty);
@@ -463,8 +457,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             },
             &init,
         );
-        // wasm global index: heap_ptr is at 0, user globals start at 1.
-        global_wasm_idx.insert(g.id, 1 + i as u32);
+        global_wasm_idx.insert(g.id, i as u32);
     }
     module.section(&globals);
 
@@ -501,7 +494,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_println_u64(fd_write_idx));
     codes.function(&emit_println_bool(fd_write_idx));
     codes.function(&emit_println_f64(fd_write_idx));
-    codes.function(&emit_alloc());
     codes.function(&emit_print_bytes(fd_write_idx));
     for func in &program.functions {
         if func.runtime.is_none() && func.type_params.is_empty() {

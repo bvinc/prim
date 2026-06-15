@@ -30,7 +30,6 @@ pub(crate) const FALSE_OFFSET: i32 = 38;
 pub(crate) const DOT_OFFSET: i32 = 43;
 pub(crate) const FLOAT_SCRATCH: i32 = 48;
 pub(crate) const STATIC_DATA_START: u32 = 128;
-pub(crate) const HEAP_PTR_GLOBAL: u32 = 0;
 
 /// MemArg for byte-wide loads/stores (alignment hint = 1).
 pub(crate) const MEM8: MemArg = MemArg {
