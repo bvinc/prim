@@ -333,6 +333,8 @@ pub struct Function {
     pub return_type: Option<Type>,
     pub body: Block,
     pub runtime_binding: Option<String>,
+    /// `@entry`: this function is the program's wasm entry point (`_start`).
+    pub is_entry: bool,
     pub span: Span,
 }
 

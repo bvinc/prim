@@ -263,6 +263,7 @@ struct LoweringContext<'a> {
     modules: Vec<Module>,
     root_module: ModuleId,
     main: Option<SymbolId>,
+    entry: Option<hir::FuncId>,
     traits: Vec<hir::Trait>,
     enums: Vec<hir::Enum>,
     struct_ids: HashMap<ResSymbolId, StructId>,
@@ -306,6 +307,7 @@ impl<'a> LoweringContext<'a> {
             modules: Vec::new(),
             root_module: program.root,
             main: None,
+            entry: None,
             traits: Vec::new(),
             enums: Vec::new(),
             struct_ids: HashMap::new(),
@@ -373,6 +375,9 @@ impl<'a> LoweringContext<'a> {
                         .func_ids
                         .entry(res_id)
                         .or_insert_with(|| FuncId(self.functions.len() as u32));
+                    if f.is_entry {
+                        self.entry = Some(fid);
+                    }
                     let span = self.span_id(f.span, file.file_id);
                     let runtime = f.runtime_binding.as_deref().and_then(|binding| {
                         let runtime = hir::RuntimeAbi::from_symbol(binding);
@@ -955,6 +960,7 @@ impl<'a> LoweringContext<'a> {
             symbols: self.symbols,
             interner: self.interner,
             main: self.main,
+            entry: self.entry,
             spans: self.spans,
         }
     }

@@ -9,7 +9,7 @@
 //! - [`walks`] — pre-walks over HIR (locals, scratch types, dbg prefixes,
 //!   string literals).
 //! - [`builtins`] — hand-written wasm bodies for `__println_*`, `__alloc`,
-//!   `__print_bytes`, `_start`.
+//!   `__print_bytes`, `__rt_resume`.
 //! - [`emit`] — per-function emission of user code.
 
 mod builtins;
@@ -20,7 +20,7 @@ mod walks;
 
 use crate::builtins::{
     Builtins, emit_alloc, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
-    emit_println_u64, emit_rt_resume, emit_start,
+    emit_println_u64, emit_rt_resume,
 };
 use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
 use crate::layout::{
@@ -132,8 +132,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     //   5: __alloc (fallback bump allocator; builtins.alloc is upgraded to
     //      std.mem.alloc below when that module is linked)
     //   6: __print_bytes
-    //   7+: user functions
-    //   last: _start
+    //   7+: user functions (the `@entry` function is exported as `_start`)
+    //   last: __rt_resume
     let fd_write_idx: u32 = 0;
     let mut builtins = Builtins {
         println_i64: 1,
@@ -146,6 +146,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         cont_table: 1, // table 1 is the scheduler's task table
         rt_resume: 0,  // resolved once the function layout is known
         cont_type: 0,  // resolved once main's continuation type is registered
+        main_func: 0,  // resolved once main's wasm index is known
     };
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
@@ -208,36 +209,23 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         }
     }
 
-    // `__rt_resume` (backs std.rt.resume) is emitted after user functions and
-    // before `_start`; reserve its index and (i32)->(i32) type here.
+    // `__rt_resume` (backs std.rt.resume) is the last emitted function, after
+    // the user functions; reserve its index and (i32)->(i32) type here.
     let rt_resume_idx = next_idx;
-    let start_idx = next_idx + 1;
     let rt_resume_type = types.register(vec![ValType::I32], vec![ValType::I32]);
+    // The empty function type backs the `yield` tag.
     let start_type = types.register(vec![], vec![]);
     builtins.rt_resume = rt_resume_idx;
     let main_wasm_idx = main_wasm_idx.ok_or(WasmError::MissingMain)?;
     let main_func_type = main_func_type.ok_or(WasmError::MissingMain)?;
+    builtins.main_func = main_wasm_idx;
 
-    // The scheduler loop `std.rt.schedule` (force-loaded via the prelude) is
-    // what `_start` hands control to after seeding `main` as task 0.
-    let mut schedule_idx = None;
-    for func in &program.functions {
-        if func.runtime.is_some() || !func.type_params.is_empty() {
-            continue;
-        }
-        let Some(sym) = program.symbols.get(func.name.0 as usize) else {
-            continue;
-        };
-        if program.interner.resolve(&sym.name) != "schedule" {
-            continue;
-        }
-        let m = &program.modules[sym.module.0 as usize].name;
-        if m.len() == 2 && m[0] == "std" && m[1] == "rt" {
-            schedule_idx = func_map.get(&func.id).copied();
-        }
-    }
-    let schedule_idx =
-        schedule_idx.expect("std.rt.schedule must be linked (prelude force-loads std.rt)");
+    // The program's entry point is the `@entry` function (`std.rt.boot`),
+    // exported as wasm `_start`. There is no generated fallback.
+    let entry_wasm_idx = program
+        .entry
+        .and_then(|fid| func_map.get(&fid).copied())
+        .expect("an @entry function must be linked (prelude force-loads std.rt)");
 
     // WasmFX: continuation type wrapping main's function signature; the
     // scheduler in `_start` uses this for `cont.new` and `resume`. The
@@ -392,7 +380,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         functions.function(type_idx);
     }
     functions.function(rt_resume_type); // __rt_resume
-    functions.function(start_type); // _start
     module.section(&functions);
 
     // Table section: a funcref table holding every impl method that may
@@ -413,15 +400,14 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // finished task's slot can be cleared, and the table is growable so tasks
     // can be added at runtime.
     let cont_table_idx: u32 = 1;
-    // The scheduler seeds one task (`main`); `spawn` grows the table to add
-    // more. The round-robin loop in `_start` runs whatever slots are live.
-    let seed_count: u32 = 1;
+    // Starts empty; the entry point's `spawn_main` grows it to add `main`, and
+    // `spawn` grows it for each further task.
     tables.table(TableType {
         element_type: RefType {
             nullable: true,
             heap_type: HeapType::Concrete(main_cont_type),
         },
-        minimum: seed_count as u64,
+        minimum: 0,
         maximum: None,
         table64: false,
         shared: false,
@@ -484,7 +470,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
 
     // Export section
     let mut exports = ExportSection::new();
-    exports.export("_start", ExportKind::Func, start_idx);
+    exports.export("_start", ExportKind::Func, entry_wasm_idx);
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
 
@@ -551,12 +537,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         cont_table_idx,
         yield_tag_idx,
         main_func.ret.is_some(),
-    ));
-    codes.function(&emit_start(
-        main_wasm_idx,
-        main_cont_type,
-        cont_table_idx,
-        schedule_idx,
     ));
     module.section(&codes);
 

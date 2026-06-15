@@ -805,6 +805,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Function, ParseError> {
         let runtime = attrs.runtime.take();
         let repr_c = attrs.repr_c;
+        let is_entry = attrs.entry;
 
         // Consume 'fn' keyword
         let fn_start = self.consume(TokenKind::Fn, "Expected 'fn'")?.span.start();
@@ -881,6 +882,7 @@ impl<'a> Parser<'a> {
             return_type,
             body,
             runtime_binding: runtime,
+            is_entry,
             span: full_span,
         })
     }
@@ -1965,6 +1967,7 @@ impl<'a> Parser<'a> {
 struct PendingAttrs {
     runtime: Option<String>,
     repr_c: bool,
+    entry: bool,
     span_start: Option<usize>,
     span_end: Option<usize>,
 }
@@ -2026,9 +2029,9 @@ impl<'a> Parser<'a> {
             let name_span = name_tok.span;
             let name = name_span.text(self.source).to_string();
             attrs.include_span(name_span);
-            self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
             match name.as_str() {
                 "runtime" => {
+                    self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
                     let sym_tok =
                         self.consume(TokenKind::StringLiteral, "Expected runtime symbol string")?;
                     let sym_span = sym_tok.span;
@@ -2043,7 +2046,18 @@ impl<'a> Parser<'a> {
                     }
                     attrs.runtime = Some(sym_clean);
                 }
+                "entry" => {
+                    // `@entry` marks the program's wasm entry point; no value.
+                    if attrs.entry {
+                        return Err(ParseError::InvalidAttributeUsage {
+                            message: "duplicate @entry attribute".to_string(),
+                            span: name_span,
+                        });
+                    }
+                    attrs.entry = true;
+                }
                 "repr" => {
+                    self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;
                     let arg_tok = self.consume(
                         TokenKind::StringLiteral,
                         "Expected repr string literal (\"C\")",

@@ -35,6 +35,8 @@ pub(crate) struct Builtins {
     /// Type index of the task continuation type `(cont fn() -> ())`. Used by
     /// `spawn` for `cont.new`.
     pub cont_type: u32,
+    /// Function index of the user's `main`. Used by `spawn_main`.
+    pub main_func: u32,
 }
 
 // ---- Shared snippets used by multiple builtin emitters ----
@@ -539,37 +541,6 @@ pub(crate) fn emit_rt_resume(
     f.instruction(&Instruction::TableSet(cont_table));
     f.instruction(&Instruction::I32Const(1));
     f.instruction(&Instruction::End); // $after: stack = [i32 result]
-    f.instruction(&Instruction::End); // end function
-    f
-}
-
-/// `_start()` — WASI entry point. Seeds the user's `main` as task 0 in the
-/// continuation table, then hands control to the Prim scheduler
-/// `std.rt.schedule`, which drives every task (resuming via `__rt_resume`)
-/// until they finish.
-///
-/// Arguments:
-/// - `main_idx`: wasm function index of `main` (for `ref.func`).
-/// - `main_cont_type`: type index of `(cont $main_fn)`.
-/// - `cont_table`: table index of the task table holding continuations.
-/// - `run_idx`: wasm function index of `std.rt.run`.
-pub(crate) fn emit_start(
-    main_idx: u32,
-    main_cont_type: u32,
-    cont_table: u32,
-    run_idx: u32,
-) -> Function {
-    let mut f = Function::new(vec![]);
-
-    // conts[0] = cont.new(main)
-    f.instruction(&Instruction::I32Const(0));
-    f.instruction(&Instruction::RefFunc(main_idx));
-    f.instruction(&Instruction::ContNew(main_cont_type));
-    f.instruction(&Instruction::TableSet(cont_table));
-
-    // Hand off to the Prim scheduler.
-    f.instruction(&Instruction::Call(run_idx));
-
     f.instruction(&Instruction::End); // end function
     f
 }

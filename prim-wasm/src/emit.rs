@@ -987,6 +987,14 @@ fn emit_runtime_call(
         hir::RuntimeAbi::Spawn => {
             unreachable!("spawn is lowered to ExprKind::Spawn in hir_builder");
         }
+        // spawn_main(): seed the program's main as a task. Same shape as
+        // ExprKind::Spawn but the target is `main`, known to the compiler.
+        hir::RuntimeAbi::SpawnMain => {
+            f.instruction(&Instruction::RefFunc(ctx.builtins.main_func));
+            f.instruction(&Instruction::ContNew(ctx.builtins.cont_type));
+            f.instruction(&Instruction::I32Const(1));
+            f.instruction(&Instruction::TableGrow(ctx.builtins.cont_table));
+        }
         // ---- pointer ops on *mut u8 and *mut u32 ----
         // null_T(): push 0 as an i32 (any pointer type lowers to i32).
         // ptr_add/sub/offset_T: scale n by sizeof(T), then add/sub.

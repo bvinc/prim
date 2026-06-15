@@ -30,6 +30,20 @@ fn task_live(handle: usize) -> bool;
 @runtime("prim_rt_spawn")
 fn spawn() -> usize;
 
+// Seed the program's `main` as a task and return its handle. Equivalent to
+// `spawn(main)`, but resolves `main` in the compiler so the entry point can
+// seed it without naming a function from another module.
+@runtime("prim_rt_spawn_main")
+fn spawn_main() -> usize;
+
+// The program's entry point (exported as wasm `_start`). Seeds `main` as the
+// first task, then runs the scheduler until every task has finished.
+@entry
+fn boot() {
+    spawn_main()
+    schedule()
+}
+
 // The scheduler loop, entered from `_start` after `main` is seeded as task 0.
 // Repeatedly scans the task table, resuming each live task, until a full pass
 // makes no progress (every task has finished). `task_count()` is re-read each

@@ -58,6 +58,8 @@ pub struct Program {
     /// that wouldn't make sense to duplicate).
     pub interner: Arc<Interner>,
     pub main: Option<SymbolId>,
+    /// `@entry` function (the program's `_start`), if one is declared.
+    pub entry: Option<FuncId>,
     pub spans: Vec<(FileId, Span)>,
 }
 
@@ -155,6 +157,9 @@ pub enum RuntimeAbi {
     /// Marks the `spawn` builtin. Calls to it are recognized during lowering
     /// and rewritten to `ExprKind::Spawn`; this variant never reaches codegen.
     Spawn,
+    /// `spawn_main()` — seed the program's `main` as a task. Lets the stdlib
+    /// entry point spawn `main` without naming it across modules.
+    SpawnMain,
     /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
     Trap,
     PrintlnBool,
@@ -242,6 +247,7 @@ impl RuntimeAbi {
             "prim_rt_task_count" => Some(Self::TaskCount),
             "prim_rt_task_live" => Some(Self::TaskLive),
             "prim_rt_spawn" => Some(Self::Spawn),
+            "prim_rt_spawn_main" => Some(Self::SpawnMain),
             "prim_rt_trap" => Some(Self::Trap),
             "prim_rt_size_of" => Some(Self::SizeOf),
             "prim_rt_null" => Some(Self::Null),
