@@ -144,7 +144,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         print_bytes: 6,
         yield_tag: 0,
         cont_table: 1, // table 1 is the scheduler's task table
-        rt_resume: 0,  // patched to __rt_resume's index after the func loop
+        rt_resume: 0,  // resolved once the function layout is known
     };
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
@@ -217,9 +217,9 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let main_wasm_idx = main_wasm_idx.ok_or(WasmError::MissingMain)?;
     let main_func_type = main_func_type.ok_or(WasmError::MissingMain)?;
 
-    // The scheduler entry `std.rt.run` (force-loaded via the prelude) is what
-    // `_start` hands control to after seeding `main` as task 0.
-    let mut run_idx = None;
+    // The scheduler loop `std.rt.schedule` (force-loaded via the prelude) is
+    // what `_start` hands control to after seeding `main` as task 0.
+    let mut schedule_idx = None;
     for func in &program.functions {
         if func.runtime.is_some() || !func.type_params.is_empty() {
             continue;
@@ -227,15 +227,16 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         let Some(sym) = program.symbols.get(func.name.0 as usize) else {
             continue;
         };
-        if program.interner.resolve(&sym.name) != "run" {
+        if program.interner.resolve(&sym.name) != "schedule" {
             continue;
         }
         let m = &program.modules[sym.module.0 as usize].name;
         if m.len() == 2 && m[0] == "std" && m[1] == "rt" {
-            run_idx = func_map.get(&func.id).copied();
+            schedule_idx = func_map.get(&func.id).copied();
         }
     }
-    let run_idx = run_idx.expect("std.rt.run must be linked (prelude force-loads std.rt)");
+    let schedule_idx =
+        schedule_idx.expect("std.rt.schedule must be linked (prelude force-loads std.rt)");
 
     // WasmFX: continuation type wrapping main's function signature; the
     // scheduler in `_start` uses this for `cont.new` and `resume`. The
@@ -405,9 +406,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         table64: false,
         shared: false,
     });
-    // Table 1: the scheduler's task table, holding suspended continuations.
-    // Slot 0 is the initial (`main`) task. Nullable so empty slots default to
-    // null and the table can grow; growable so `spawn` can add tasks.
+    // Table 1: the scheduler's task table, holding each task's continuation.
+    // Slot 0 is the initial task (`main`). The element type is nullable so a
+    // finished task's slot can be cleared, and the table is growable so tasks
+    // can be added at runtime.
     let cont_table_idx: u32 = 1;
     // The scheduler seeds one task (`main`); `spawn` grows the table to add
     // more. The round-robin loop in `_start` runs whatever slots are live.
@@ -546,7 +548,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         main_wasm_idx,
         main_cont_type,
         cont_table_idx,
-        run_idx,
+        schedule_idx,
     ));
     module.section(&codes);
 

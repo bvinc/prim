@@ -20,7 +20,7 @@ pub(crate) fn extra_modules() -> Vec<Vec<String>> {
     vec![
         vec!["std".into(), "string".into()],
         vec!["std".into(), "io".into()],
-        // `std.rt` provides the scheduler `run()` that `_start` always calls.
+        // `std.rt` provides the scheduler `schedule()` that `_start` calls.
         vec!["std".into(), "rt".into()],
     ]
 }

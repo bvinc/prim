@@ -16,7 +16,7 @@ fn yield();
 @runtime("prim_rt_resume")
 fn resume(handle: usize) -> bool;
 
-// Number of slots in the task table (live or finished). `spawn` grows this.
+// Number of slots in the task table, counting both live and finished tasks.
 @runtime("prim_rt_task_count")
 fn task_count() -> usize;
 
@@ -24,13 +24,12 @@ fn task_count() -> usize;
 @runtime("prim_rt_task_live")
 fn task_live(handle: usize) -> bool;
 
-// The scheduler. `_start` seeds `main` as task 0 and calls this. Drives every
-// runnable task round-robin until they have all finished. Because resuming a
-// task can `spawn` more (growing the table) the bound is re-read each pass.
-//
-// This is ordinary Prim: the runtime only provides the `resume` / `task_*`
-// primitives; the policy lives here and can be rewritten.
-fn run() {
+// The scheduler loop, entered from `_start` after `main` is seeded as task 0.
+// Drives every runnable task round-robin until all have finished; the slot
+// count is re-read each pass because the task table can grow while the loop
+// runs. The runtime provides only the `resume` and `task_*` primitives; the
+// scheduling policy lives here.
+fn schedule() {
     let mut progress = true
     while progress {
         progress = false

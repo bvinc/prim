@@ -485,7 +485,7 @@ pub(crate) fn emit_println_f64(fd_write_idx: u32) -> Function {
 /// `__rt_resume(handle: i32) -> i32` — backs `std.rt.resume`. Resume the task
 /// in `cont_table[handle]` until it yields or finishes. On yield, store the
 /// resumed continuation back into the slot and return 1. On finish, null the
-/// slot and return 0. The scheduler loop (`std.rt.run`, written in Prim) drives
+/// slot and return 0. The scheduler loop (`std.rt.schedule`, in Prim) drives
 /// this; the per-task continuation save/restore lives here because it needs the
 /// `resume` / `on $yield` wasm instructions.
 pub(crate) fn emit_rt_resume(
@@ -541,8 +541,9 @@ pub(crate) fn emit_rt_resume(
 }
 
 /// `_start()` — WASI entry point. Seeds the user's `main` as task 0 in the
-/// continuation table, then hands control to the Prim scheduler `std.rt.run`,
-/// which drives every task (resuming via `__rt_resume`) until they finish.
+/// continuation table, then hands control to the Prim scheduler
+/// `std.rt.schedule`, which drives every task (resuming via `__rt_resume`)
+/// until they finish.
 ///
 /// Arguments:
 /// - `main_idx`: wasm function index of `main` (for `ref.func`).
