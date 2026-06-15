@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Design Goals
 
 1. **Simplicity above all.** Less code, fewer concepts, fewer special cases. When in doubt, simplify.
-2. **Green threads with copyable stacks.** The runtime will provide lightweight cooperative scheduling with growable, relocatable stacks (copied/moved like Go), enabling millions of concurrent tasks.
+2. **Green threads via wasm continuations.** The runtime provides lightweight cooperative scheduling built on the WebAssembly stack-switching (typed-continuations) proposal: each task is a continuation whose stack the engine grows and manages, enabling millions of concurrent tasks. (This supersedes an earlier plan for Prim-owned copyable stacks with RTTI-based relocation — the engine owns the stacks, so Prim needs no stack relocator.)
 3. **No garbage collection.** Memory is managed through ownership, borrowing, and lifetimes.
 4. **Strong types with a borrow checker.** Compile-time ownership and lifetime enforcement, similar to Rust but simpler.
 
@@ -30,8 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Enums and pattern matching
 - Traits and methods (parsed but not compiled)
 - Generics
-- Green thread integration in the language
-- Runtime type information for stack relocation
+- Green thread API in the language (spawn, multi-task scheduler, blocking primitives)
 
 ## Architecture
 

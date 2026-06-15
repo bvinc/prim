@@ -2,7 +2,7 @@
 
 ## Overview
 
-Prim is a statically-typed programming language with a focus on simplicity, safety, and concurrency. It compiles to native machine code via the Cranelift backend. Prim uses ownership and borrowing for memory safety (no garbage collection) and provides green threads with growable, copyable stacks for lightweight concurrency.
+Prim is a statically-typed programming language with a focus on simplicity, safety, and concurrency. It compiles to WebAssembly (wasm32 + WASI), run via wasmtime. Prim uses ownership and borrowing for memory safety (no garbage collection) and provides green threads built on the WebAssembly stack-switching (typed-continuations) proposal, where the engine manages each task's stack.
 
 ## Grammar
 
