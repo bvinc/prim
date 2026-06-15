@@ -381,12 +381,15 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // Slot 0 is the initial (`main`) task. Nullable so empty slots default to
     // null and the table can grow; growable so `spawn` can add tasks.
     let cont_table_idx: u32 = 1;
+    // The scheduler seeds one task (`main`); `spawn` grows the table to add
+    // more. The round-robin loop in `_start` runs whatever slots are live.
+    let seed_count: u32 = 1;
     tables.table(TableType {
         element_type: RefType {
             nullable: true,
             heap_type: HeapType::Concrete(main_cont_type),
         },
-        minimum: 1,
+        minimum: seed_count as u64,
         maximum: None,
         table64: false,
         shared: false,
@@ -510,6 +513,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         main_cont_type,
         cont_table_idx,
         yield_tag_idx,
+        seed_count,
         main_func.ret.is_some(),
     ));
     module.section(&codes);

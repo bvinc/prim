@@ -499,54 +499,99 @@ pub(crate) fn emit_start(
     main_cont_type: u32,
     cont_table: u32,
     yield_tag: u32,
+    seed_count: u32,
     main_returns_value: bool,
 ) -> Function {
     let cont_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(main_cont_type),
     });
+    let cont_null = HeapType::Concrete(main_cont_type);
 
-    // One scratch local to hold a continuation while storing it back into the
-    // task table (table.set needs the slot index pushed before the value).
-    let mut f = Function::new(vec![(1, cont_ref)]);
+    // Locals: a scratch continuation (for the table store-back), the scan
+    // index, and a "made progress this pass" flag.
+    let mut f = Function::new(vec![(1, cont_ref), (2, ValType::I32)]);
     let tmp_cont: u32 = 0;
+    let i: u32 = 1;
+    let any: u32 = 2;
 
-    // conts[0] = cont.new(main)
+    // Seed the initial task(s): conts[slot] = cont.new(main).
+    for slot in 0..seed_count {
+        f.instruction(&Instruction::I32Const(slot as i32));
+        f.instruction(&Instruction::RefFunc(main_idx));
+        f.instruction(&Instruction::ContNew(main_cont_type));
+        f.instruction(&Instruction::TableSet(cont_table));
+    }
+
+    // Round-robin: repeat full passes over the task table until a pass resumes
+    // nothing (every slot is null = finished).
+    f.instruction(&Instruction::Loop(BlockType::Empty)); // $outer
     f.instruction(&Instruction::I32Const(0));
-    f.instruction(&Instruction::RefFunc(main_idx));
-    f.instruction(&Instruction::ContNew(main_cont_type));
-    f.instruction(&Instruction::TableSet(cont_table));
-
-    f.instruction(&Instruction::Loop(BlockType::Empty));
-    f.instruction(&Instruction::Block(BlockType::Result(cont_ref)));
-
-    // resume conts[0]
+    f.instruction(&Instruction::LocalSet(any));
     f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::LocalSet(i));
+
+    f.instruction(&Instruction::Block(BlockType::Empty)); // $scan_done
+    f.instruction(&Instruction::Loop(BlockType::Empty)); // $scan
+
+    // if i >= table.size: end this pass.
+    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::TableSize(cont_table));
+    f.instruction(&Instruction::I32GeU);
+    f.instruction(&Instruction::BrIf(1)); // -> $scan_done
+
+    // if conts[i] is non-null, resume it.
+    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::TableGet(cont_table));
+    f.instruction(&Instruction::RefIsNull);
+    f.instruction(&Instruction::If(BlockType::Empty)); // then: null slot, skip
+    f.instruction(&Instruction::Else); // non-null:
+    f.instruction(&Instruction::Block(BlockType::Empty)); // $after_resume
+    f.instruction(&Instruction::Block(BlockType::Result(cont_ref))); // $resumed
+    f.instruction(&Instruction::LocalGet(i));
     f.instruction(&Instruction::TableGet(cont_table));
     f.instruction(&Instruction::RefAsNonNull);
     f.instruction(&Instruction::Resume {
         cont_type_index: main_cont_type,
         resume_table: vec![Handle::OnLabel {
             tag: yield_tag,
-            label: 0,
+            label: 0, // -> $resumed
         }]
         .into(),
     });
-    // Resume returned normally → the task finished.
+    // Returned normally → task finished: null its slot and skip store-back.
     if main_returns_value {
         f.instruction(&Instruction::Drop);
     }
-    f.instruction(&Instruction::Return);
-
-    f.instruction(&Instruction::End); // end block — reached only via $yield branch
-    // Yielded: the new continuation is on the stack; store it back into slot 0
-    // and reschedule.
+    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::RefNull(cont_null));
+    f.instruction(&Instruction::TableSet(cont_table));
+    f.instruction(&Instruction::Br(1)); // -> $after_resume
+    f.instruction(&Instruction::End); // $resumed: stack = [new cont]
+    // Yielded: store the resumed continuation back and note progress.
     f.instruction(&Instruction::LocalSet(tmp_cont));
-    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::LocalGet(i));
     f.instruction(&Instruction::LocalGet(tmp_cont));
     f.instruction(&Instruction::TableSet(cont_table));
-    f.instruction(&Instruction::Br(0));
-    f.instruction(&Instruction::End); // end loop
+    f.instruction(&Instruction::I32Const(1));
+    f.instruction(&Instruction::LocalSet(any));
+    f.instruction(&Instruction::End); // $after_resume
+    f.instruction(&Instruction::End); // end if
+
+    // i += 1; continue the scan.
+    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::I32Const(1));
+    f.instruction(&Instruction::I32Add);
+    f.instruction(&Instruction::LocalSet(i));
+    f.instruction(&Instruction::Br(0)); // -> $scan
+
+    f.instruction(&Instruction::End); // $scan
+    f.instruction(&Instruction::End); // $scan_done
+
+    // Another pass if any task was still runnable.
+    f.instruction(&Instruction::LocalGet(any));
+    f.instruction(&Instruction::BrIf(0)); // -> $outer
+    f.instruction(&Instruction::End); // $outer
 
     f.instruction(&Instruction::End); // end function
     f
