@@ -7,3 +7,42 @@ mod rt
 // matching `on $yield` clause.
 @runtime("prim_rt_yield")
 fn yield();
+
+// Resume the task at `handle` (a slot in the runtime task table). Runs it
+// until it yields or finishes. Returns true if it yielded (still runnable),
+// false if it finished (its slot is now empty). Lowers to a call into the
+// runtime's resume helper, which installs the `on $yield` handler and stores
+// the resumed continuation back into the slot.
+@runtime("prim_rt_resume")
+fn resume(handle: usize) -> bool;
+
+// Number of slots in the task table (live or finished). `spawn` grows this.
+@runtime("prim_rt_task_count")
+fn task_count() -> usize;
+
+// True if the task at `handle` still has a continuation (has not finished).
+@runtime("prim_rt_task_live")
+fn task_live(handle: usize) -> bool;
+
+// The scheduler. `_start` seeds `main` as task 0 and calls this. Drives every
+// runnable task round-robin until they have all finished. Because resuming a
+// task can `spawn` more (growing the table) the bound is re-read each pass.
+//
+// This is ordinary Prim: the runtime only provides the `resume` / `task_*`
+// primitives; the policy lives here and can be rewritten.
+fn run() {
+    let mut progress = true
+    while progress {
+        progress = false
+        let mut i = 0usize
+        let n = task_count()
+        while i < n {
+            if task_live(i) {
+                if resume(i) {
+                    progress = true
+                }
+            }
+            i = i + 1
+        }
+    }
+}

@@ -144,6 +144,14 @@ pub struct Function {
 pub enum RuntimeAbi {
     Write,
     Yield,
+    /// `resume(handle) -> bool` — run the task in slot `handle` until it yields
+    /// or finishes; true if it yielded. Calls the runtime resume helper.
+    Resume,
+    /// `task_count() -> usize` — number of slots in the task table.
+    TaskCount,
+    /// `task_live(handle) -> bool` — whether the task slot still holds a
+    /// (non-null) continuation.
+    TaskLive,
     /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
     Trap,
     PrintlnBool,
@@ -227,6 +235,9 @@ impl RuntimeAbi {
     pub fn from_symbol(symbol: &str) -> Option<Self> {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
+            "prim_rt_resume" => Some(Self::Resume),
+            "prim_rt_task_count" => Some(Self::TaskCount),
+            "prim_rt_task_live" => Some(Self::TaskLive),
             "prim_rt_trap" => Some(Self::Trap),
             "prim_rt_size_of" => Some(Self::SizeOf),
             "prim_rt_null" => Some(Self::Null),

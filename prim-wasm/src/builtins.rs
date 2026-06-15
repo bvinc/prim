@@ -27,6 +27,11 @@ pub(crate) struct Builtins {
     /// Tag index for cooperative yield. Used by `std.rt.yield` which
     /// lowers to `suspend $yield_tag`.
     pub yield_tag: u32,
+    /// Table index of the scheduler's task table (continuations). Used by
+    /// `std.rt.task_count` / `task_live`.
+    pub cont_table: u32,
+    /// Function index of the `__rt_resume` helper backing `std.rt.resume`.
+    pub rt_resume: u32,
 }
 
 // ---- Shared snippets used by multiple builtin emitters ----
@@ -477,29 +482,16 @@ pub(crate) fn emit_println_f64(fd_write_idx: u32) -> Function {
     f
 }
 
-/// `_start()` — WASI entry point. Runs the user's `main` as the program's
-/// first green thread by wrapping it in a continuation stored in the task
-/// table (table `cont_table`, slot 0), then driving a scheduler loop that
-/// resumes it, handles yields by storing the resumed continuation back and
-/// rescheduling, and exits when the continuation completes.
-///
-/// The running task lives in the continuation table rather than a local so
-/// that `spawn` (which adds tasks to other slots) and a runnable queue can be
-/// layered on without changing how a task is resumed. For now only slot 0 is
-/// driven, so a yield reschedules the same task.
-///
-/// Arguments:
-/// - `main_idx`: wasm function index of `main` (for `ref.func`).
-/// - `main_cont_type`: type index of `(cont $main_fn)`.
-/// - `cont_table`: table index of the task table holding continuations.
-/// - `yield_tag`: tag index for cooperative yield.
-/// - `main_returns_value`: drop main's return value before exiting if true.
-pub(crate) fn emit_start(
-    main_idx: u32,
+/// `__rt_resume(handle: i32) -> i32` — backs `std.rt.resume`. Resume the task
+/// in `cont_table[handle]` until it yields or finishes. On yield, store the
+/// resumed continuation back into the slot and return 1. On finish, null the
+/// slot and return 0. The scheduler loop (`std.rt.run`, written in Prim) drives
+/// this; the per-task continuation save/restore lives here because it needs the
+/// `resume` / `on $yield` wasm instructions.
+pub(crate) fn emit_rt_resume(
     main_cont_type: u32,
     cont_table: u32,
     yield_tag: u32,
-    seed_count: u32,
     main_returns_value: bool,
 ) -> Function {
     let cont_ref = ValType::Ref(RefType {
@@ -508,47 +500,15 @@ pub(crate) fn emit_start(
     });
     let cont_null = HeapType::Concrete(main_cont_type);
 
-    // Locals: a scratch continuation (for the table store-back), the scan
-    // index, and a "made progress this pass" flag.
-    let mut f = Function::new(vec![(1, cont_ref), (2, ValType::I32)]);
-    let tmp_cont: u32 = 0;
-    let i: u32 = 1;
-    let any: u32 = 2;
+    // param `handle` (local 0); scratch continuation for the store-back.
+    let mut f = Function::new(vec![(1, cont_ref)]);
+    let handle: u32 = 0;
+    let tmp_cont: u32 = 1;
 
-    // Seed the initial task(s): conts[slot] = cont.new(main).
-    for slot in 0..seed_count {
-        f.instruction(&Instruction::I32Const(slot as i32));
-        f.instruction(&Instruction::RefFunc(main_idx));
-        f.instruction(&Instruction::ContNew(main_cont_type));
-        f.instruction(&Instruction::TableSet(cont_table));
-    }
-
-    // Round-robin: repeat full passes over the task table until a pass resumes
-    // nothing (every slot is null = finished).
-    f.instruction(&Instruction::Loop(BlockType::Empty)); // $outer
-    f.instruction(&Instruction::I32Const(0));
-    f.instruction(&Instruction::LocalSet(any));
-    f.instruction(&Instruction::I32Const(0));
-    f.instruction(&Instruction::LocalSet(i));
-
-    f.instruction(&Instruction::Block(BlockType::Empty)); // $scan_done
-    f.instruction(&Instruction::Loop(BlockType::Empty)); // $scan
-
-    // if i >= table.size: end this pass.
-    f.instruction(&Instruction::LocalGet(i));
-    f.instruction(&Instruction::TableSize(cont_table));
-    f.instruction(&Instruction::I32GeU);
-    f.instruction(&Instruction::BrIf(1)); // -> $scan_done
-
-    // if conts[i] is non-null, resume it.
-    f.instruction(&Instruction::LocalGet(i));
-    f.instruction(&Instruction::TableGet(cont_table));
-    f.instruction(&Instruction::RefIsNull);
-    f.instruction(&Instruction::If(BlockType::Empty)); // then: null slot, skip
-    f.instruction(&Instruction::Else); // non-null:
-    f.instruction(&Instruction::Block(BlockType::Empty)); // $after_resume
+    f.instruction(&Instruction::Block(BlockType::Result(ValType::I32))); // $after
     f.instruction(&Instruction::Block(BlockType::Result(cont_ref))); // $resumed
-    f.instruction(&Instruction::LocalGet(i));
+
+    f.instruction(&Instruction::LocalGet(handle));
     f.instruction(&Instruction::TableGet(cont_table));
     f.instruction(&Instruction::RefAsNonNull);
     f.instruction(&Instruction::Resume {
@@ -559,39 +519,52 @@ pub(crate) fn emit_start(
         }]
         .into(),
     });
-    // Returned normally → task finished: null its slot and skip store-back.
+    // Returned normally → task finished: null the slot, result 0.
     if main_returns_value {
         f.instruction(&Instruction::Drop);
     }
-    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::LocalGet(handle));
     f.instruction(&Instruction::RefNull(cont_null));
     f.instruction(&Instruction::TableSet(cont_table));
-    f.instruction(&Instruction::Br(1)); // -> $after_resume
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::Br(1)); // -> $after with result 0
     f.instruction(&Instruction::End); // $resumed: stack = [new cont]
-    // Yielded: store the resumed continuation back and note progress.
+    // Yielded: store the resumed continuation back, result 1.
     f.instruction(&Instruction::LocalSet(tmp_cont));
-    f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::LocalGet(handle));
     f.instruction(&Instruction::LocalGet(tmp_cont));
     f.instruction(&Instruction::TableSet(cont_table));
     f.instruction(&Instruction::I32Const(1));
-    f.instruction(&Instruction::LocalSet(any));
-    f.instruction(&Instruction::End); // $after_resume
-    f.instruction(&Instruction::End); // end if
+    f.instruction(&Instruction::End); // $after: stack = [i32 result]
+    f.instruction(&Instruction::End); // end function
+    f
+}
 
-    // i += 1; continue the scan.
-    f.instruction(&Instruction::LocalGet(i));
-    f.instruction(&Instruction::I32Const(1));
-    f.instruction(&Instruction::I32Add);
-    f.instruction(&Instruction::LocalSet(i));
-    f.instruction(&Instruction::Br(0)); // -> $scan
+/// `_start()` — WASI entry point. Seeds the user's `main` as task 0 in the
+/// continuation table, then hands control to the Prim scheduler `std.rt.run`,
+/// which drives every task (resuming via `__rt_resume`) until they finish.
+///
+/// Arguments:
+/// - `main_idx`: wasm function index of `main` (for `ref.func`).
+/// - `main_cont_type`: type index of `(cont $main_fn)`.
+/// - `cont_table`: table index of the task table holding continuations.
+/// - `run_idx`: wasm function index of `std.rt.run`.
+pub(crate) fn emit_start(
+    main_idx: u32,
+    main_cont_type: u32,
+    cont_table: u32,
+    run_idx: u32,
+) -> Function {
+    let mut f = Function::new(vec![]);
 
-    f.instruction(&Instruction::End); // $scan
-    f.instruction(&Instruction::End); // $scan_done
+    // conts[0] = cont.new(main)
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::RefFunc(main_idx));
+    f.instruction(&Instruction::ContNew(main_cont_type));
+    f.instruction(&Instruction::TableSet(cont_table));
 
-    // Another pass if any task was still runnable.
-    f.instruction(&Instruction::LocalGet(any));
-    f.instruction(&Instruction::BrIf(0)); // -> $outer
-    f.instruction(&Instruction::End); // $outer
+    // Hand off to the Prim scheduler.
+    f.instruction(&Instruction::Call(run_idx));
 
     f.instruction(&Instruction::End); // end function
     f

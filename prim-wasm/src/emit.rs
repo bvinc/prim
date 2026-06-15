@@ -954,6 +954,22 @@ fn emit_runtime_call(
         hir::RuntimeAbi::Yield => {
             f.instruction(&Instruction::Suspend(ctx.builtins.yield_tag));
         }
+        // resume(handle) -> bool: delegate to the __rt_resume helper.
+        hir::RuntimeAbi::Resume => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::Call(ctx.builtins.rt_resume));
+        }
+        // task_count() -> usize: number of slots in the task table.
+        hir::RuntimeAbi::TaskCount => {
+            f.instruction(&Instruction::TableSize(ctx.builtins.cont_table));
+        }
+        // task_live(handle) -> bool: the slot still holds a continuation.
+        hir::RuntimeAbi::TaskLive => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::TableGet(ctx.builtins.cont_table));
+            f.instruction(&Instruction::RefIsNull);
+            f.instruction(&Instruction::I32Eqz);
+        }
         // ---- pointer ops on *mut u8 and *mut u32 ----
         // null_T(): push 0 as an i32 (any pointer type lowers to i32).
         // ptr_add/sub/offset_T: scale n by sizeof(T), then add/sub.

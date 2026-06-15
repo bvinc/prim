@@ -20,7 +20,7 @@ mod walks;
 
 use crate::builtins::{
     Builtins, emit_alloc, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
-    emit_println_u64, emit_start,
+    emit_println_u64, emit_rt_resume, emit_start,
 };
 use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
 use crate::layout::{
@@ -143,6 +143,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         alloc: 5,
         print_bytes: 6,
         yield_tag: 0,
+        cont_table: 1, // table 1 is the scheduler's task table
+        rt_resume: 0,  // patched to __rt_resume's index after the func loop
     };
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
@@ -205,10 +207,35 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         }
     }
 
-    let start_idx = next_idx;
+    // `__rt_resume` (backs std.rt.resume) is emitted after user functions and
+    // before `_start`; reserve its index and (i32)->(i32) type here.
+    let rt_resume_idx = next_idx;
+    let start_idx = next_idx + 1;
+    let rt_resume_type = types.register(vec![ValType::I32], vec![ValType::I32]);
     let start_type = types.register(vec![], vec![]);
+    builtins.rt_resume = rt_resume_idx;
     let main_wasm_idx = main_wasm_idx.ok_or(WasmError::MissingMain)?;
     let main_func_type = main_func_type.ok_or(WasmError::MissingMain)?;
+
+    // The scheduler entry `std.rt.run` (force-loaded via the prelude) is what
+    // `_start` hands control to after seeding `main` as task 0.
+    let mut run_idx = None;
+    for func in &program.functions {
+        if func.runtime.is_some() || !func.type_params.is_empty() {
+            continue;
+        }
+        let Some(sym) = program.symbols.get(func.name.0 as usize) else {
+            continue;
+        };
+        if program.interner.resolve(&sym.name) != "run" {
+            continue;
+        }
+        let m = &program.modules[sym.module.0 as usize].name;
+        if m.len() == 2 && m[0] == "std" && m[1] == "rt" {
+            run_idx = func_map.get(&func.id).copied();
+        }
+    }
+    let run_idx = run_idx.expect("std.rt.run must be linked (prelude force-loads std.rt)");
 
     // WasmFX: continuation type wrapping main's function signature; the
     // scheduler in `_start` uses this for `cont.new` and `resume`. The
@@ -361,6 +388,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     for &type_idx in &user_func_types {
         functions.function(type_idx);
     }
+    functions.function(rt_resume_type); // __rt_resume
     functions.function(start_type); // _start
     module.section(&functions);
 
@@ -508,13 +536,17 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         .iter()
         .find(|f| program.main == Some(f.name))
         .unwrap();
+    codes.function(&emit_rt_resume(
+        main_cont_type,
+        cont_table_idx,
+        yield_tag_idx,
+        main_func.ret.is_some(),
+    ));
     codes.function(&emit_start(
         main_wasm_idx,
         main_cont_type,
         cont_table_idx,
-        yield_tag_idx,
-        seed_count,
-        main_func.ret.is_some(),
+        run_idx,
     ));
     module.section(&codes);
 
