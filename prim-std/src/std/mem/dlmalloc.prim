@@ -71,29 +71,6 @@ fn clz(x: usize) -> usize;
 // machinery. Footers and the runtime security checks are likewise omitted.
 // ============================================================================
 
-// ---- layout / status constants (wasm32) ----
-let MIN_CHUNK_SIZE: usize = 16usize;
-let MIN_LARGE_SIZE: usize = 256usize;
-let PINUSE: usize = 1usize;
-let CINUSE: usize = 2usize;
-let INUSE_BITS: usize = 3usize;
-let PAGE: usize = 65536usize;
-
-// ---- malloc_state field offsets ----
-let M_SMALLMAP: usize = 0usize;
-let M_TREEMAP: usize = 4usize;
-let M_DVSIZE: usize = 8usize;
-let M_TOPSIZE: usize = 12usize;
-let M_DV: usize = 16usize;
-let M_TOP: usize = 20usize;
-let M_SEGBASE: usize = 24usize;
-let M_SEGSIZE: usize = 28usize;
-let M_SMALLBINS: usize = 32usize;
-// 32 smallbins * 16 bytes = 512, so treebins start at 32 + 512 = 544.
-let M_TREEBINS: usize = 544usize;
-// 32 treebin roots * 4 bytes = 128, so the state is 544 + 128 = 672 bytes.
-let MSTATE_SIZE: usize = 672usize;
-
 // Root of the allocator state: the address of malloc_state, or 0 before the
 // first allocation initializes it. Must be a usize (globals take a literal
 // initializer and there is no pointer literal); from_addr recovers the
