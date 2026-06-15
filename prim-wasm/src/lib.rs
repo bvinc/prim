@@ -145,6 +145,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         yield_tag: 0,
         cont_table: 1, // table 1 is the scheduler's task table
         rt_resume: 0,  // resolved once the function layout is known
+        cont_type: 0,  // resolved once main's continuation type is registered
     };
 
     // Build func_map (user functions) and runtime_map (runtime-bound functions).
@@ -243,6 +244,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // `yield` tag has the empty function-type signature so suspend/resume
     // carry no values — yield is "I want to reschedule," nothing else.
     let main_cont_type = types.register_cont(main_func_type);
+    builtins.cont_type = main_cont_type;
     let yield_tag_idx: u32 = 0;
 
     // First pass: walk every user function in the same order they'll be
@@ -498,7 +500,13 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             Elements::Functions(table_entries.clone().into()),
         );
     }
-    elements.declared(Elements::Functions(vec![main_wasm_idx].into()));
+    // Declare every user function ref-able: `_start` takes `ref.func main`, and
+    // `spawn` takes `ref.func` of its target. Declaring all of them keeps any
+    // function spawnable without tracking which are spawn targets.
+    let mut declared: Vec<u32> = func_map.values().copied().collect();
+    declared.sort_unstable();
+    declared.dedup();
+    elements.declared(Elements::Functions(declared.into()));
     module.section(&elements);
 
     // Code section

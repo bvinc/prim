@@ -32,6 +32,9 @@ pub(crate) struct Builtins {
     pub cont_table: u32,
     /// Function index of the `__rt_resume` helper backing `std.rt.resume`.
     pub rt_resume: u32,
+    /// Type index of the task continuation type `(cont fn() -> ())`. Used by
+    /// `spawn` for `cont.new`.
+    pub cont_type: u32,
 }
 
 // ---- Shared snippets used by multiple builtin emitters ----

@@ -152,6 +152,9 @@ pub enum RuntimeAbi {
     /// `task_live(handle) -> bool` — whether the task slot still holds a
     /// (non-null) continuation.
     TaskLive,
+    /// Marks the `spawn` builtin. Calls to it are recognized during lowering
+    /// and rewritten to `ExprKind::Spawn`; this variant never reaches codegen.
+    Spawn,
     /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
     Trap,
     PrintlnBool,
@@ -238,6 +241,7 @@ impl RuntimeAbi {
             "prim_rt_resume" => Some(Self::Resume),
             "prim_rt_task_count" => Some(Self::TaskCount),
             "prim_rt_task_live" => Some(Self::TaskLive),
+            "prim_rt_spawn" => Some(Self::Spawn),
             "prim_rt_trap" => Some(Self::Trap),
             "prim_rt_size_of" => Some(Self::SizeOf),
             "prim_rt_null" => Some(Self::Null),
@@ -484,6 +488,12 @@ pub enum ExprKind {
         /// to dispatch the call to the right specialization.
         type_args: Vec<Type>,
         args: Vec<Expr>,
+    },
+    /// `spawn(f)` — create a green-thread task from a `fn() -> ()` and return
+    /// its handle (a `usize` slot in the task table). Lowers to
+    /// `ref.func f; cont.new; table.grow`.
+    Spawn {
+        func: FuncId,
     },
     StructLit {
         struct_id: StructId,

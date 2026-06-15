@@ -1,0 +1,17 @@
+import std.io.println_i64
+import std.rt.spawn
+import std.rt.yield
+
+// A spawned task that cooperatively yields once.
+fn worker() {
+    println_i64(100)
+    yield()
+    println_i64(101)
+}
+
+fn main() {
+    spawn(worker)
+    println_i64(1)
+    yield()
+    println_i64(2)
+}

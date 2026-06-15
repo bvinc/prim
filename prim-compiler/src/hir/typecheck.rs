@@ -995,6 +995,11 @@ impl<'a> Checker<'a> {
         match kind {
             ExprKind::Int(_) => Ok(ty.clone()),
             ExprKind::Float(_) => Ok(ty.clone()),
+            // `spawn(f)` yields the new task's handle.
+            ExprKind::Spawn { .. } => {
+                *ty = Type::Usize;
+                Ok(Type::Usize)
+            }
             ExprKind::Bool(_) => {
                 if matches!(ty, Type::Undetermined) {
                     *ty = Type::Bool;

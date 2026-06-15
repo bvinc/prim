@@ -131,6 +131,7 @@ impl Mono<'_> {
             | ExprKind::Bool(_)
             | ExprKind::Str(_)
             | ExprKind::Ident(_)
+            | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
             ExprKind::Binary { left, right, .. } => {
                 self.rewrite_expr(left, subst);
@@ -428,6 +429,7 @@ impl Mono<'_> {
             | ExprKind::Bool(_)
             | ExprKind::Str(_)
             | ExprKind::Ident(_)
+            | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
             ExprKind::Binary { left, right, .. } => {
                 self.substitute_expr(left, subst);

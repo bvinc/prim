@@ -366,6 +366,18 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 f.instruction(&Instruction::Unreachable);
             }
         }
+        // spawn(f): make a task continuation from `f` and append it to the
+        // task table; table.grow leaves the new slot index (the handle).
+        hir::ExprKind::Spawn { func } => {
+            let fidx = *ctx
+                .funcs
+                .get(func)
+                .expect("spawn target missing from func map");
+            f.instruction(&Instruction::RefFunc(fidx));
+            f.instruction(&Instruction::ContNew(ctx.builtins.cont_type));
+            f.instruction(&Instruction::I32Const(1));
+            f.instruction(&Instruction::TableGrow(ctx.builtins.cont_table));
+        }
         hir::ExprKind::StructLit {
             struct_id, fields, ..
         } => {
@@ -969,6 +981,11 @@ fn emit_runtime_call(
             f.instruction(&Instruction::TableGet(ctx.builtins.cont_table));
             f.instruction(&Instruction::RefIsNull);
             f.instruction(&Instruction::I32Eqz);
+        }
+        // `spawn` is rewritten to ExprKind::Spawn during lowering, so a call
+        // through the runtime ABI never reaches codegen.
+        hir::RuntimeAbi::Spawn => {
+            unreachable!("spawn is lowered to ExprKind::Spawn in hir_builder");
         }
         // ---- pointer ops on *mut u8 and *mut u32 ----
         // null_T(): push 0 as an i32 (any pointer type lowers to i32).

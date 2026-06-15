@@ -24,18 +24,24 @@ fn task_count() -> usize;
 @runtime("prim_rt_task_live")
 fn task_live(handle: usize) -> bool;
 
+// Create a task from a `fn() -> ()` and return its handle (a new slot in the
+// task table). The argument is a function name; the scheduler will run the
+// task on its next pass. Lowers to `ref.func f; cont.new; table.grow`.
+@runtime("prim_rt_spawn")
+fn spawn() -> usize;
+
 // The scheduler loop, entered from `_start` after `main` is seeded as task 0.
-// Drives every runnable task round-robin until all have finished; the slot
-// count is re-read each pass because the task table can grow while the loop
-// runs. The runtime provides only the `resume` and `task_*` primitives; the
-// scheduling policy lives here.
+// Repeatedly scans the task table, resuming each live task, until a full pass
+// makes no progress (every task has finished). `task_count()` is re-read each
+// step, so a task created by `spawn` is picked up within the same pass. The
+// runtime provides only the `resume` and `task_*` primitives; the scheduling
+// policy lives here.
 fn schedule() {
     let mut progress = true
     while progress {
         progress = false
         let mut i = 0usize
-        let n = task_count()
-        while i < n {
+        while i < task_count() {
             if task_live(i) {
                 if resume(i) {
                     progress = true

@@ -1501,6 +1501,41 @@ impl<'a> LoweringContext<'a> {
                     .and_then(|id| self.func_ids.get(&id).copied());
                 match fid {
                     Some(fid) => {
+                        // `spawn(f)` takes a function by name, not a value, so it
+                        // is recognized here and lowered to ExprKind::Spawn
+                        // rather than a normal call.
+                        if self.functions[fid.0 as usize].runtime == Some(hir::RuntimeAbi::Spawn) {
+                            let target = if args.len() == 1 {
+                                let np = match &args[0].kind {
+                                    ExprKind::Ident(ident) => Some(prim_parse::NamePath {
+                                        segments: vec![*ident],
+                                    }),
+                                    ExprKind::Path(p) => Some(p.clone()),
+                                    _ => None,
+                                };
+                                np.and_then(|p| {
+                                    self.resolve_function_path(&p, file_id, ast, module_scope)
+                                })
+                                .and_then(|id| self.func_ids.get(&id).copied())
+                            } else {
+                                None
+                            };
+                            return match target {
+                                Some(func) => hir::Expr {
+                                    kind: hir::ExprKind::Spawn { func },
+                                    ty: hir::Type::Usize,
+                                    span: self.span_id(call_span, file_id),
+                                },
+                                None => {
+                                    self.errors.push(LoweringError::UnknownFunction {
+                                        name: "spawn expects a function name".to_string(),
+                                        file: file_id,
+                                        span: call_span,
+                                    });
+                                    error()
+                                }
+                            };
+                        }
                         return hir::Expr {
                             kind: hir::ExprKind::Call {
                                 func: fid,
