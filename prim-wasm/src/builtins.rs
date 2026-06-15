@@ -478,46 +478,52 @@ pub(crate) fn emit_println_f64(fd_write_idx: u32) -> Function {
 }
 
 /// `_start()` — WASI entry point. Runs the user's `main` as the program's
-/// first (and only) green thread by wrapping it in a continuation, then
-/// driving a scheduler loop that resumes it, handles yields by rescheduling
-/// immediately, and exits when the continuation completes.
+/// first green thread by wrapping it in a continuation stored in the task
+/// table (table `cont_table`, slot 0), then driving a scheduler loop that
+/// resumes it, handles yields by storing the resumed continuation back and
+/// rescheduling, and exits when the continuation completes.
 ///
-/// For the single-green-thread MVP, a yield is effectively a no-op: the
-/// scheduler has nothing else to run, so it just resumes the same task.
-/// When `spawn` and I/O suspension land, this loop grows a runnable queue
-/// and per-suspend-reason dispatch — the *shape* is what matters here.
+/// The running task lives in the continuation table rather than a local so
+/// that `spawn` (which adds tasks to other slots) and a runnable queue can be
+/// layered on without changing how a task is resumed. For now only slot 0 is
+/// driven, so a yield reschedules the same task.
 ///
 /// Arguments:
 /// - `main_idx`: wasm function index of `main` (for `ref.func`).
 /// - `main_cont_type`: type index of `(cont $main_fn)`.
+/// - `cont_table`: table index of the task table holding continuations.
 /// - `yield_tag`: tag index for cooperative yield.
 /// - `main_returns_value`: drop main's return value before exiting if true.
 pub(crate) fn emit_start(
     main_idx: u32,
     main_cont_type: u32,
+    cont_table: u32,
     yield_tag: u32,
     main_returns_value: bool,
 ) -> Function {
-    let cont_ref_nullable = ValType::Ref(RefType {
-        nullable: true,
-        heap_type: HeapType::Concrete(main_cont_type),
-    });
     let cont_ref = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(main_cont_type),
     });
 
-    let mut f = Function::new(vec![(1, cont_ref_nullable)]);
-    let cont_local: u32 = 0;
+    // One scratch local to hold a continuation while storing it back into the
+    // task table (table.set needs the slot index pushed before the value).
+    let mut f = Function::new(vec![(1, cont_ref)]);
+    let tmp_cont: u32 = 0;
 
+    // conts[0] = cont.new(main)
+    f.instruction(&Instruction::I32Const(0));
     f.instruction(&Instruction::RefFunc(main_idx));
     f.instruction(&Instruction::ContNew(main_cont_type));
-    f.instruction(&Instruction::LocalSet(cont_local));
+    f.instruction(&Instruction::TableSet(cont_table));
 
     f.instruction(&Instruction::Loop(BlockType::Empty));
     f.instruction(&Instruction::Block(BlockType::Result(cont_ref)));
 
-    f.instruction(&Instruction::LocalGet(cont_local));
+    // resume conts[0]
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::TableGet(cont_table));
+    f.instruction(&Instruction::RefAsNonNull);
     f.instruction(&Instruction::Resume {
         cont_type_index: main_cont_type,
         resume_table: vec![Handle::OnLabel {
@@ -526,15 +532,19 @@ pub(crate) fn emit_start(
         }]
         .into(),
     });
-    // Resume returned normally → main finished.
+    // Resume returned normally → the task finished.
     if main_returns_value {
         f.instruction(&Instruction::Drop);
     }
     f.instruction(&Instruction::Return);
 
     f.instruction(&Instruction::End); // end block — reached only via $yield branch
-    // Yielded: new continuation is on stack; save and reschedule.
-    f.instruction(&Instruction::LocalSet(cont_local));
+    // Yielded: the new continuation is on the stack; store it back into slot 0
+    // and reschedule.
+    f.instruction(&Instruction::LocalSet(tmp_cont));
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::LocalGet(tmp_cont));
+    f.instruction(&Instruction::TableSet(cont_table));
     f.instruction(&Instruction::Br(0));
     f.instruction(&Instruction::End); // end loop
 

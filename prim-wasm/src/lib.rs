@@ -34,8 +34,8 @@ use std::collections::HashMap;
 use std::fmt;
 use wasm_encoder::{
     CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind, ExportSection,
-    FunctionSection, GlobalSection, GlobalType, ImportSection, MemorySection, MemoryType, Module,
-    RefType, TableSection, TableType, TagKind, TagSection, TagType, ValType,
+    FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, MemorySection, MemoryType,
+    Module, RefType, TableSection, TableType, TagKind, TagSection, TagType, ValType,
 };
 
 #[derive(Debug)]
@@ -377,6 +377,20 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         table64: false,
         shared: false,
     });
+    // Table 1: the scheduler's task table, holding suspended continuations.
+    // Slot 0 is the initial (`main`) task. Nullable so empty slots default to
+    // null and the table can grow; growable so `spawn` can add tasks.
+    let cont_table_idx: u32 = 1;
+    tables.table(TableType {
+        element_type: RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(main_cont_type),
+        },
+        minimum: 1,
+        maximum: None,
+        table64: false,
+        shared: false,
+    });
     module.section(&tables);
 
     // Memory section
@@ -494,6 +508,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_start(
         main_wasm_idx,
         main_cont_type,
+        cont_table_idx,
         yield_tag_idx,
         main_func.ret.is_some(),
     ));
