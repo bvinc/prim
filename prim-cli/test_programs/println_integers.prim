@@ -1,5 +1,4 @@
 import std.io.println
-import std.convert.i64_to_u64_wrapping
 
 // All integer println functions are implemented in Prim now. Cover zero,
 // negatives, the signed extremes, and unsigned values with the high bit
@@ -17,7 +16,7 @@ fn main() {
     println(-9000000000000000000i64)
     println(9223372036854775807i64)
     println(12345u64)
-    println(i64_to_u64_wrapping(0i64 - 1i64))
+    println(u64.from_i64_wrapping(0i64 - 1i64))
     println(-5isize)
     println(5usize)
 }

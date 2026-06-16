@@ -1070,10 +1070,21 @@ impl<'a> Parser<'a> {
         };
         self.consume(TokenKind::LeftBrace, "Expected '{' to start impl body")?;
 
-        // Parse zero or more method bodies: fn name(params) [-> type] { statements }
+        // Parse zero or more methods. Each is either an ordinary method with a
+        // body, or a `@runtime("...")` associated intrinsic declared with `;`
+        // and no body (the primitive conversions). A leading `@` starts an
+        // attribute; otherwise the method begins at `fn`.
         let mut methods = Vec::new();
-        while matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-            self.advance();
+        while matches!(self.peek_kind(), Some(TokenKind::Fn | TokenKind::At)) {
+            let mut attrs = self.parse_attributes()?;
+            let runtime = attrs.runtime.take();
+            if attrs.repr_c || attrs.entry {
+                return Err(ParseError::InvalidAttributeUsage {
+                    message: "only @runtime is valid on impl methods".to_string(),
+                    span: self.current_span(),
+                });
+            }
+            self.consume(TokenKind::Fn, "Expected 'fn'")?;
             let mname_span = self
                 .consume(TokenKind::Identifier, "Expected method name")?
                 .span;
@@ -1087,14 +1098,38 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            // Use parse_block so trailing expressions are preserved (same as
-            // regular function bodies).
-            let body = self.parse_block()?;
+            // `@runtime` methods are bodyless declarations terminated by `;`;
+            // everything else uses parse_block so trailing expressions are
+            // preserved (same as regular function bodies).
+            let body = if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+                let semicolon = self.advance();
+                if runtime.is_none() {
+                    return Err(ParseError::InvalidAttributeUsage {
+                        message: "impl method declarations without a body require @runtime"
+                            .to_string(),
+                        span: mname.span,
+                    });
+                }
+                Block {
+                    stmts: Vec::new(),
+                    expr: None,
+                    span: semicolon.span,
+                }
+            } else {
+                if runtime.is_some() {
+                    return Err(ParseError::InvalidAttributeUsage {
+                        message: "@runtime impl methods must not have a body".to_string(),
+                        span: mname.span,
+                    });
+                }
+                self.parse_block()?
+            };
             methods.push(crate::ImplMethod {
                 name: mname,
                 parameters,
                 return_type,
                 body,
+                runtime,
             });
         }
 

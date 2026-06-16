@@ -23,6 +23,10 @@ pub(crate) fn extra_modules() -> Vec<Vec<String>> {
         vec!["std".into(), "io".into()],
         // `std.rt` provides the scheduler `schedule()` that `_start` calls.
         vec!["std".into(), "rt".into()],
+        // `std.convert` provides the primitive conversion associated functions
+        // (e.g. `u64.from_u32`). They resolve through the global method map, so
+        // the module must be loaded even when nothing imports a name from it.
+        vec!["std".into(), "convert".into()],
     ]
 }
 

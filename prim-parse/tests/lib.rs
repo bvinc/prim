@@ -441,6 +441,43 @@ fn test_parse_trait_with_method_and_impl_body() {
 }
 
 #[test]
+fn test_parse_runtime_impl_method() {
+    // `@runtime` associated function inside an impl: bodyless, terminated by
+    // `;`, carrying the runtime binding (used by the primitive conversions).
+    let source = r#"
+            impl u64 {
+                @runtime("prim_rt_conv_ext_i32_u")
+                fn from_u32(x: u32) -> u64;
+            }
+            fn main() {}
+        "#;
+    let (program, interner) = parse_ok(source);
+    let im = program
+        .impls
+        .iter()
+        .find(|im| matches!(&im.target, Type::U64))
+        .expect("impl u64 present");
+    assert_eq!(im.methods.len(), 1);
+    let m = &im.methods[0];
+    assert_eq!(interner.resolve(&m.name.sym), "from_u32");
+    assert_eq!(m.runtime.as_deref(), Some("prim_rt_conv_ext_i32_u"));
+    assert!(m.body.stmts.is_empty() && m.body.expr.is_none());
+}
+
+#[test]
+fn test_runtime_impl_method_requires_no_body() {
+    // A `@runtime` impl method with a body is rejected.
+    let source = r#"
+            impl u64 {
+                @runtime("prim_rt_conv_ext_i32_u")
+                fn from_u32(x: u32) -> u64 { x }
+            }
+        "#;
+    let interner = Interner::new();
+    assert!(parse(source, &interner).0.is_err());
+}
+
+#[test]
 fn test_parse_parentheses_nested() {
     let source = "fn main() { let result = ((2 + 3) * 4) + 5 }";
     let (program, _) = parse_ok(source);

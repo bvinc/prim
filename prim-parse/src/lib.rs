@@ -455,6 +455,9 @@ pub struct ImplMethod {
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
     pub body: Block,
+    /// `@runtime("...")` symbol for an intrinsic associated function with no
+    /// body (e.g. the primitive conversions). `None` for an ordinary method.
+    pub runtime: Option<String>,
 }
 
 /// A path of name segments (e.g., `module.submodule.function`).

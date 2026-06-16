@@ -511,6 +511,17 @@ impl<'a> LoweringContext<'a> {
                         let symbol_id =
                             self.insert_symbol(module_id, m.name.sym, SymbolKind::Function(fid));
                         let span = self.span_id(m.name.span, file.file_id);
+                        let runtime = m.runtime.as_deref().and_then(|binding| {
+                            let rt = hir::RuntimeAbi::from_symbol(binding);
+                            if rt.is_none() {
+                                self.errors.push(LoweringError::UnknownRuntimeAbi {
+                                    name: binding.to_string(),
+                                    file: file.file_id,
+                                    span: m.name.span,
+                                });
+                            }
+                            rt
+                        });
                         self.functions.push(Function {
                             id: fid,
                             name: symbol_id,
@@ -522,7 +533,7 @@ impl<'a> LoweringContext<'a> {
                                 expr: None,
                             },
                             span,
-                            runtime: None,
+                            runtime,
                         });
                         // Record (owner, fn-name) → ImplFn. Duplicate impls for
                         // the same (owner, name) are a hard error.

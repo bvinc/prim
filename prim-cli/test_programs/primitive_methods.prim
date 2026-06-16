@@ -1,5 +1,4 @@
 import std.io.println
-import std.convert.i32_to_u8_wrapping
 
 // A primitive type can carry both methods (self) and associated functions
 // (no self), called the same way as on a struct or enum.
@@ -8,7 +7,7 @@ impl u8 {
         self + self
     }
     fn from_i32(n: i32) -> u8 {
-        i32_to_u8_wrapping(n)
+        u8.from_i32_wrapping(n)
     }
 }
 
