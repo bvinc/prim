@@ -1,4 +1,4 @@
-import std.io.println_u8
+import std.io.println
 import std.mem.alloc
 import std.ptr.byte_add
 
@@ -16,6 +16,6 @@ fn main() {
         i = i + 1
     }
 
-    println_u8(*first)                         // 11 (earlier block intact)
-    println_u8(*byte_add[u8](p, 2047usize))    // 99 (high address writable)
+    println(*first)                         // 11 (earlier block intact)
+    println(*byte_add[u8](p, 2047usize))    // 99 (high address writable)
 }

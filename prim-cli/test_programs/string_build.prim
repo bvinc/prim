@@ -1,5 +1,4 @@
-import std.io.print_str
-import std.io.println_usize
+import std.io.println
 import std.vec.new
 import std.vec.push
 import std.string.from_vec
@@ -14,6 +13,6 @@ fn main() {
         c = c + 1
     }
     let s = from_vec(bytes)
-    print_str(s)                  // ABCDE
-    println_usize(s.len)          // 5
+    println(s)                  // ABCDE
+    println(s.len)          // 5
 }

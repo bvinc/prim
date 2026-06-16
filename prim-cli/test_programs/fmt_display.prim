@@ -1,4 +1,4 @@
-import std.io.print_str
+import std.io.println
 import std.io.print
 import std.fmt.Display
 import std.fmt.Formatter
@@ -20,5 +20,5 @@ impl Display for Pair {
 fn main() {
     let p = Pair { a = 3u64, b = 7u64 }
     print(p)
-    print_str("")
+    println("")
 }

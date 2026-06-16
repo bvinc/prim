@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Inner {
     n: i32,
@@ -33,6 +33,6 @@ impl Probe for Outer {
 fn main() {
     let i = Inner { n = 41 }
     let o = Outer { inner = i }
-    println_i32(o.lookup())     // 42
-    println_i32(i.show())       // 42
+    println(o.lookup())     // 42
+    println(i.show())       // 42
 }

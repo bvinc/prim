@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Hygiene: an immutable binding in the body that happens to share the loop
 // variable's name must be legal -- the loop's increment targets the loop
@@ -14,5 +14,5 @@ fn main() {
         let i = 99
         sum = sum + 1
     }
-    println_i32(sum)   // 3
+    println(sum)   // 3
 }

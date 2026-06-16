@@ -1,19 +1,19 @@
-import std.io.println_i32
+import std.io.println
 
 // Prints its tag when evaluated, so the absence of a tag proves the
 // right operand was short-circuited away.
 fn noisy(tag: i32, val: bool) -> bool {
-    println_i32(tag)
+    println(tag)
     val
 }
 
 fn main() {
     // && stops at the first false: 99 is never printed.
-    if noisy(1, false) && noisy(99, true) { println_i32(10) } else { println_i32(20) }
+    if noisy(1, false) && noisy(99, true) { println(10) } else { println(20) }
     // || stops at the first true: 98 is never printed.
-    if noisy(2, true) || noisy(98, false) { println_i32(30) } else { println_i32(40) }
+    if noisy(2, true) || noisy(98, false) { println(30) } else { println(40) }
     // logical not and grouping
     let t = true
     let f = false
-    if !f && !(t && f) { println_i32(50) } else { println_i32(60) }
+    if !f && !(t && f) { println(50) } else { println(60) }
 }

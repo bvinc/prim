@@ -228,7 +228,7 @@ Prim will adopt ownership semantics with compile-time borrow checking:
 
 Example selective imports:
 ```prim
-import std.io.print_str          // single symbol, falls back to std.io when std.io.print_str module is absent
+import std.io.println            // single symbol, falls back to std.io when std.io.println module is absent
 import util.math.{Vector2, dot}  // explicit list from util/math
 // import util.math.Vector2      // loads util/math module if it exists; use braces to force the struct symbol
 ```

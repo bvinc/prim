@@ -4,9 +4,10 @@
 //! Currently:
 //!   - `std.string` is auto-imported into every module (it provides the
 //!     `String` type that string literals lower to).
-//!   - `std.io` is auto-imported into every USER module (it provides `print`,
-//!     `println_*`, etc.). Stdlib modules don't get `std.io` auto-imported
-//!     to keep the stdlib's internal dependencies explicit.
+//!   - `std.io` is auto-imported into every USER module (it provides `print`
+//!     and `println`, the generic `Display`-based output functions). Stdlib
+//!     modules don't get `std.io` auto-imported to keep the stdlib's internal
+//!     dependencies explicit.
 //!
 //! This module owns the policy. The loader doesn't know the word "prelude";
 //! `compile()` asks this module for the list of extra modules to load and

@@ -1,27 +1,26 @@
 // Test type inference with comparison operations
-import std.io.println_bool
-import std.io.println_i32
+import std.io.println
 
 fn main() {
     // Comparison with inferred integer types
     let a = 10 > 5
-    println_bool(a)
+    println(a)
 
     let b = 3 <= 3
-    println_bool(b)
+    println(b)
 
     // Equality with inferred types
     let c = 42 == 42
-    println_bool(c)
+    println(c)
 
     let d = 1 != 2
-    println_bool(d)
+    println(d)
 
     // Comparison in if condition with inferred types
     let x = 100
     if x > 50 {
-        println_i32(1)
+        println(1)
     } else {
-        println_i32(0)
+        println(0)
     }
 }

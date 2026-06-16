@@ -1,4 +1,4 @@
-import std.io.println_usize
+import std.io.println
 
 fn id(x: usize) -> usize {
     x
@@ -15,5 +15,5 @@ fn f() -> usize {
 }
 
 fn main() {
-    println_usize(f()) // 6
+    println(f()) // 6
 }

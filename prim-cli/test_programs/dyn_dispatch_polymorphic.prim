@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter { n: i32 }
 struct Doubler { n: i32 }
@@ -27,6 +27,6 @@ fn main() {
     let c = Counter { n = 21 }
     let d = Doubler { n = 100 }
     // Same function, same call site, different vtables dispatched.
-    println_i32(extract(c))   // 21
-    println_i32(extract(d))   // 200
+    println(extract(c))   // 21
+    println(extract(d))   // 200
 }

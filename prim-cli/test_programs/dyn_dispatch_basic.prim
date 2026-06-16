@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter {
     n: i32,
@@ -23,5 +23,5 @@ fn use_greeter(g: Greeter) -> i32 {
 
 fn main() {
     let c = Counter { n = 42 }
-    println_i32(use_greeter(c))
+    println(use_greeter(c))
 }

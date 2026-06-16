@@ -1,24 +1,24 @@
 import std.io.print
-import std.io.print_str
+import std.io.println
 
 // Display is implemented for every primitive, so `print` renders them
 // directly: unsigned and signed integers (including the negative path),
 // floats (with trailing-zero trimming), and bool.
 fn main() {
     print(255u8)
-    print_str("")
+    println("")
     print(42u64)
-    print_str("")
+    println("")
     print(0i64 - 7i64)
-    print_str("")
+    println("")
     print(0i32 - 128i32)
-    print_str("")
+    println("")
     print(3.5f64)
-    print_str("")
+    println("")
     print(2.0f64)
-    print_str("")
+    println("")
     print(true)
-    print_str("")
+    println("")
     print(false)
-    print_str("")
+    println("")
 }

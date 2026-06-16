@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter {
     n: i32,
@@ -20,6 +20,6 @@ impl Bumpable for Counter {
 
 fn main() {
     let c = Counter { n = 21 }
-    println_i32(c.current())   // 21
-    println_i32(c.doubled())   // 42
+    println(c.current())   // 21
+    println(c.doubled())   // 42
 }

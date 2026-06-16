@@ -157,6 +157,9 @@ impl Display for bool {
         }
     }
 }
+impl Display for String {
+    fn fmt(self, f: Formatter) { f.write_str(self) }
+}
 
 // Render a value to a fresh `String`.
 fn to_string[T: Display](x: T) -> String {

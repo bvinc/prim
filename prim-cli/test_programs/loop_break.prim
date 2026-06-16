@@ -1,12 +1,12 @@
-import std.io.println_i64
+import std.io.println
 
 fn main() {
     loop {
-        println_i64(1)
-        println_i64(2)
+        println(1)
+        println(2)
         break
-        println_i64(999)
+        println(999)
     }
 
-    println_i64(3)
+    println(3)
 }

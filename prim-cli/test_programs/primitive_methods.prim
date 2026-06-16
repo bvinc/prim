@@ -1,4 +1,4 @@
-import std.io.println_u8
+import std.io.println
 import std.convert.i32_to_u8_wrapping
 
 // A primitive type can carry both methods (self) and associated functions
@@ -14,6 +14,6 @@ impl u8 {
 
 fn main() {
     let x = 5u8
-    println_u8(x.doubled())        // 10 (method called on a primitive value)
-    println_u8(u8.from_i32(300))   // 44 (associated function on a primitive)
+    println(x.doubled())        // 10 (method called on a primitive value)
+    println(u8.from_i32(300))   // 44 (associated function on a primitive)
 }

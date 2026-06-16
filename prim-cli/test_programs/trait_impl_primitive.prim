@@ -1,4 +1,4 @@
-import std.io.println_i64
+import std.io.println
 
 // A trait implemented for a primitive type, then reached through a generic
 // bound. The bound check, monomorphization, and static dispatch all resolve
@@ -20,6 +20,6 @@ fn labeled[T: Label](x: T) -> i64 {
 }
 
 fn main() {
-    println_i64(labeled[i32](7i32))
-    println_i64(labeled[bool](true))
+    println(labeled[i32](7i32))
+    println(labeled[bool](true))
 }

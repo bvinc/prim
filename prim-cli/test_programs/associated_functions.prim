@@ -1,5 +1,4 @@
-import std.io.println_i32
-import std.io.println_u8
+import std.io.println
 import std.convert.i32_to_u8_wrapping
 
 struct Counter { n: i32 }
@@ -27,7 +26,7 @@ impl u8 {
 
 fn main() {
     let c = Counter.make(41)        // associated call
-    println_i32(c.get())            // 41 (method)
-    println_i32(c.bumped().get())   // 42 (Self return, chained method)
-    println_u8(u8.from_i32(300))    // 44 (primitive associated call)
+    println(c.get())            // 41 (method)
+    println(c.bumped().get())   // 42 (Self return, chained method)
+    println(u8.from_i32(300))    // 44 (primitive associated call)
 }

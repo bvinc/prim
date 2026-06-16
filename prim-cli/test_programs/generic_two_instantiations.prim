@@ -1,5 +1,4 @@
-import std.io.println_i32
-import std.io.println_i64
+import std.io.println
 
 // Same generic, two different concrete substitutions. Mono should
 // produce two specializations (identity[i32], identity[i64]) — both
@@ -11,6 +10,6 @@ fn identity[T](x: T) -> T {
 fn main() {
     let a = identity(7i32)
     let b = identity(700000000000i64)
-    println_i32(a)
-    println_i64(b)
+    println(a)
+    println(b)
 }

@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter { n: i32 }
 
@@ -25,7 +25,7 @@ fn make_early(flag: bool) -> Greeter {
 }
 
 fn main() {
-    println_i32(make().greet())               // 55
-    println_i32(make_early(true).greet())     // 66
-    println_i32(make_early(false).greet())    // 77
+    println(make().greet())               // 55
+    println(make_early(true).greet())     // 66
+    println(make_early(false).greet())    // 77
 }

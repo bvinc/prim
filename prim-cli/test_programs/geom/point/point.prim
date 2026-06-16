@@ -1,6 +1,6 @@
 mod point
 
-import std.io.println_i64
+import std.io.println
 
 struct Point {
     value: i32,
@@ -21,5 +21,5 @@ fn new_point() -> Point {
 }
 
 fn announce() {
-    println_i64(42);
+    println(42);
 }

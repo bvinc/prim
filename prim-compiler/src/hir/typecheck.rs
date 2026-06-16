@@ -431,6 +431,15 @@ impl<'a> Checker<'a> {
                     )),
                 )
             })?;
+            // A type parameter inferred solely from an undetermined numeric
+            // literal takes that literal's default type (i32 / f64), matching
+            // the finalize pass — so e.g. `println(42)` resolves `T` to `i32`
+            // and satisfies a `Display` bound.
+            let pinned = match pinned {
+                Type::IntVar => Type::I32,
+                Type::FloatVar => Type::F64,
+                other => other,
+            };
             if let Some(bound) = param.bound {
                 self.check_type_arg_bound(&pinned, bound, mode, span)?;
             }

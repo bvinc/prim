@@ -1,5 +1,4 @@
-import std.io.println_i32
-import std.io.println_u32
+import std.io.println
 
 struct Entry[K, V] {
     key: K,
@@ -8,6 +7,6 @@ struct Entry[K, V] {
 
 fn main() {
     let e = Entry { key = 42i32, value = 100u32 }
-    println_i32(e.key)
-    println_u32(e.value)
+    println(e.key)
+    println(e.value)
 }

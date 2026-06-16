@@ -1,6 +1,5 @@
 // Test inference from struct field types
-import std.io.println_i32
-import std.io.println_u8
+import std.io.println
 
 struct Point {
     x: i32,
@@ -16,12 +15,12 @@ struct Color {
 fn main() {
     // Field values inferred from struct field types
     let p = Point { x = 10, y = 20 }
-    println_i32(p.x)
-    println_i32(p.y)
+    println(p.x)
+    println(p.y)
 
     // Different type for struct fields
     let c = Color { r = 255, g = 128, b = 0 }
-    println_u8(c.r)
-    println_u8(c.g)
-    println_u8(c.b)
+    println(c.r)
+    println(c.g)
+    println(c.b)
 }

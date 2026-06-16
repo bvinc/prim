@@ -1,32 +1,32 @@
 // Test modulo operator
-import std.io.println_i32
+import std.io.println
 
 fn main() {
     // 17 % 5 = 2
     let a = 17 % 5
-    println_i32(a)
+    println(a)
 
     // 10 % 3 = 1
     let b = 10 % 3
-    println_i32(b)
+    println(b)
 
     // Test with larger numbers: 100 % 7 = 2
     let c = 100 % 7
-    println_i32(c)
+    println(c)
 
     // Test precedence: 10 + 7 % 3 = 10 + 1 = 11
     let d = 10 + 7 % 3
-    println_i32(d)
+    println(d)
 
     // Test negative left operand: -17 % 5 = -2
     let e = -17 % 5
-    println_i32(e)
+    println(e)
 
     // Test negative right operand: 17 % -5 = 2
     let f = 17 % -5
-    println_i32(f)
+    println(f)
 
     // Test both operands negative: -17 % -5 = -2
     let g = -17 % -5
-    println_i32(g)
+    println(g)
 }

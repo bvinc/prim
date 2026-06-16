@@ -1,4 +1,4 @@
 fn main() {
-    print_str("hello")
+    println("hello")
 }
 

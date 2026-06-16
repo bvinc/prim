@@ -1,5 +1,5 @@
 import std.io
 
 fn main() {
-    std.io.println_i32(11)
+    std.io.println(11)
 }

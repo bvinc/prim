@@ -1,9 +1,9 @@
-import std.io.println_i64
+import std.io.println
 
 struct Point {
     x: i32
 }
 
 fn main() {
-    println_i64(42)
+    println(42)
 }

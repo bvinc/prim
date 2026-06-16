@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Box {
     v: i32,
@@ -24,6 +24,6 @@ fn main() {
     let b = Box { v = 5 }
     // Chained: b.inner() returns a new Box, then .value() is dispatched
     // on it.
-    println_i32(b.inner().value())          // 25
-    println_i32(b.inner().inner().value())  // 5^4 = 625
+    println(b.inner().value())          // 25
+    println(b.inner().inner().value())  // 5^4 = 625
 }

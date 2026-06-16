@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Hygiene (control case, currently correct): an inner loop whose bound legitimately
 // references the *outer* loop variable must work -- the outer variable is in scope
@@ -10,5 +10,5 @@ fn main() {
             count = count + 1
         }
     }
-    println_i32(count)   // 1 + 2 + 3 = 6
+    println(count)   // 1 + 2 + 3 = 6
 }

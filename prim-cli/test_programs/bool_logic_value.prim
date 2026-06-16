@@ -1,14 +1,14 @@
-import std.io.println_bool
+import std.io.println
 
 // && / || / ! used as values (not just in if-conditions).
 fn main() {
     let a = true
     let b = false
-    println_bool(a && b)     // false
-    println_bool(a || b)     // true
-    println_bool(!a)         // false
-    println_bool(!b)         // true
-    println_bool(a && !b)    // true
-    println_bool(!a || b)    // false
-    println_bool(!(a && b))  // true
+    println(a && b)     // false
+    println(a || b)     // true
+    println(!a)         // false
+    println(!b)         // true
+    println(a && !b)    // true
+    println(!a || b)    // false
+    println(!(a && b))  // true
 }

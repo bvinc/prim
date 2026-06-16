@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 import std.vec.new
 import std.vec.push
 import std.vec.get
@@ -6,7 +6,7 @@ import std.vec.get
 fn main() {
     let v = new[i32]()
     push(v, 5)
-    println_i32(get(v, 0usize))   // 5
-    println_i32(get(v, 5usize))   // out of bounds -> panic, halts
-    println_i32(999)              // not reached
+    println(get(v, 0usize))   // 5
+    println(get(v, 5usize))   // out of bounds -> panic, halts
+    println(999)              // not reached
 }

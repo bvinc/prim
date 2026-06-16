@@ -1,5 +1,4 @@
-import std.io.println_usize
-import std.io.println_u8
+import std.io.println
 import std.mem.alloc
 import std.ptr.at
 
@@ -15,6 +14,6 @@ fn main() {
     *at[*mut u8](buf, 16usize) = buf
 
     let again = *at[*mut u8](buf, 16usize)
-    println_usize(*at[usize](again, 0usize))
-    println_u8(*at[u8](buf, 8usize))
+    println(*at[usize](again, 0usize))
+    println(*at[u8](buf, 8usize))
 }

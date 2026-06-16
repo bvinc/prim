@@ -1,4 +1,4 @@
-import std.io.println_isize
+import std.io.println
 import std.wasm.memory.grow
 
 fn main() {
@@ -9,6 +9,6 @@ fn main() {
     let a = grow(0usize) // current page count
     let b = grow(2usize) // == a, and grows by 2
     let c = grow(0usize) // == a + 2
-    println_isize(b - a) // 0
-    println_isize(c - a) // 2
+    println(b - a) // 0
+    println(c - a) // 2
 }

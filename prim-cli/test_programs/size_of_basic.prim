@@ -1,4 +1,4 @@
-import std.io.println_usize
+import std.io.println
 import std.mem.size_of
 
 struct Pair {
@@ -9,10 +9,10 @@ struct Pair {
 // size_of[T]() folds to a constant per type: scalars use their natural
 // width; structs are 4-byte heap references.
 fn main() {
-    println_usize(size_of[u8]())     // 1
-    println_usize(size_of[u16]())    // 2
-    println_usize(size_of[u32]())    // 4
-    println_usize(size_of[u64]())    // 8
-    println_usize(size_of[bool]())   // 1
-    println_usize(size_of[Pair]())   // 4
+    println(size_of[u8]())     // 1
+    println(size_of[u16]())    // 2
+    println(size_of[u32]())    // 4
+    println(size_of[u64]())    // 8
+    println(size_of[bool]())   // 1
+    println(size_of[Pair]())   // 4
 }

@@ -1,6 +1,6 @@
-import std.io.println_i64
+import std.io.println
 
 fn main() {
     let result = (2i64 + 3i64) * 4i64
-    println_i64(result)
+    println(result)
 }

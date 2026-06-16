@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Adder { base: i32 }
 
@@ -26,6 +26,6 @@ fn use_two(c: Computable, x: i32, y: i32) -> i32 {
 
 fn main() {
     let a = Adder { base = 100 }
-    println_i32(use_one(a, 7))            // 107
-    println_i32(use_two(a, 10, 20))       // 130
+    println(use_one(a, 7))            // 107
+    println(use_two(a, 10, 20))       // 130
 }

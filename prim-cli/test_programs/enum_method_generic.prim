@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Methods on a generic enum — the `Option[T]` shape from a real stdlib.
 // `impl Opt for Option` attaches associated functions (no self) to the generic enum;
@@ -31,8 +31,8 @@ impl Opt for Option {
 fn main() {
     let a = Option.Some { value = 42i32 }
     let b: Option[i32] = Option.None
-    println_i32(Option.unwrap_or(a, 7))   // 42
-    println_i32(Option.unwrap_or(b, 7))   // 7
-    println_i32(Option.is_some(a))      // 1
-    println_i32(Option.is_some(b))      // 0
+    println(Option.unwrap_or(a, 7))   // 42
+    println(Option.unwrap_or(b, 7))   // 7
+    println(Option.is_some(a))      // 1
+    println(Option.is_some(b))      // 0
 }

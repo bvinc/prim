@@ -1,8 +1,8 @@
 mod main
 
 import a
-import std.io.println_i64
+import std.io.println
 
 fn main() {
-    println_i64(a.run())
+    println(a.run())
 }

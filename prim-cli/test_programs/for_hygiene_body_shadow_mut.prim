@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Hygiene: the loop's own counter increment must be independent of any binding
 // the body introduces. A `let mut` in the body that shadows the loop variable
@@ -18,5 +18,5 @@ fn main() {
         guard = guard + 1
         if guard > 10 { break }
     }
-    println_i32(seen)   // 3
+    println(seen)   // 3
 }

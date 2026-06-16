@@ -1,4 +1,4 @@
-import std.io.println_bool
+import std.io.println
 import std.mem.alloc
 import std.mem.free
 import std.ptr.addr
@@ -32,9 +32,9 @@ fn main() {
     let w = alloc(120usize)
     let r3 = addr[u8](w) == addr[u8](x) // coalesced reuse: true
 
-    println_bool(r1)
-    println_bool(r2)
-    println_bool(r3)
+    println(r1)
+    println(r2)
+    println(r3)
 
     free(b)
     free(d)

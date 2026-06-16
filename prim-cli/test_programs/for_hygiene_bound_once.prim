@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Hygiene: the range bound is evaluated exactly once, before the loop starts.
 // Mutating the variable used in the bound from inside the body must not change
@@ -21,5 +21,5 @@ fn main() {
         guard = guard + 1
         if guard > 50 { break }
     }
-    println_i32(sum)   // 5
+    println(sum)   // 5
 }

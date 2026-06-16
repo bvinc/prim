@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 enum Sig { Go, Stop }
 
@@ -71,9 +71,9 @@ fn while_break() -> i32 {
 }
 
 fn main() {
-    println_i32(count_to(5))     // 5
-    println_i32(nested_if())     // 4
-    println_i32(via_match())     // 3
-    println_i32(nested_loops())  // 4
-    println_i32(while_break())   // 7
+    println(count_to(5))     // 5
+    println(nested_if())     // 4
+    println(via_match())     // 3
+    println(nested_loops())  // 4
+    println(while_break())   // 7
 }

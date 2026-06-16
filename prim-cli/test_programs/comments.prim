@@ -1,8 +1,8 @@
 // This is a line comment at the top
-import std.io.println_i64
+import std.io.println
 
 fn main() {
     let x = 42i64 // inline comment
     let y = 10i64
-    println_i64(x + y) // prints 52
+    println(x + y) // prints 52
 }

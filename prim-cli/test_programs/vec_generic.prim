@@ -1,5 +1,4 @@
-import std.io.println_u64
-import std.io.println_i32
+import std.io.println
 import std.vec.new
 import std.vec.push
 import std.vec.get
@@ -11,14 +10,14 @@ fn main() {
     let nums = new[u64]()
     push(nums, 1000000000000u64)
     push(nums, 2000000000000u64)
-    println_u64(get(nums, 0usize))   // 1000000000000
-    println_u64(get(nums, 1usize))   // 2000000000000
+    println(get(nums, 0usize))   // 1000000000000
+    println(get(nums, 1usize))   // 2000000000000
 
     // Vec[Point] — struct (reference) elements
     let pts = new[Point]()
     push(pts, Point { x = 1, y = 2 })
     push(pts, Point { x = 3, y = 4 })
     let p = get(pts, 1usize)
-    println_i32(p.x)                 // 3
-    println_i32(p.y)                 // 4
+    println(p.x)                 // 3
+    println(p.y)                 // 4
 }

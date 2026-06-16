@@ -1,5 +1,4 @@
-import std.io.println_usize
-import std.io.println_bool
+import std.io.println
 import std.mem.alloc
 import std.mem.free
 import std.ptr.at
@@ -37,6 +36,6 @@ fn main() {
         }
         i = i + 1usize
     }
-    println_bool(ok) // true: all sentinels intact across growth
-    println_usize(n) // 400
+    println(ok) // true: all sentinels intact across growth
+    println(n) // 400
 }

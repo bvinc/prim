@@ -1,5 +1,5 @@
-import std.io.print_str
+import std.io.println
 
 fn main() {
-    print_str("selective fn")
+    println("selective fn")
 }

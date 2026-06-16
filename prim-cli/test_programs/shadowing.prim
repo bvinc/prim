@@ -4,7 +4,7 @@
 // - Shadowing can change mutability
 // - Each shadow creates a new variable
 
-import std.io.println_i32
+import std.io.println
 
 fn test_basic_shadow() -> i32 {
     let x = 1
@@ -76,12 +76,12 @@ fn test_block_shadow_uses_outer() -> i32 {
 }
 
 fn main() {
-    println_i32(test_basic_shadow())       // 2
-    println_i32(test_block_shadow())       // 10
-    println_i32(test_nested_blocks())      // 100
-    println_i32(test_shadow_in_if())       // 1
-    println_i32(test_shadow_in_if_else())  // 1
-    println_i32(test_mutability_change())  // 7
-    println_i32(test_shadow_uses_outer())  // 15
-    println_i32(test_block_shadow_uses_outer())  // 100
+    println(test_basic_shadow())       // 2
+    println(test_block_shadow())       // 10
+    println(test_nested_blocks())      // 100
+    println(test_shadow_in_if())       // 1
+    println(test_shadow_in_if_else())  // 1
+    println(test_mutability_change())  // 7
+    println(test_shadow_uses_outer())  // 15
+    println(test_block_shadow_uses_outer())  // 100
 }

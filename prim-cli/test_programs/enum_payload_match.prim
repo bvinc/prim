@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 enum MaybeI32 {
     None,
@@ -14,6 +14,6 @@ fn unwrap_or(m: MaybeI32, default: i32) -> i32 {
 
 fn main() {
     let a = MaybeI32.Some { value = 41i32 }
-    println_i32(unwrap_or(a, 0i32))
-    println_i32(unwrap_or(MaybeI32.None, 7i32))
+    println(unwrap_or(a, 0i32))
+    println(unwrap_or(MaybeI32.None, 7i32))
 }

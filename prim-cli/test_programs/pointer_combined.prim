@@ -1,5 +1,4 @@
-import std.io.println_u32
-import std.io.println_u8
+import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.null_mut_u32
 import std.ptr.ptr_add_mut_u8
@@ -23,15 +22,15 @@ fn main() {
         i = i + 1usize
     }
 
-    println_u32(*base32)                            // 100
-    println_u32(*ptr_add_mut_u32(base32, 1usize))   // 100
-    println_u32(*ptr_add_mut_u32(base32, 2usize))   // 100
-    println_u32(*ptr_add_mut_u32(base32, 3usize))   // 100
+    println(*base32)                            // 100
+    println(*ptr_add_mut_u32(base32, 1usize))   // 100
+    println(*ptr_add_mut_u32(base32, 2usize))   // 100
+    println(*ptr_add_mut_u32(base32, 3usize))   // 100
 
     // Overwrite slot 2 to a distinct value, observe via both pointer widths.
     *ptr_add_mut_u32(base32, 2usize) = 0x42u32
-    println_u32(*ptr_add_mut_u32(base32, 2usize))   // 66
+    println(*ptr_add_mut_u32(base32, 2usize))   // 66
 
     // Read the low byte of slot 2 via the u8 pointer.
-    println_u8(*ptr_add_mut_u8(base8, 8usize))      // 66 (low byte of 0x42)
+    println(*ptr_add_mut_u8(base8, 8usize))      // 66 (low byte of 0x42)
 }

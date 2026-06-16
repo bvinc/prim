@@ -1,5 +1,4 @@
-import std.io.println_usize
-import std.io.println_bool
+import std.io.println
 import std.mem.alloc
 import std.mem.set_chunk_head
 import std.mem.set_chunk_prev_foot
@@ -20,26 +19,26 @@ fn main() {
     let buf = alloc(128usize)
 
     set_chunk_head(buf, 32usize | 3usize)
-    println_usize(chunksize(buf)) // flags masked off -> 32
-    println_bool(cinuse(buf)) // CINUSE set -> true
-    println_bool(pinuse(buf)) // PINUSE set -> true
+    println(chunksize(buf)) // flags masked off -> 32
+    println(cinuse(buf)) // CINUSE set -> true
+    println(pinuse(buf)) // PINUSE set -> true
 
     // payload sits one header (8 bytes) past the chunk start...
-    println_usize(addr[u8](chunk2mem(buf)) - addr[u8](buf)) // 8
+    println(addr[u8](chunk2mem(buf)) - addr[u8](buf)) // 8
     // ...and mem2chunk is its exact inverse.
-    println_usize(addr[u8](mem2chunk(chunk2mem(buf))) - addr[u8](buf)) // 0
+    println(addr[u8](mem2chunk(chunk2mem(buf))) - addr[u8](buf)) // 0
 
     // next_chunk steps forward by chunksize.
     let second = next_chunk(buf)
-    println_usize(addr[u8](second) - addr[u8](buf)) // 32
+    println(addr[u8](second) - addr[u8](buf)) // 32
 
     // Mark `second` free with prev_foot recording the gap, then walk back.
     set_chunk_prev_foot(second, 32usize)
-    println_usize(addr[u8](prev_chunk(second)) - addr[u8](buf)) // 0
+    println(addr[u8](prev_chunk(second)) - addr[u8](buf)) // 0
 
     // request2size: below the minimum request snaps to MIN_CHUNK_SIZE (16),
     // otherwise it adds the one-word overhead and rounds up to 8.
-    println_usize(request2size(1usize)) // 16
-    println_usize(request2size(20usize)) // (20+4+7)&~7 = 24
-    println_usize(request2size(13usize)) // (13+4+7)&~7 = 24
+    println(request2size(1usize)) // 16
+    println(request2size(20usize)) // (20+4+7)&~7 = 24
+    println(request2size(13usize)) // (13+4+7)&~7 = 24
 }

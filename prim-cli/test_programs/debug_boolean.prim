@@ -1,8 +1,7 @@
-import std.io.println_bool
-import std.io.println_i64
+import std.io.println
 
 fn main() {
-    println_i64(1)
-    println_bool(true)
-    println_i64(2)
+    println(1)
+    println(true)
+    println(2)
 }

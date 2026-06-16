@@ -32,7 +32,7 @@ fn test_cli_build_command() {
     let prim_root = staged_prim_root();
     let temp = target_tempdir();
 
-    let test_program = "import std.io.println_i64\nfn main() { println_i64(42) }";
+    let test_program = "import std.io.println\nfn main() { println(42) }";
     let test_path = temp.path().join("test_cli_build.prim");
     fs::write(&test_path, test_program).expect("Failed to write test file");
 
@@ -69,7 +69,7 @@ fn test_cli_run_command() {
     let prim_root = staged_prim_root();
     let temp = target_tempdir();
 
-    let test_program = "import std.io.println_i64\nfn main() { println_i64(123) }";
+    let test_program = "import std.io.println\nfn main() { println(123) }";
     let test_path = temp.path().join("test_cli_run.prim");
     fs::write(&test_path, test_program).expect("Failed to write test file");
 
@@ -140,7 +140,7 @@ fn test_cli_unknown_command() {
 #[test]
 fn test_cli_missing_prim_root() {
     let temp = target_tempdir();
-    let test_program = "import std.io.println_i64\nfn main() { println_i64(1) }";
+    let test_program = "import std.io.println\nfn main() { println(1) }";
     let test_path = temp.path().join("test_missing_root.prim");
     fs::write(&test_path, test_program).expect("Failed to write test file");
 

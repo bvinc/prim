@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Point {
     x: i32,
@@ -7,6 +7,6 @@ struct Point {
 
 fn main() {
     let p = Point { x = 10, y = 20 }
-    println_i32(p.x)
-    println_i32(p.y)
+    println(p.x)
+    println(p.y)
 }

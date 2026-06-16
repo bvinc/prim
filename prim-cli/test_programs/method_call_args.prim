@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Vec2 {
     x: i32,
@@ -19,6 +19,6 @@ impl Math for Vec2 {
 
 fn main() {
     let v = Vec2 { x = 10, y = 20 }
-    println_i32(v.shifted(3, 4))   // 10 + 3 + 20 + 4 = 37
-    println_i32(v.shifted(0, 0))   // 30
+    println(v.shifted(3, 4))   // 10 + 3 + 20 + 4 = 37
+    println(v.shifted(0, 0))   // 30
 }

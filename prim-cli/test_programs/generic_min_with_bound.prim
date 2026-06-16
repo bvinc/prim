@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Value { n: i32 }
 
@@ -23,5 +23,5 @@ fn main() {
     let x = Value { n = 7 }
     let y = Value { n = 3 }
     let m = min(x, y)
-    println_i32(m.n)
+    println(m.n)
 }

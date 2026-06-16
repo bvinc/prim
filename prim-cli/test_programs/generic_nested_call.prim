@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Inner generic — forwards its arg through identity.
 fn through[T](x: T) -> T {
@@ -14,5 +14,5 @@ fn forward[T](x: T) -> T {
 
 fn main() {
     let a = forward(11i32)
-    println_i32(a)
+    println(a)
 }

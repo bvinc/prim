@@ -1,5 +1,4 @@
-import std.io.println_bool
-import std.io.println_usize
+import std.io.println
 import std.mem.alloc
 import std.mem.free
 import std.ptr.at
@@ -54,6 +53,6 @@ fn main() {
         i = i + 1usize
     }
 
-    println_bool(ok) // true
-    println_usize(k) // 40
+    println(ok) // true
+    println(k) // 40
 }

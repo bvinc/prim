@@ -1,38 +1,38 @@
 import std.io
 
 fn main() {
-    print.println_u8(0u8);
-    print.println_u8(255u8);
+    print.println(0u8);
+    print.println(255u8);
 
     let min_i8: i8 = -128i8;
-    print.println_i8(min_i8);
-    print.println_i8(127i8);
+    print.println(min_i8);
+    print.println(127i8);
 
-    print.println_u16(0u16);
-    print.println_u16(65535u16);
+    print.println(0u16);
+    print.println(65535u16);
 
     let min_i16: i16 = -32768i16;
-    print.println_i16(min_i16);
-    print.println_i16(32767i16);
+    print.println(min_i16);
+    print.println(32767i16);
 
-    print.println_u32(0u32);
-    print.println_u32(4294967295u32);
+    print.println(0u32);
+    print.println(4294967295u32);
 
     let min_i32: i32 = -2147483648i32;
-    print.println_i32(min_i32);
-    print.println_i32(2147483647i32);
+    print.println(min_i32);
+    print.println(2147483647i32);
 
-    print.println_u64(0u64);
-    print.println_u64(18446744073709551615u64);
+    print.println(0u64);
+    print.println(18446744073709551615u64);
 
     let min_i64: i64 = -9223372036854775808i64;
-    print.println_i64(min_i64);
-    print.println_i64(9223372036854775807i64);
+    print.println(min_i64);
+    print.println(9223372036854775807i64);
 
-    print.println_usize(0usize);
-    print.println_usize(18446744073709551615usize);
+    print.println(0usize);
+    print.println(18446744073709551615usize);
 
     let min_isize: isize = -9223372036854775808isize;
-    print.println_isize(min_isize);
-    print.println_isize(9223372036854775807isize);
+    print.println(min_isize);
+    print.println(9223372036854775807isize);
 }

@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter { n: i32 }
 
@@ -14,5 +14,5 @@ fn main() {
     let c = Counter { n = 99 }
     // Coerce a concrete value into a trait at let-binding time.
     let g: Greeter = c
-    println_i32(g.greet())
+    println(g.greet())
 }

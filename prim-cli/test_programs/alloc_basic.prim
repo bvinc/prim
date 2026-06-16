@@ -1,5 +1,4 @@
-import std.io.println_u8
-import std.io.println_usize
+import std.io.println
 import std.mem.alloc
 import std.mem.free
 import std.ptr.byte_add
@@ -17,9 +16,9 @@ fn main() {
     *buf = 65u8
     *byte_add[u8](buf, 1usize) = 66u8
 
-    println_u8(*buf)                                  // 65
-    println_u8(*byte_add[u8](buf, 1usize))           // 66
-    println_usize(gap)                               // 16
+    println(*buf)                                  // 65
+    println(*byte_add[u8](buf, 1usize))           // 66
+    println(gap)                               // 16
 
     free(buf)
     free(other)

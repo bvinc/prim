@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 // Early return with value, branching on input.
 fn classify(x: i32) -> i32 {
@@ -34,16 +34,16 @@ fn maybe_bump(do_it: bool) {
 }
 
 fn main() {
-    println_i32(classify(-5i32))           // -1
-    println_i32(classify(0i32))            // 0
-    println_i32(classify(7i32))            // 1
+    println(classify(-5i32))           // -1
+    println(classify(0i32))            // 0
+    println(classify(7i32))            // 1
 
-    println_i32(first_square_above(50i32)) // 8 (8*8=64 is first > 50)
-    println_i32(first_square_above(0i32))  // 1 (1*1=1 is first > 0)
+    println(first_square_above(50i32)) // 8 (8*8=64 is first > 50)
+    println(first_square_above(0i32))  // 1 (1*1=1 is first > 0)
 
     maybe_bump(false)
-    println_i32(SIDE_EFFECT)               // 0
+    println(SIDE_EFFECT)               // 0
     maybe_bump(true)
     maybe_bump(true)
-    println_i32(SIDE_EFFECT)               // 2
+    println(SIDE_EFFECT)               // 2
 }

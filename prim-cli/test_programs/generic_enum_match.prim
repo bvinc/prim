@@ -1,5 +1,4 @@
-import std.io.println_i32
-import std.io.println_i64
+import std.io.println
 
 enum Option[T] {
     None,
@@ -24,7 +23,7 @@ fn main() {
     let a = Option.Some { value = 12i32 }
     let b = Option.Some { value = 9000000000i64 }
     let c: Option[i32] = Option.None
-    println_i32(unwrap_i32(a))
-    println_i64(unwrap_i64(b))
-    println_i32(unwrap_i32(c))
+    println(unwrap_i32(a))
+    println(unwrap_i64(b))
+    println(unwrap_i32(c))
 }

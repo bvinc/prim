@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Point {
     x: i32,
@@ -13,17 +13,17 @@ struct Person {
 fn main() {
     // Test basic struct literal type checking
     let p1 = Point { x = 10, y = 20 }
-    println_i32(p1.x)
-    println_i32(p1.y)
+    println(p1.x)
+    println(p1.y)
     
     // Test field access type checking
     let p2: Point = Point { x = 5, y = 15 }
     let x_coord = p2.x
     let y_coord = p2.y
-    println_i32(x_coord)
-    println_i32(y_coord)
+    println(x_coord)
+    println(y_coord)
     
     // Test struct with different field types
     let person = Person { name = "Alice", age = 30 }
-    println_i32(person.age)
+    println(person.age)
 }

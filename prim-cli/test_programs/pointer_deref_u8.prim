@@ -1,4 +1,4 @@
-import std.io.println_u8
+import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.ptr_byte_add_mut_u8
 
@@ -10,16 +10,16 @@ fn main() {
     let base = ptr_byte_add_mut_u8(null_mut_u8(), 32768usize)
 
     *base = 42u8
-    println_u8(*base)                                               // 42
+    println(*base)                                               // 42
 
     let p1 = ptr_byte_add_mut_u8(base, 1usize)
     *p1 = 255u8
-    println_u8(*p1)                                                 // 255
+    println(*p1)                                                 // 255
 
     // Independent: writing through p1 didn't touch base.
-    println_u8(*base)                                               // 42
+    println(*base)                                               // 42
 
     // Overwrite.
     *base = 7u8
-    println_u8(*base)                                               // 7
+    println(*base)                                               // 7
 }

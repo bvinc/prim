@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 struct Counter { n: i32 }
 
@@ -20,5 +20,5 @@ fn unpack(h: Holder) -> i32 {
 fn main() {
     let c = Counter { n = 88 }
     let h = Holder { g = c }    // field initializer coerces Counter → Greeter
-    println_i32(unpack(h))
+    println(unpack(h))
 }

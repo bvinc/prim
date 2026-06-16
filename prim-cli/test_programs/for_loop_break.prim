@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 fn main() {
     // break out of a for loop (break inside an if inside the loop)
@@ -9,7 +9,7 @@ fn main() {
             break
         }
     }
-    println_i32(found)   // 7
+    println(found)   // 7
 
     // break before exhausting a huge range
     let mut s = 0
@@ -17,5 +17,5 @@ fn main() {
         if i >= 5 { break }
         s = s + i
     }
-    println_i32(s)       // 0+1+2+3+4 = 10
+    println(s)       // 0+1+2+3+4 = 10
 }

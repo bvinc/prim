@@ -1,4 +1,4 @@
-import std.io.println_i32
+import std.io.println
 
 fn main() {
     // sum over a half-open range
@@ -6,7 +6,7 @@ fn main() {
     for i in 0..5 {
         sum = sum + i
     }
-    println_i32(sum)        // 0+1+2+3+4 = 10
+    println(sum)        // 0+1+2+3+4 = 10
 
     // nested loops with a non-zero, variable upper bound
     let mut count = 0
@@ -15,11 +15,11 @@ fn main() {
             count = count + 1
         }
     }
-    println_i32(count)      // 2 + 3 + 4 = 9
+    println(count)      // 2 + 3 + 4 = 9
 
     // empty range runs zero times
     for x in 5..5 {
         count = count + 100
     }
-    println_i32(count)      // still 9
+    println(count)      // still 9
 }

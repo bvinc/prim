@@ -1,7 +1,7 @@
 // Stress test: nested structs
 // This should fail because nested structs aren't flattened
 
-import std.io.println_i32
+import std.io.println
 
 struct Inner {
     x: i32,
@@ -24,5 +24,5 @@ fn main() {
     let o = make_outer();
     // Expected: 1 + 2 + 3 + 4 = 10
     let total = o.a.x + o.a.y + o.b.x + o.b.y;
-    println_i32(total);
+    println(total);
 }

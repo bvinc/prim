@@ -1,8 +1,8 @@
-import std.io.println_i64
+import std.io.println
 
 fn main() {
     let x: i64 = 42i64
     if x > 0i64 {
-        println_i64(x)
+        println(x)
     }
 }
