@@ -374,7 +374,11 @@ impl<'a> Checker<'a> {
         span: SpanId,
     ) -> Result<(), TypeCheckError> {
         match ty {
-            Type::Struct(sid, _) if self.program.impls.contains_key(&(bound, *sid)) => Ok(()),
+            _ if crate::hir::MethodOwner::of_type(ty)
+                .is_some_and(|owner| self.program.impls.contains_key(&(bound, owner))) =>
+            {
+                Ok(())
+            }
             Type::Param(id) if matches!(mode, BoundCheckMode::AllowForwardedParam) => {
                 let caller_bound = self
                     .current_type_params
@@ -550,7 +554,11 @@ impl<'a> Checker<'a> {
         let (Type::Trait(tid), Type::Struct(sid, _)) = (expected, got) else {
             return false;
         };
-        if !self.program.impls.contains_key(&(*tid, *sid)) {
+        if !self
+            .program
+            .impls
+            .contains_key(&(*tid, crate::hir::MethodOwner::Struct(*sid)))
+        {
             return false;
         }
         let arg_span = arg.span;

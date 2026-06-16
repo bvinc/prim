@@ -49,9 +49,11 @@ pub struct Program {
     /// receiver type is a struct or an enum. Method calls in expressions
     /// look up here at typecheck time to resolve static dispatch.
     pub impl_methods: std::collections::HashMap<(MethodOwner, InternSymbol), ImplFn>,
-    /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
-    /// Used to generate vtables and to dispatch dynamic method calls.
-    pub impls: std::collections::HashMap<(TraitId, StructId), Vec<FuncId>>,
+    /// `(trait, owner)` → vec of FuncIds in trait method declaration order.
+    /// Owner is the implementing type (struct, enum, or primitive). Used to
+    /// check trait-bound satisfaction, generate vtables (struct owners only),
+    /// and dispatch dynamic method calls.
+    pub impls: std::collections::HashMap<(TraitId, MethodOwner), Vec<FuncId>>,
     pub symbols: Vec<Symbol>,
     /// Shared with the loader and all parsed files in this compilation.
     /// `Arc` because `ThreadedRodeo` isn't `Clone` (it holds internal state

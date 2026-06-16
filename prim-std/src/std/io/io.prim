@@ -16,24 +16,18 @@ import std.convert.usize_to_u64
 import std.convert.f64_to_u64_trunc
 import std.convert.u64_to_f64
 import std.convert.f32_to_f64
-
-@runtime("prim_rt_write")
-fn write(fd: i64, s: String);
+import std.sys.write
+import std.fmt.Display
+import std.fmt.to_string
 
 fn print_str(s: String) {
     write(1, s);
     write(1, "\n");
 }
 
-@runtime("prim_rt_trap")
-fn trap();
-
-// Print a message and abort the program. Used for unrecoverable errors
-// (failed invariants, out-of-bounds access) until Result-based handling.
-fn panic(msg: String) {
-    write(1, msg);
-    write(1, "\n");
-    trap()
+// Render any `Display` value and write it to stdout (no trailing newline).
+fn print[T: Display](x: T) {
+    write(1, to_string(x))
 }
 
 // ---- integer printing ----

@@ -257,14 +257,16 @@ impl Mono<'_> {
                     .get(type_param.0 as usize)
                     .cloned()
                     .unwrap_or_else(|| panic!("unsubstituted type parameter in TraitBoundCall"));
-                let sid = match concrete {
-                    Type::Struct(sid, _) => sid,
-                    other => panic!("TraitBoundCall substituted to non-struct: {:?}", other),
-                };
+                let owner = super::MethodOwner::of_type(&concrete).unwrap_or_else(|| {
+                    panic!(
+                        "TraitBoundCall substituted to non-impl type: {:?}",
+                        concrete
+                    )
+                });
                 let impl_fid = self
                     .program
                     .impl_methods
-                    .get(&(super::MethodOwner::Struct(sid), *method))
+                    .get(&(owner, *method))
                     .expect("missing impl method after substitution")
                     .func;
                 let receiver_owned =

@@ -1,5 +1,5 @@
 import std.io.println_i32
-import std.io.panic
+import std.sys.panic
 
 // panic prints its message and halts: the line after it never runs.
 // (It currently exits 0 — traps don't yet propagate a nonzero exit code

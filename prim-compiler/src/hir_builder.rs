@@ -280,9 +280,10 @@ struct LoweringContext<'a> {
     /// `(receiver type, fn name)` → impl function. Built when lowering each
     /// `impl ... { fn ... }` block; the owner is a struct, enum, or primitive.
     impl_methods: HashMap<(hir::MethodOwner, hir::InternSymbol), hir::ImplFn>,
-    /// `(trait, struct)` → vec of FuncIds in trait method declaration order.
-    /// Vtables back dynamic dispatch, which is struct-only for now.
-    impls: HashMap<(hir::TraitId, StructId), Vec<FuncId>>,
+    /// `(trait, owner)` → vec of FuncIds in trait method declaration order.
+    /// Owner is the implementing type (struct, enum, or primitive). Vtables
+    /// back dynamic dispatch, which is struct-only for now.
+    impls: HashMap<(hir::TraitId, hir::MethodOwner), Vec<FuncId>>,
     stdlib_string_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
@@ -843,10 +844,12 @@ impl<'a> LoweringContext<'a> {
                     // `Self` and a bare `self` param resolve to the target type
                     // while lowering this impl's bodies.
                     self.current_self_type = Some(Self::owner_self_type(owner));
-                    // Resolve the trait so we can index into its method order
-                    // for the vtable. Vtables (dynamic dispatch) are built for
-                    // struct receivers only; enums/primitives use static
-                    // dispatch.
+                    // Resolve the trait so we can index into its method order.
+                    // The resulting `(trait, owner)` entry records bound
+                    // satisfaction for every owner (struct, enum, primitive);
+                    // codegen later restricts vtables to struct owners, since
+                    // dynamic dispatch is struct-only and enums/primitives use
+                    // static dispatch.
                     let tid = im.trait_name.and_then(|t| {
                         let trait_name = self.interner.resolve(&t.sym).to_string();
                         self.module_scopes
@@ -854,7 +857,7 @@ impl<'a> LoweringContext<'a> {
                             .and_then(|scope| scope.get(&trait_name).copied())
                             .and_then(|id| self.trait_ids.get(&id).copied())
                     });
-                    if let (Some(tid), hir::MethodOwner::Struct(sid)) = (tid, owner) {
+                    if let Some(tid) = tid {
                         let trait_def = self.traits.get(tid.0 as usize).cloned();
                         if let Some(trait_def) = trait_def {
                             let mut method_fids: Vec<FuncId> =
@@ -871,7 +874,7 @@ impl<'a> LoweringContext<'a> {
                                     method_fids.push(FuncId(u32::MAX));
                                 }
                             }
-                            self.impls.insert((tid, sid), method_fids);
+                            self.impls.insert((tid, owner), method_fids);
                         }
                     }
                     for m in &im.methods {

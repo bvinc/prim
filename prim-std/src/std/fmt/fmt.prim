@@ -6,7 +6,18 @@ import std.vec.push
 import std.string.from_vec
 import std.ptr.byte_add
 import std.convert.u64_to_u8_wrapping
-import std.io.write
+import std.convert.i64_to_u64_wrapping
+import std.convert.u8_to_u64
+import std.convert.u16_to_u64
+import std.convert.u32_to_u64
+import std.convert.usize_to_u64
+import std.convert.i8_to_i64
+import std.convert.i16_to_i64
+import std.convert.i32_to_i64
+import std.convert.isize_to_i64
+import std.convert.f64_to_u64_trunc
+import std.convert.u64_to_f64
+import std.convert.f32_to_f64
 
 // A sink that accumulates formatted bytes. `Display` implementations write
 // into it; `to_string` / `print` create one, run the impl, then take its
@@ -41,6 +52,59 @@ impl Formatter {
         }
         push[u8](self.buf, u64_to_u8_wrapping(48u64 + x % 10u64))
     }
+
+    // Signed decimal. The magnitude is negated in u64 so the most-negative
+    // value (whose positive doesn't fit in i64) still formats correctly.
+    fn write_i64(self, x: i64) {
+        if x < 0i64 {
+            self.write_byte(45u8)
+            self.write_u64(0u64 - i64_to_u64_wrapping(x))
+        } else {
+            self.write_u64(i64_to_u64_wrapping(x))
+        }
+    }
+
+    // Decimal float: integer part in full, then up to 15 fractional digits
+    // with trailing zeros trimmed (at least one kept). Not shortest-round-trip
+    // formatting. Digits cross the float/int boundary by truncation. A first
+    // pass counts the fractional digits worth keeping (the buffer only grows,
+    // so trailing zeros can't be un-written); the second pass emits them.
+    fn write_f64(self, x: f64) {
+        let neg = x < 0.0f64
+        let abs = if neg { 0.0f64 - x } else { x }
+        if neg {
+            self.write_byte(45u8)
+        }
+        let int_part = f64_to_u64_trunc(abs)
+        self.write_u64(int_part)
+        self.write_byte(46u8)
+        let frac0 = abs - u64_to_f64(int_part)
+
+        let mut frac = frac0
+        let mut count = 0usize
+        let mut keep = 1usize
+        loop {
+            frac = frac * 10.0f64
+            let digit = f64_to_u64_trunc(frac)
+            frac = frac - u64_to_f64(digit)
+            count = count + 1usize
+            if digit != 0u64 {
+                keep = count
+            }
+            if frac < 0.0000000001f64 { break }
+            if count >= 15usize { break }
+        }
+
+        frac = frac0
+        let mut i = 0usize
+        while i < keep {
+            frac = frac * 10.0f64
+            let digit = f64_to_u64_trunc(frac)
+            push[u8](self.buf, u64_to_u8_wrapping(48u64 + digit))
+            frac = frac - u64_to_f64(digit)
+            i = i + 1usize
+        }
+    }
 }
 
 // A type that can be rendered as text by writing into a `Formatter`.
@@ -48,14 +112,55 @@ trait Display {
     fn fmt(self, f: Formatter);
 }
 
+impl Display for u8 {
+    fn fmt(self, f: Formatter) { f.write_u64(u8_to_u64(self)) }
+}
+impl Display for u16 {
+    fn fmt(self, f: Formatter) { f.write_u64(u16_to_u64(self)) }
+}
+impl Display for u32 {
+    fn fmt(self, f: Formatter) { f.write_u64(u32_to_u64(self)) }
+}
+impl Display for u64 {
+    fn fmt(self, f: Formatter) { f.write_u64(self) }
+}
+impl Display for usize {
+    fn fmt(self, f: Formatter) { f.write_u64(usize_to_u64(self)) }
+}
+impl Display for i8 {
+    fn fmt(self, f: Formatter) { f.write_i64(i8_to_i64(self)) }
+}
+impl Display for i16 {
+    fn fmt(self, f: Formatter) { f.write_i64(i16_to_i64(self)) }
+}
+impl Display for i32 {
+    fn fmt(self, f: Formatter) { f.write_i64(i32_to_i64(self)) }
+}
+impl Display for i64 {
+    fn fmt(self, f: Formatter) { f.write_i64(self) }
+}
+impl Display for isize {
+    fn fmt(self, f: Formatter) { f.write_i64(isize_to_i64(self)) }
+}
+impl Display for f32 {
+    fn fmt(self, f: Formatter) { f.write_f64(f32_to_f64(self)) }
+}
+impl Display for f64 {
+    fn fmt(self, f: Formatter) { f.write_f64(self) }
+}
+impl Display for bool {
+    fn fmt(self, f: Formatter) {
+        if self {
+            f.write_str("true")
+        } else {
+            f.write_str("false")
+        }
+    }
+}
+
 // Render a value to a fresh `String`.
 fn to_string[T: Display](x: T) -> String {
     let f = new_formatter()
     x.fmt(f)
     from_vec(f.buf)
-}
-
-// Render a value and write it to stdout (no trailing newline).
-fn print[T: Display](x: T) {
-    write(1, to_string(x))
 }

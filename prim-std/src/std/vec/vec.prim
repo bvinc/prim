@@ -6,7 +6,7 @@ import std.mem.copy_bytes
 import std.mem.size_of
 import std.ptr.null
 import std.ptr.add
-import std.io.panic
+import std.sys.panic
 
 // A growable array. `ptr` points at `cap` slots of T; the first `len` are
 // live. Passed by handle (structs are reference types), so the mutating

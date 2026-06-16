@@ -287,12 +287,26 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // table_entries:    wasm function indices in slot order (for the
     //                   active element segment)
     // vtable_addr:      (TraitId, StructId) -> static-memory address
-    let mut impl_keys: Vec<(hir::TraitId, hir::StructId)> = program.impls.keys().copied().collect();
-    impl_keys.sort_by_key(|(t, s)| (t.0, s.0));
+    // Vtables back dynamic dispatch, which is struct-only; enum and primitive
+    // impls are recorded in `program.impls` for bound checking but dispatch
+    // statically, so they get no vtable. Map each struct owner back to its
+    // `(TraitId, StructId)` key and keep the full impl entry for lookup.
+    let mut impl_keys: Vec<(
+        (hir::TraitId, hir::StructId),
+        (hir::TraitId, hir::MethodOwner),
+    )> = program
+        .impls
+        .keys()
+        .filter_map(|&(t, owner)| match owner {
+            hir::MethodOwner::Struct(s) => Some(((t, s), (t, owner))),
+            _ => None,
+        })
+        .collect();
+    impl_keys.sort_by_key(|((t, s), _)| (t.0, s.0));
 
     let mut method_table_idx: HashMap<hir::FuncId, u32> = HashMap::new();
     let mut table_entries: Vec<u32> = Vec::new();
-    for key in &impl_keys {
+    for (_, key) in &impl_keys {
         for fid in &program.impls[key] {
             if fid.0 == u32::MAX || method_table_idx.contains_key(fid) {
                 continue;
@@ -313,8 +327,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         static_data.resize(pad_to, 0);
     }
     let mut vtable_addr: HashMap<(hir::TraitId, hir::StructId), u32> = HashMap::new();
-    for key in &impl_keys {
-        vtable_addr.insert(*key, cursor);
+    for (struct_key, key) in &impl_keys {
+        vtable_addr.insert(*struct_key, cursor);
         for fid in &program.impls[key] {
             let slot = if fid.0 == u32::MAX {
                 // Missing impl method — sentinel slot 0 traps via the

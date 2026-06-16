@@ -1,7 +1,7 @@
 import std.io.print_str
+import std.io.print
 import std.fmt.Display
 import std.fmt.Formatter
-import std.fmt.print
 
 // A user type renders itself by writing into the shared Formatter; nested
 // writes (the int fields) land in the same buffer.

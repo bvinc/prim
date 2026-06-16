@@ -1,0 +1,25 @@
+import std.io.println_i64
+
+// A trait implemented for a primitive type, then reached through a generic
+// bound. The bound check, monomorphization, and static dispatch all resolve
+// the primitive impl the same way they would a struct impl.
+trait Label {
+    fn label(self) -> i64;
+}
+
+impl Label for i32 {
+    fn label(self) -> i64 { 100i64 }
+}
+
+impl Label for bool {
+    fn label(self) -> i64 { 1i64 }
+}
+
+fn labeled[T: Label](x: T) -> i64 {
+    x.label()
+}
+
+fn main() {
+    println_i64(labeled[i32](7i32))
+    println_i64(labeled[bool](true))
+}
