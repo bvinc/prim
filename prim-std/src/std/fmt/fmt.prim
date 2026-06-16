@@ -1,0 +1,61 @@
+mod fmt
+
+import std.vec.Vec
+import std.vec.new
+import std.vec.push
+import std.string.from_vec
+import std.ptr.byte_add
+import std.convert.u64_to_u8_wrapping
+import std.io.write
+
+// A sink that accumulates formatted bytes. `Display` implementations write
+// into it; `to_string` / `print` create one, run the impl, then take its
+// bytes. Held by handle (structs are reference types), so writes from nested
+// `fmt` calls all land in the same buffer — no intermediate strings.
+struct Formatter {
+    buf: Vec[u8],
+}
+
+fn new_formatter() -> Formatter {
+    Formatter { buf = new[u8]() }
+}
+
+impl Formatter {
+    fn write_byte(self, b: u8) {
+        push[u8](self.buf, b)
+    }
+
+    fn write_str(self, s: String) {
+        let mut i = 0usize
+        while i < s.len {
+            push[u8](self.buf, *byte_add[u8](s.data, i))
+            i = i + 1usize
+        }
+    }
+
+    // Unsigned decimal. Digits are emitted most-significant first by recursing
+    // before writing the low digit.
+    fn write_u64(self, x: u64) {
+        if x >= 10u64 {
+            self.write_u64(x / 10u64)
+        }
+        push[u8](self.buf, u64_to_u8_wrapping(48u64 + x % 10u64))
+    }
+}
+
+// A type that can be rendered as text by writing into a `Formatter`.
+trait Display {
+    fn fmt(self, f: Formatter);
+}
+
+// Render a value to a fresh `String`.
+fn to_string[T: Display](x: T) -> String {
+    let f = new_formatter()
+    x.fmt(f)
+    from_vec(f.buf)
+}
+
+// Render a value and write it to stdout (no trailing newline).
+fn print[T: Display](x: T) {
+    write(1, to_string(x))
+}

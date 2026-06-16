@@ -49,10 +49,11 @@ later feature).
 
 ## Deferred design
 
-- **`*const u8` read/write friction.** There's no ergonomic way to read/write
-  through a `*const` pointer, which blocks a richer `String` API (push_str,
-  concat, eq). Options: add `*const` read helpers, or make `String.data` a
-  `*mut u8`.
+- **No `*const` pointer operations.** `std.ptr` only provides `*mut` ops, so
+  there's still no way to read/write through a `*const` pointer. `String.data`
+  was made `*mut u8` to unblock reading string bytes (the `std.fmt` formatter),
+  but `*const` read/write helpers are still missing for any genuinely-const
+  pointer.
 
 - **Int-literal defaulting conflicts with pinned generics.** `let mut i = 0`
   leaves the literal as an undetermined integer that can conflict with a pinned

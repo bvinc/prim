@@ -1,0 +1,24 @@
+import std.io.print_str
+import std.fmt.Display
+import std.fmt.Formatter
+import std.fmt.print
+
+// A user type renders itself by writing into the shared Formatter; nested
+// writes (the int fields) land in the same buffer.
+struct Pair { a: u64, b: u64 }
+
+impl Display for Pair {
+    fn fmt(self, f: Formatter) {
+        f.write_str("(")
+        f.write_u64(self.a)
+        f.write_str(", ")
+        f.write_u64(self.b)
+        f.write_str(")")
+    }
+}
+
+fn main() {
+    let p = Pair { a = 3u64, b = 7u64 }
+    print(p)
+    print_str("")
+}
