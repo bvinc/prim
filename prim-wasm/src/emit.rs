@@ -938,19 +938,6 @@ fn emit_runtime_call(
     ctx: &EmitCtx,
 ) -> Result<(), WasmError> {
     match runtime {
-        hir::RuntimeAbi::PrintlnBool => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Call(ctx.builtins.println_bool));
-        }
-        hir::RuntimeAbi::PrintlnF64 => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::Call(ctx.builtins.println_f64));
-        }
-        hir::RuntimeAbi::PrintlnF32 => {
-            emit_expr(f, &args[0], ctx)?;
-            f.instruction(&Instruction::F64PromoteF32);
-            f.instruction(&Instruction::Call(ctx.builtins.println_f64));
-        }
         // write(fd, s: String) — ignore fd for now (always stdout); load
         // s.data + s.len from the String struct, hand to __print_bytes.
         hir::RuntimeAbi::Write => {
@@ -1124,6 +1111,21 @@ fn emit_runtime_call(
         }
         hir::RuntimeAbi::PtrAddr | hir::RuntimeAbi::FromAddr => {
             emit_expr(f, &args[0], ctx)?;
+        }
+        // Float <-> integer conversions (std.convert). Float-to-integer
+        // truncates toward zero and saturates (no trap on overflow/NaN);
+        // integer-to-float rounds to nearest; f32->f64 is an exact widen.
+        hir::RuntimeAbi::F64ToU64Trunc => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64TruncSatF64U);
+        }
+        hir::RuntimeAbi::U64ToF64 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::F64ConvertI64U);
+        }
+        hir::RuntimeAbi::F32ToF64 => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::F64PromoteF32);
         }
         // Integer conversions (std.convert). A `u8`/`i32`/… all share the
         // wasm `i32` representation, so most narrowings are a mask or a

@@ -162,9 +162,6 @@ pub enum RuntimeAbi {
     SpawnMain,
     /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
     Trap,
-    PrintlnBool,
-    PrintlnF64,
-    PrintlnF32,
     NullMutU8,
     NullMutU32,
     NullMutUsize,
@@ -237,6 +234,13 @@ pub enum RuntimeAbi {
     ConvWrapTruncU16,
     ConvWrapSext8,
     ConvWrapSext16,
+    // Float <-> integer conversions used by float printing. The float-to-integer
+    // direction truncates toward zero (drops the fraction) and saturates on
+    // overflow/NaN, so the name carries `trunc`. Integer-to-float rounds to the
+    // nearest representable value; f32->f64 is an exact widen.
+    F64ToU64Trunc,
+    U64ToF64,
+    F32ToF64,
 }
 
 impl RuntimeAbi {
@@ -259,6 +263,9 @@ impl RuntimeAbi {
             "prim_rt_from_addr" => Some(Self::FromAddr),
             // prim_rt_alloc / prim_rt_free intentionally have no mapping: the
             // allocator is now Prim code (std.mem), called as a normal function.
+            "prim_rt_f64_to_u64_trunc" => Some(Self::F64ToU64Trunc),
+            "prim_rt_u64_to_f64" => Some(Self::U64ToF64),
+            "prim_rt_f32_to_f64" => Some(Self::F32ToF64),
             "prim_rt_conv_noop" => Some(Self::ConvNoop),
             "prim_rt_conv_trunc_u8" => Some(Self::ConvTruncU8),
             "prim_rt_conv_trunc_u16" => Some(Self::ConvTruncU16),
@@ -272,9 +279,6 @@ impl RuntimeAbi {
             "prim_rt_conv_wrap_sext8" => Some(Self::ConvWrapSext8),
             "prim_rt_conv_wrap_sext16" => Some(Self::ConvWrapSext16),
             "prim_rt_yield" => Some(Self::Yield),
-            "prim_rt_println_bool" => Some(Self::PrintlnBool),
-            "prim_rt_println_f64" => Some(Self::PrintlnF64),
-            "prim_rt_println_f32" => Some(Self::PrintlnF32),
             "prim_rt_null_mut_u8" => Some(Self::NullMutU8),
             "prim_rt_null_mut_u32" => Some(Self::NullMutU32),
             "prim_rt_null_mut_usize" => Some(Self::NullMutUsize),

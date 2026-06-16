@@ -6,6 +6,18 @@ mod convert
 // reinterpreted per the destination type). These are the building blocks;
 // checked (`try_*` -> Option) and idiomatic wrappers are layered on top.
 
+// ---- float <-> integer ----
+// `*_trunc` truncates toward zero (drops the fraction) and saturates on
+// overflow / NaN. Integer-to-float rounds to the nearest representable value.
+@runtime("prim_rt_f64_to_u64_trunc")
+fn f64_to_u64_trunc(x: f64) -> u64;
+
+@runtime("prim_rt_u64_to_f64")
+fn u64_to_f64(x: u64) -> f64;
+
+@runtime("prim_rt_f32_to_f64")
+fn f32_to_f64(x: f32) -> f64;
+
 // ---- from i8 ----
 @runtime("prim_rt_conv_trunc_u8")
 fn i8_to_u8_wrapping(x: i8) -> u8;

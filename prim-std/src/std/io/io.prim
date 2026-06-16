@@ -13,6 +13,9 @@ import std.convert.u8_to_u64
 import std.convert.u16_to_u64
 import std.convert.u32_to_u64
 import std.convert.usize_to_u64
+import std.convert.f64_to_u64_trunc
+import std.convert.u64_to_f64
+import std.convert.f32_to_f64
 
 @runtime("prim_rt_write")
 fn write(fd: i64, s: String);
@@ -110,11 +113,65 @@ fn println_usize(x: usize) {
     println_u64(usize_to_u64(x))
 }
 
-@runtime("prim_rt_println_f32")
-fn println_f32(x: f32);
+// Print a float as decimal + newline. Fixed precision: the integer part in
+// full, then up to 15 fractional digits with trailing zeros trimmed (at least
+// one kept). This is not shortest-round-trip formatting. The integer part and
+// each fractional digit are obtained by truncating across the float/int
+// boundary; the digits themselves are ordinary integer formatting.
+fn println_f64(x: f64) {
+    let neg = x < 0.0f64
+    let abs = if neg { 0.0f64 - x } else { x }
+    let int_part = f64_to_u64_trunc(abs)
+    let mut frac = abs - u64_to_f64(int_part)
 
-@runtime("prim_rt_println_f64")
-fn println_f64(x: f64);
+    // 64-byte buffer: integer digits grow left from `dot`, fraction grows right.
+    let buf = alloc(64usize)
+    let dot = 32usize
+
+    // Integer part, written backward ending just before the dot.
+    let mut ip = int_part
+    let mut start = dot
+    loop {
+        start = start - 1usize
+        *byte_add[u8](buf, start) = u64_to_u8_wrapping(48u64 + ip % 10u64)
+        ip = ip / 10u64
+        if ip == 0u64 { break }
+    }
+    if neg {
+        start = start - 1usize
+        *byte_add[u8](buf, start) = 45u8
+    }
+
+    *byte_add[u8](buf, dot) = 46u8
+
+    // Fractional digits, written forward after the dot (cap at 15).
+    let mut end = dot + 1usize
+    let mut count = 0usize
+    loop {
+        frac = frac * 10.0f64
+        let digit = f64_to_u64_trunc(frac)
+        *byte_add[u8](buf, end) = u64_to_u8_wrapping(48u64 + digit)
+        frac = frac - u64_to_f64(digit)
+        end = end + 1usize
+        count = count + 1usize
+        if frac < 0.0000000001f64 { break }
+        if count >= 15usize { break }
+    }
+    // Trim trailing zeros, keeping at least one fractional digit.
+    loop {
+        if end <= dot + 2usize { break }
+        if *byte_add[u8](buf, end - 1usize) != 48u8 { break }
+        end = end - 1usize
+    }
+
+    let s = String { data = byte_add[u8](buf, start), len = end - start, cap = 64usize }
+    print_str(s)
+    free(buf)
+}
+
+fn println_f32(x: f32) {
+    println_f64(f32_to_f64(x))
+}
 
 fn println_bool(b: bool) {
     if b {
