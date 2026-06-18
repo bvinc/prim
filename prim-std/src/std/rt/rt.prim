@@ -1,6 +1,7 @@
 mod rt
 
 import std.sys.now_nanos
+import std.sys.sleep_nanos
 import std.vec.Vec
 import std.vec.new
 import std.vec.len
@@ -119,10 +120,13 @@ fn schedule() {
         if !any_live {
             break
         }
-        // Every live task is parked in the future: wait for the soonest wake.
+        // Every live task is parked in the future: block until the soonest
+        // wake instead of spinning.
         if !ran {
             if have_min {
-                while now_nanos() < min_wake {
+                let now2 = now_nanos()
+                if min_wake > now2 {
+                    sleep_nanos(min_wake - now2)
                 }
             }
         }

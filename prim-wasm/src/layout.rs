@@ -21,7 +21,10 @@ use wasm_encoder::{Function, Instruction, MemArg};
 // [43..44)    '.'
 // [48..128)   float fractional digit scratch
 // [128..136)  clock_time_get output (u64 nanos)
-// [136..)     @dbg prefixes + string literal bytes (dynamic)
+// [136..184)  poll_oneoff subscription (48 bytes)
+// [184..216)  poll_oneoff event output (32 bytes)
+// [216..220)  poll_oneoff nevents output (u32)
+// [224..)     @dbg prefixes + string literal bytes (dynamic)
 // [HEAP..)    bump heap
 
 pub(crate) const NEWLINE_OFFSET: i32 = 12;
@@ -31,7 +34,12 @@ pub(crate) const FALSE_OFFSET: i32 = 38;
 pub(crate) const DOT_OFFSET: i32 = 43;
 pub(crate) const FLOAT_SCRATCH: i32 = 48;
 pub(crate) const CLOCK_SCRATCH: i32 = 128;
-pub(crate) const STATIC_DATA_START: u32 = 136;
+// poll_oneoff scratch: a single clock subscription, its event output, and the
+// returned event count.
+pub(crate) const POLL_SUB: i32 = 136;
+pub(crate) const POLL_EVENT: i32 = 184;
+pub(crate) const POLL_NEVENTS: i32 = 216;
+pub(crate) const STATIC_DATA_START: u32 = 224;
 
 /// MemArg for byte-wide loads/stores (alignment hint = 1).
 pub(crate) const MEM8: MemArg = MemArg {

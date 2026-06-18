@@ -19,6 +19,12 @@ fn trap();
 @runtime("prim_rt_now")
 fn now_nanos() -> u64;
 
+// Block the process for `nanos` nanoseconds (WASI poll_oneoff on a relative
+// monotonic-clock subscription). The scheduler uses this to idle until the
+// soonest waker instead of spinning.
+@runtime("prim_rt_block")
+fn sleep_nanos(nanos: u64);
+
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.
 fn panic(msg: String) {

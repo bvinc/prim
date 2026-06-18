@@ -3,7 +3,10 @@
 
 use crate::WasmError;
 use crate::builtins::Builtins;
-use crate::layout::{CLOCK_SCRATCH, EnumLayout, StructLayout, emit_field_load, emit_field_store};
+use crate::layout::{
+    CLOCK_SCRATCH, EnumLayout, POLL_EVENT, POLL_NEVENTS, POLL_SUB, StructLayout, emit_field_load,
+    emit_field_store,
+};
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
 use prim_compiler::hir;
@@ -984,6 +987,62 @@ fn emit_runtime_call(
                 align: 3,
                 memory_index: 0,
             }));
+        }
+        // sleep_nanos(nanos: u64): build a single relative monotonic-clock
+        // subscription and block in poll_oneoff until it fires. WASI
+        // subscription layout (48 bytes): userdata@0, eventtype@8, then the
+        // clock variant — id@16, timeout@24, precision@32, flags@40.
+        hir::RuntimeAbi::Block => {
+            let store64 = MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            };
+            let store32 = MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            };
+            // userdata = 0
+            f.instruction(&Instruction::I32Const(POLL_SUB));
+            f.instruction(&Instruction::I64Const(0));
+            f.instruction(&Instruction::I64Store(store64));
+            // eventtype = 0 (clock)
+            f.instruction(&Instruction::I32Const(POLL_SUB + 8));
+            f.instruction(&Instruction::I32Const(0));
+            f.instruction(&Instruction::I32Store8(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            // clock id = 1 (monotonic)
+            f.instruction(&Instruction::I32Const(POLL_SUB + 16));
+            f.instruction(&Instruction::I32Const(1));
+            f.instruction(&Instruction::I32Store(store32));
+            // timeout = nanos (relative)
+            f.instruction(&Instruction::I32Const(POLL_SUB + 24));
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::I64Store(store64));
+            // precision = 0
+            f.instruction(&Instruction::I32Const(POLL_SUB + 32));
+            f.instruction(&Instruction::I64Const(0));
+            f.instruction(&Instruction::I64Store(store64));
+            // flags = 0 (timeout is relative, not absolute)
+            f.instruction(&Instruction::I32Const(POLL_SUB + 40));
+            f.instruction(&Instruction::I32Const(0));
+            f.instruction(&Instruction::I32Store16(MemArg {
+                offset: 0,
+                align: 1,
+                memory_index: 0,
+            }));
+            // poll_oneoff(in=POLL_SUB, out=POLL_EVENT, nsubscriptions=1,
+            // nevents=POLL_NEVENTS); discard errno.
+            f.instruction(&Instruction::I32Const(POLL_SUB));
+            f.instruction(&Instruction::I32Const(POLL_EVENT));
+            f.instruction(&Instruction::I32Const(1));
+            f.instruction(&Instruction::I32Const(POLL_NEVENTS));
+            f.instruction(&Instruction::Call(ctx.builtins.poll_oneoff));
+            f.instruction(&Instruction::Drop);
         }
         // Cooperative yield — suspend with the scheduler's yield tag.
         // Control returns to the scheduler's `on $yield` handler in `_start`,

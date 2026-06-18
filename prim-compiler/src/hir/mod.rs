@@ -150,6 +150,10 @@ pub enum RuntimeAbi {
     /// `now_nanos() -> u64` — current monotonic time in nanoseconds, via WASI
     /// `clock_time_get`. Backs `std.time` and the scheduler's wakers.
     ClockNow,
+    /// `sleep_nanos(nanos: u64)` — block the process for `nanos` via WASI
+    /// `poll_oneoff` on a relative monotonic clock subscription. Used by the
+    /// scheduler to wait for the soonest waker when every task is parked.
+    Block,
     Yield,
     /// `resume(handle) -> bool` — run the task in slot `handle` until it yields
     /// or finishes; true if it yielded. Calls the runtime resume helper.
@@ -253,6 +257,7 @@ impl RuntimeAbi {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
             "prim_rt_now" => Some(Self::ClockNow),
+            "prim_rt_block" => Some(Self::Block),
             "prim_rt_resume" => Some(Self::Resume),
             "prim_rt_task_count" => Some(Self::TaskCount),
             "prim_rt_task_live" => Some(Self::TaskLive),
