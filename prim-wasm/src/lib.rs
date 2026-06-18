@@ -124,23 +124,31 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         vec![ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
     );
+    // clock_time_get(clock_id: i32, precision: i64, out: i32) -> errno: i32
+    let clock_time_get_type = types.register(
+        vec![ValType::I32, ValType::I64, ValType::I32],
+        vec![ValType::I32],
+    );
 
     // Function index layout:
     //   0: fd_write (import)
-    //   1: __println_i64
-    //   2: __println_u64
-    //   3: __println_bool
-    //   4: __println_f64
-    //   5: __write_bytes
-    //   6+: user functions (the `@entry` function is exported as `_start`)
+    //   1: clock_time_get (import)
+    //   2: __println_i64
+    //   3: __println_u64
+    //   4: __println_bool
+    //   5: __println_f64
+    //   6: __write_bytes
+    //   7+: user functions (the `@entry` function is exported as `_start`)
     //   last: __rt_resume
     let fd_write_idx: u32 = 0;
+    let clock_idx: u32 = 1;
     let mut builtins = Builtins {
-        println_i64: 1,
-        println_u64: 2,
-        println_bool: 3,
-        println_f64: 4,
-        write_bytes: 5,
+        println_i64: 2,
+        println_u64: 3,
+        println_bool: 4,
+        println_f64: 5,
+        write_bytes: 6,
+        clock: clock_idx,
         // Object allocation routes through std.mem.alloc, resolved below. It is
         // always linked (the prelude force-loads std.io, which imports std.mem),
         // so there is no fallback allocator.
@@ -156,7 +164,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut func_map: HashMap<hir::FuncId, u32> = HashMap::new();
     let mut runtime_map: HashMap<hir::FuncId, hir::RuntimeAbi> = HashMap::new();
     let mut user_func_types: Vec<u32> = Vec::new();
-    let mut next_idx: u32 = 6;
+    let mut next_idx: u32 = 7;
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
@@ -383,6 +391,11 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         "wasi_snapshot_preview1",
         "fd_write",
         wasm_encoder::EntityType::Function(fd_write_type),
+    );
+    imports.import(
+        "wasi_snapshot_preview1",
+        "clock_time_get",
+        wasm_encoder::EntityType::Function(clock_time_get_type),
     );
     module.section(&imports);
 

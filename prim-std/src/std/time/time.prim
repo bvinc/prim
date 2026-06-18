@@ -1,0 +1,42 @@
+mod time
+
+import std.sys.now_nanos
+
+// A span of time, stored as a whole number of nanoseconds — the same shape as
+// Rust's `Duration`, just flattened to one field for now.
+struct Duration {
+    nanos: u64,
+}
+
+fn from_nanos(n: u64) -> Duration {
+    return Duration { nanos = n }
+}
+
+fn from_micros(us: u64) -> Duration {
+    return Duration { nanos = us * 1000u64 }
+}
+
+fn from_millis(ms: u64) -> Duration {
+    return Duration { nanos = ms * 1000000u64 }
+}
+
+fn from_secs(s: u64) -> Duration {
+    return Duration { nanos = s * 1000000000u64 }
+}
+
+fn as_nanos(d: Duration) -> u64 {
+    return d.nanos
+}
+
+fn as_millis(d: Duration) -> u64 {
+    return d.nanos / 1000000u64
+}
+
+fn as_secs(d: Duration) -> u64 {
+    return d.nanos / 1000000000u64
+}
+
+// A monotonic instant in nanoseconds. Subtract two to get elapsed time.
+fn now() -> u64 {
+    return now_nanos()
+}

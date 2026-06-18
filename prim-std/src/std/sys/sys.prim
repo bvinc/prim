@@ -13,6 +13,12 @@ fn write_raw(fd: i32, ptr: *mut u8, len: usize) -> usize;
 @runtime("prim_rt_trap")
 fn trap();
 
+// Current monotonic time in nanoseconds (WASI clock_time_get). The base point
+// is unspecified; only differences are meaningful. Backs std.time and the
+// scheduler's wakers.
+@runtime("prim_rt_now")
+fn now_nanos() -> u64;
+
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.
 fn panic(msg: String) {

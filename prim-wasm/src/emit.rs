@@ -3,7 +3,7 @@
 
 use crate::WasmError;
 use crate::builtins::Builtins;
-use crate::layout::{EnumLayout, StructLayout, emit_field_load, emit_field_store};
+use crate::layout::{CLOCK_SCRATCH, EnumLayout, StructLayout, emit_field_load, emit_field_store};
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
 use prim_compiler::hir;
@@ -969,6 +969,21 @@ fn emit_runtime_call(
         // s.data + s.len from the String struct, hand to __write_bytes.
         hir::RuntimeAbi::Write => {
             emit_write(f, args, ctx)?;
+        }
+        // now_nanos() -> u64: clock_time_get(CLOCK_MONOTONIC=1, precision=0,
+        // out=CLOCK_SCRATCH); discard errno; load the u64 timestamp.
+        hir::RuntimeAbi::ClockNow => {
+            f.instruction(&Instruction::I32Const(1));
+            f.instruction(&Instruction::I64Const(0));
+            f.instruction(&Instruction::I32Const(CLOCK_SCRATCH));
+            f.instruction(&Instruction::Call(ctx.builtins.clock));
+            f.instruction(&Instruction::Drop);
+            f.instruction(&Instruction::I32Const(CLOCK_SCRATCH));
+            f.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
         }
         // Cooperative yield — suspend with the scheduler's yield tag.
         // Control returns to the scheduler's `on $yield` handler in `_start`,

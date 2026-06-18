@@ -20,7 +20,8 @@ use wasm_encoder::{Function, Instruction, MemArg};
 // [38..43)    "false"
 // [43..44)    '.'
 // [48..128)   float fractional digit scratch
-// [128..)     @dbg prefixes + string literal bytes (dynamic)
+// [128..136)  clock_time_get output (u64 nanos)
+// [136..)     @dbg prefixes + string literal bytes (dynamic)
 // [HEAP..)    bump heap
 
 pub(crate) const NEWLINE_OFFSET: i32 = 12;
@@ -29,7 +30,8 @@ pub(crate) const TRUE_OFFSET: i32 = 34;
 pub(crate) const FALSE_OFFSET: i32 = 38;
 pub(crate) const DOT_OFFSET: i32 = 43;
 pub(crate) const FLOAT_SCRATCH: i32 = 48;
-pub(crate) const STATIC_DATA_START: u32 = 128;
+pub(crate) const CLOCK_SCRATCH: i32 = 128;
+pub(crate) const STATIC_DATA_START: u32 = 136;
 
 /// MemArg for byte-wide loads/stores (alignment hint = 1).
 pub(crate) const MEM8: MemArg = MemArg {

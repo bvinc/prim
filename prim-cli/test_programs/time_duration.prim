@@ -1,0 +1,16 @@
+import std.io.println
+import std.time.from_secs
+import std.time.from_millis
+import std.time.as_millis
+import std.time.as_nanos
+import std.time.now
+
+// Duration is plain arithmetic over nanoseconds; these are deterministic.
+fn main() {
+    println(as_millis(from_secs(2u64)))      // 2000
+    println(as_nanos(from_millis(5u64)))     // 5000000
+    // now() is monotonic: a later reading is never smaller.
+    let a = now()
+    let b = now()
+    println(b >= a)                          // true
+}

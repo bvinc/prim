@@ -147,6 +147,9 @@ pub struct Function {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RuntimeAbi {
     Write,
+    /// `now_nanos() -> u64` — current monotonic time in nanoseconds, via WASI
+    /// `clock_time_get`. Backs `std.time` and the scheduler's wakers.
+    ClockNow,
     Yield,
     /// `resume(handle) -> bool` — run the task in slot `handle` until it yields
     /// or finishes; true if it yielded. Calls the runtime resume helper.
@@ -249,6 +252,7 @@ impl RuntimeAbi {
     pub fn from_symbol(symbol: &str) -> Option<Self> {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
+            "prim_rt_now" => Some(Self::ClockNow),
             "prim_rt_resume" => Some(Self::Resume),
             "prim_rt_task_count" => Some(Self::TaskCount),
             "prim_rt_task_live" => Some(Self::TaskLive),

@@ -24,6 +24,8 @@ pub(crate) struct Builtins {
     /// module is linked, so all heap use shares a single allocator.
     pub alloc: u32,
     pub write_bytes: u32,
+    /// Index of the imported WASI `clock_time_get`, backing `now_nanos`.
+    pub clock: u32,
     /// Tag index for cooperative yield. Used by `std.rt.yield` which
     /// lowers to `suspend $yield_tag`.
     pub yield_tag: u32,
