@@ -91,6 +91,12 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_expr(val, locals);
             }
         }
+        hir::ExprKind::TupleLit(elems) => {
+            for e in elems {
+                collect_locals_expr(e, locals);
+            }
+        }
+        hir::ExprKind::TupleIndex { base, .. } => collect_locals_expr(base, locals),
         hir::ExprKind::VariantLit { fields, .. } => {
             for (_, val) in fields {
                 collect_locals_expr(val, locals);
@@ -199,6 +205,15 @@ fn collect_scratch_types_expr(
             for (_, val) in fields {
                 collect_scratch_types_expr(val, runtime, out);
             }
+        }
+        hir::ExprKind::TupleLit(elems) => {
+            out.push(ValType::I32);
+            for e in elems {
+                collect_scratch_types_expr(e, runtime, out);
+            }
+        }
+        hir::ExprKind::TupleIndex { base, .. } => {
+            collect_scratch_types_expr(base, runtime, out);
         }
         hir::ExprKind::VariantLit { fields, .. } => {
             out.push(ValType::I32);
@@ -335,6 +350,12 @@ fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
                 collect_dbg_prefixes_expr(val, out);
             }
         }
+        hir::ExprKind::TupleLit(elems) => {
+            for e in elems {
+                collect_dbg_prefixes_expr(e, out);
+            }
+        }
+        hir::ExprKind::TupleIndex { base, .. } => collect_dbg_prefixes_expr(base, out),
         hir::ExprKind::VariantLit { fields, .. } => {
             for (_, val) in fields {
                 collect_dbg_prefixes_expr(val, out);

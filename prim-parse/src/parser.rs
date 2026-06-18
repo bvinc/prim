@@ -376,10 +376,31 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(TokenKind::LeftParen) => {
-                self.advance(); // consume '('
-                let expr = self.parse_expression(Precedence::NONE)?;
-                self.consume(TokenKind::RightParen, "Expected ')'")?;
-                Ok(expr)
+                let left_span = self.advance().span; // consume '('
+                let first = self.parse_expression(Precedence::NONE)?;
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    // Tuple literal: (a, b, ...). One or more commas follow.
+                    let mut elements = vec![first];
+                    while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance(); // consume ','
+                        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                            break; // trailing comma
+                        }
+                        elements.push(self.parse_expression(Precedence::NONE)?);
+                    }
+                    let right_span = self
+                        .consume(TokenKind::RightParen, "Expected ')' to close tuple")?
+                        .span;
+                    Ok(Expr {
+                        span: left_span.cover(right_span),
+                        ty: Type::Undetermined,
+                        kind: ExprKind::Tuple(elements),
+                    })
+                } else {
+                    // Plain parenthesized grouping.
+                    self.consume(TokenKind::RightParen, "Expected ')'")?;
+                    Ok(first)
+                }
             }
             Some(TokenKind::LeftBracket) => {
                 // Array literal: [expr, expr, ...]
@@ -597,6 +618,19 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Dot => {
                 self.advance();
+                // `tuple.0` — positional tuple access.
+                if matches!(self.peek_kind(), Some(TokenKind::IntLiteral)) {
+                    let idx_span = self.advance().span;
+                    let (value, _ty) = parse_int_literal(idx_span.text(self.source), idx_span)?;
+                    return Ok(Expr {
+                        span: left.span.cover(idx_span),
+                        ty: Type::Undetermined,
+                        kind: ExprKind::TupleIndex {
+                            object: Box::new(left),
+                            index: value as u32,
+                        },
+                    });
+                }
                 let name_span = self
                     .consume(
                         TokenKind::Identifier,
@@ -1281,6 +1315,26 @@ impl<'a> Parser<'a> {
         }
 
         match kind {
+            TokenKind::LeftParen => {
+                // Tuple type `(A, B, ...)`; a single `(T)` is just grouping.
+                self.advance(); // consume '('
+                let first = self.parse_type()?;
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    let mut elems = vec![first];
+                    while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance(); // consume ','
+                        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                            break;
+                        }
+                        elems.push(self.parse_type()?);
+                    }
+                    self.consume(TokenKind::RightParen, "Expected ')' to close tuple type")?;
+                    Ok(Type::Tuple(elems))
+                } else {
+                    self.consume(TokenKind::RightParen, "Expected ')'")?;
+                    Ok(first)
+                }
+            }
             TokenKind::LeftBracket => {
                 self.advance(); // consume '['
                 let elem_ty = self.parse_type()?;

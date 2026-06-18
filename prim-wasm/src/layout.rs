@@ -98,6 +98,27 @@ pub(crate) fn compute_struct_layout(s: &hir::Struct) -> StructLayout {
     StructLayout { size, fields }
 }
 
+/// Layout for a tuple's elements: total heap size and each element's
+/// `(byte offset, type)`, indexed positionally. Same natural-alignment rules
+/// as structs, computed on demand since tuples have no `StructId`.
+pub(crate) struct TupleLayout {
+    pub size: u32,
+    pub elems: Vec<(u32, hir::Type)>,
+}
+
+pub(crate) fn compute_tuple_layout(elems: &[hir::Type]) -> TupleLayout {
+    let mut offset = 0u32;
+    let mut out = Vec::with_capacity(elems.len());
+    for ty in elems {
+        let size = field_size(ty);
+        offset = align_up(offset, size);
+        out.push((offset, ty.clone()));
+        offset += size;
+    }
+    let size = align_up(offset.max(1), 8);
+    TupleLayout { size, elems: out }
+}
+
 pub(crate) fn compute_enum_layout(e: &hir::Enum) -> EnumLayout {
     let mut variants = Vec::with_capacity(e.variants.len());
     let mut max_payload = 0u32;

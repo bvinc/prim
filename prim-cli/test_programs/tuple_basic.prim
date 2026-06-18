@@ -1,0 +1,19 @@
+import std.io.println
+
+// Tuples are first-class values: constructed, indexed, passed, and returned.
+fn swap(p: (i32, i32)) -> (i32, i32) {
+    return (p.1, p.0)
+}
+
+fn main() {
+    let t = (3i32, 7i32)
+    println(t.0)              // 3
+    println(t.1)              // 7
+    let s = swap(t)
+    println(s.0)              // 7
+    println(s.1)              // 3
+    // Mixed element types and an explicit annotation.
+    let m: (u8, bool, i64) = (255u8, true, 9000000000i64)
+    println(m.0)              // 255
+    println(m.2)              // 9000000000
+}

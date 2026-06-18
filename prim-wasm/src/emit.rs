@@ -4,7 +4,8 @@
 use crate::WasmError;
 use crate::builtins::Builtins;
 use crate::layout::{
-    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, emit_field_load, emit_field_store,
+    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, compute_tuple_layout, emit_field_load,
+    emit_field_store,
 };
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
@@ -421,6 +422,26 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             };
             emit_field_load(f, &ty, offset);
         }
+        hir::ExprKind::TupleLit(elems) => {
+            emit_tuple_lit(f, &expr.ty, elems, ctx)?;
+        }
+        hir::ExprKind::TupleIndex { base, index } => {
+            emit_expr(f, base, ctx)?;
+            let elem_types = match &base.ty {
+                hir::Type::Tuple(elems) => elems,
+                _ => {
+                    f.instruction(&Instruction::Unreachable);
+                    return Ok(());
+                }
+            };
+            let layout = compute_tuple_layout(elem_types);
+            match layout.elems.get(*index as usize) {
+                Some((offset, ty)) => emit_field_load(f, ty, *offset),
+                None => {
+                    f.instruction(&Instruction::Unreachable);
+                }
+            }
+        }
         hir::ExprKind::If {
             condition,
             then_branch,
@@ -791,6 +812,42 @@ fn emit_struct_lit(
     }
 
     // Push ptr as the struct value
+    f.instruction(&Instruction::LocalGet(ptr_local));
+    Ok(())
+}
+
+/// Emit a tuple literal: heap-allocate the positional layout, store each
+/// element at its offset, and leave the pointer on the stack. Mirrors
+/// `emit_struct_lit` but the layout is computed from `tuple_ty`'s elements.
+fn emit_tuple_lit(
+    f: &mut Function,
+    tuple_ty: &hir::Type,
+    elems: &[hir::Expr],
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + 1);
+    let ptr_local = ctx.scratch_base + counter;
+
+    let elem_types = match tuple_ty {
+        hir::Type::Tuple(ts) => ts,
+        _ => {
+            f.instruction(&Instruction::Unreachable);
+            return Ok(());
+        }
+    };
+    let layout = compute_tuple_layout(elem_types);
+
+    f.instruction(&Instruction::I32Const(layout.size as i32));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalSet(ptr_local));
+
+    for (value, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
+        f.instruction(&Instruction::LocalGet(ptr_local));
+        emit_expr(f, value, ctx)?;
+        emit_field_store(f, elem_ty, *offset);
+    }
+
     f.instruction(&Instruction::LocalGet(ptr_local));
     Ok(())
 }

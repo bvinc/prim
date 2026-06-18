@@ -1757,6 +1757,22 @@ impl<'a> LoweringContext<'a> {
                 ),
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::Tuple(elements) => (
+                hir::ExprKind::TupleLit(
+                    elements
+                        .iter()
+                        .map(|e| self.lower_expr(e, module, file_id, ast, module_scope))
+                        .collect(),
+                ),
+                self.lower_type(&expr.ty, module_scope),
+            ),
+            ExprKind::TupleIndex { object, index } => (
+                hir::ExprKind::TupleIndex {
+                    base: Box::new(self.lower_expr(object, module, file_id, ast, module_scope)),
+                    index: *index,
+                },
+                self.lower_type(&expr.ty, module_scope),
+            ),
             ExprKind::If {
                 condition,
                 then_branch,
@@ -2144,6 +2160,12 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             Type::Array(inner) => hir::Type::Array(Box::new(self.lower_type(inner, module_scope))),
+            Type::Tuple(elems) => hir::Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.lower_type(e, module_scope))
+                    .collect(),
+            ),
             Type::Pointer { mutable, pointee } => hir::Type::Pointer {
                 mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, module_scope)),

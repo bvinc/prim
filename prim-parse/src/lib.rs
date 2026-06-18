@@ -52,6 +52,8 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
+    /// An anonymous product type, `(A, B, ...)` with two or more elements.
+    Tuple(Vec<Type>),
     /// `Self` (and a bare `self` parameter): the type an `impl`/`trait` is
     /// for. Resolved to the concrete target (in an impl) or the trait type
     /// (in a trait declaration) during HIR lowering.
@@ -123,6 +125,13 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
+    /// A tuple literal, `(a, b, ...)` with two or more elements.
+    Tuple(Vec<Expr>),
+    /// Positional tuple access, `tuple.0`.
+    TupleIndex {
+        object: Box<Expr>,
+        index: u32,
+    },
     Array(Vec<Expr>),
     Dbg(Box<Expr>),
     If {

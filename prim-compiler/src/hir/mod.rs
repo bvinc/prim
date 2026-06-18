@@ -590,6 +590,13 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
+    /// A tuple literal, `(a, b, ...)`.
+    TupleLit(Vec<Expr>),
+    /// Positional tuple access, `tuple.index`.
+    TupleIndex {
+        base: Box<Expr>,
+        index: u32,
+    },
     ArrayLit(Vec<Expr>),
     Dbg {
         /// Pre-rendered `[path:line:col] expr_text = ` prefix string,
@@ -684,6 +691,10 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
+    /// An anonymous product type, `(A, B, ...)`. Structural: two tuples with
+    /// the same element types are the same type. Boxed on the heap like a
+    /// struct, with positional fields.
+    Tuple(Vec<Type>),
     /// Undetermined integer type (will default to i32).
     IntVar,
     /// Undetermined float type (will default to f64).
@@ -730,6 +741,16 @@ impl fmt::Display for Type {
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::Array(elem) => write!(f, "[{elem}]"),
+            Type::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, t) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ")")
+            }
             Type::Struct(id, args) => {
                 if args.is_empty() {
                     write!(f, "struct {:?}", id)

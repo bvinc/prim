@@ -189,6 +189,12 @@ impl Mono<'_> {
                     self.rewrite_expr(e, subst);
                 }
             }
+            ExprKind::TupleLit(elems) => {
+                for e in elems {
+                    self.rewrite_expr(e, subst);
+                }
+            }
+            ExprKind::TupleIndex { base, .. } => self.rewrite_expr(base, subst),
             ExprKind::If {
                 condition,
                 then_branch,
@@ -361,6 +367,12 @@ impl Mono<'_> {
                 pointee: Box::new(self.substitute_type(pointee, subst)),
             },
             Type::Array(elem) => Type::Array(Box::new(self.substitute_type(elem, subst))),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.substitute_type(e, subst))
+                    .collect(),
+            ),
             Type::Struct(sid, args) if args.is_empty() => Type::Struct(*sid, Vec::new()),
             Type::Struct(sid, args) => {
                 let concrete_args: Vec<Type> = args
@@ -481,6 +493,12 @@ impl Mono<'_> {
                     self.substitute_expr(e, subst);
                 }
             }
+            ExprKind::TupleLit(elems) => {
+                for e in elems {
+                    self.substitute_expr(e, subst);
+                }
+            }
+            ExprKind::TupleIndex { base, .. } => self.substitute_expr(base, subst),
             ExprKind::If {
                 condition,
                 then_branch,

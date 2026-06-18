@@ -135,6 +135,10 @@ pub struct Tokenizer<'a> {
     position: usize,
     current: Option<char>,
     prev_is_space: bool,
+    /// Whether the previously emitted token can end a value expression
+    /// (identifier, `)`, `]`). Lets `.` followed by a digit disambiguate a
+    /// tuple/field index (`x.0`) from a leading-dot float literal (`.5`).
+    prev_ends_value: bool,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -147,12 +151,17 @@ impl<'a> Tokenizer<'a> {
             position: 0,
             current,
             prev_is_space: true,
+            prev_ends_value: false,
         }
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenError> {
         let mut tokens = Vec::new();
         while let Some(tok) = self.next_token()? {
+            self.prev_ends_value = matches!(
+                tok.kind,
+                TokenKind::Identifier | TokenKind::RightParen | TokenKind::RightBracket
+            );
             tokens.push(tok);
         }
         Ok(tokens)
@@ -314,6 +323,10 @@ impl<'a> Tokenizer<'a> {
                         span: Span::new(start_pos, self.position),
                     }))
                 } else if self.peek().is_none_or(|c| !c.is_ascii_digit()) {
+                    self.emit_simple(TokenKind::Dot, start_pos)
+                } else if self.prev_ends_value {
+                    // `.0` right after a value (`x.0`, `f().0`) is a tuple/field
+                    // index, not the start of a float.
                     self.emit_simple(TokenKind::Dot, start_pos)
                 } else {
                     // This is likely the start of a floating point number like .5

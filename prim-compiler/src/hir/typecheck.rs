@@ -1804,6 +1804,44 @@ impl<'a> Checker<'a> {
                 *ty = arr.clone();
                 Ok(arr)
             }
+            ExprKind::TupleLit(elements) => {
+                let mut elem_types = Vec::with_capacity(elements.len());
+                for elem in elements.iter_mut() {
+                    elem_types.push(self.check_expr(elem, locals)?);
+                }
+                let tuple = Type::Tuple(elem_types);
+                *ty = tuple.clone();
+                Ok(tuple)
+            }
+            ExprKind::TupleIndex { base, index } => {
+                let base_ty = self.check_expr(base, locals)?;
+                match base_ty {
+                    Type::Tuple(elems) => {
+                        let idx = *index as usize;
+                        if idx >= elems.len() {
+                            return Err(self.error(
+                                *span,
+                                TypeCheckKind::Legacy(format!(
+                                    "tuple index {} out of range for a {}-element tuple",
+                                    index,
+                                    elems.len()
+                                )),
+                            ));
+                        }
+                        let elem_ty = elems[idx].clone();
+                        *ty = elem_ty.clone();
+                        Ok(elem_ty)
+                    }
+                    other => Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "tuple index `.{}` on a non-tuple type {}",
+                            index,
+                            self.type_name(&other)
+                        )),
+                    )),
+                }
+            }
             ExprKind::If {
                 condition,
                 then_branch,
@@ -2061,6 +2099,13 @@ impl<'a> Checker<'a> {
             (Type::Array(a_elem), Type::Array(b_elem)) => {
                 self.unify(a_elem, b_elem).map(|e| Type::Array(Box::new(e)))
             }
+            (Type::Tuple(ax), Type::Tuple(bx)) if ax.len() == bx.len() => {
+                let mut elems = Vec::with_capacity(ax.len());
+                for (ea, eb) in ax.iter().zip(bx.iter()) {
+                    elems.push(self.unify(ea, eb)?);
+                }
+                Some(Type::Tuple(elems))
+            }
             (a, b) if a == b => Some(a.clone()),
             _ => None,
         }
@@ -2174,6 +2219,16 @@ impl<'a> Checker<'a> {
                     self.apply_expected(&mut arm.body, expected);
                 }
             }
+            ExprKind::TupleLit(elems) => {
+                if let Type::Tuple(expected_elems) = expected {
+                    if expected_elems.len() == elems.len() {
+                        for (e, et) in elems.iter_mut().zip(expected_elems.iter()) {
+                            self.apply_expected(e, et);
+                        }
+                        *ty = expected.clone();
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -2279,6 +2334,14 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Coerce { value, .. } => {
                 self.finalize_expr(value)?;
+            }
+            ExprKind::TupleLit(elems) => {
+                for e in elems {
+                    self.finalize_expr(e)?;
+                }
+            }
+            ExprKind::TupleIndex { base, .. } => {
+                self.finalize_expr(base)?;
             }
             ExprKind::StructLit { fields, .. } => {
                 for (_, val) in fields {
