@@ -109,6 +109,9 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
         }
         hir::ExprKind::Field { base, .. } => collect_locals_expr(base, locals),
         hir::ExprKind::Deref(base) => collect_locals_expr(base, locals),
+        hir::ExprKind::Neg(operand) | hir::ExprKind::BitNot(operand) => {
+            collect_locals_expr(operand, locals)
+        }
         hir::ExprKind::Coerce { value, .. } => collect_locals_expr(value, locals),
         hir::ExprKind::DynCall { receiver, args, .. } => {
             collect_locals_expr(receiver, locals);
@@ -235,6 +238,9 @@ fn collect_scratch_types_expr(
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
             collect_scratch_types_expr(base, runtime, out);
         }
+        hir::ExprKind::Neg(operand) | hir::ExprKind::BitNot(operand) => {
+            collect_scratch_types_expr(operand, runtime, out);
+        }
         hir::ExprKind::Coerce { value, .. } => {
             // Two i32 scratch slots: data_ptr stash and fat pointer base.
             out.push(ValType::I32);
@@ -356,6 +362,9 @@ fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
             collect_dbg_prefixes_expr(base, out);
+        }
+        hir::ExprKind::Neg(operand) | hir::ExprKind::BitNot(operand) => {
+            collect_dbg_prefixes_expr(operand, out);
         }
         hir::ExprKind::Coerce { value, .. } => collect_dbg_prefixes_expr(value, out),
         hir::ExprKind::DynCall { receiver, args, .. } => {

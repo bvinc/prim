@@ -1,0 +1,7 @@
+import std.io.println
+
+// The range check also applies to a suffixed literal.
+fn main() {
+    let x = 300u8
+    println(x)
+}

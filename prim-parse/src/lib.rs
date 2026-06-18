@@ -121,6 +121,8 @@ pub enum ExprKind {
     },
     Dereference(Box<Expr>),
     BitNot(Box<Expr>),
+    /// Unary arithmetic negation, `-operand`.
+    Neg(Box<Expr>),
     Array(Vec<Expr>),
     Dbg(Box<Expr>),
     If {

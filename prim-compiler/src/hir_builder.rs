@@ -1738,6 +1738,16 @@ impl<'a> LoweringContext<'a> {
                 ))),
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::Neg(operand) => (
+                hir::ExprKind::Neg(Box::new(self.lower_expr(
+                    operand,
+                    module,
+                    file_id,
+                    ast,
+                    module_scope,
+                ))),
+                self.lower_type(&expr.ty, module_scope),
+            ),
             ExprKind::Array(elements) => (
                 hir::ExprKind::ArrayLit(
                     elements

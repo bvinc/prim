@@ -575,6 +575,30 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 }
             }
         }
+        hir::ExprKind::Neg(operand) => {
+            // Floats have a dedicated negate; integers have none, so subtract
+            // from zero (push 0, then the operand, then sub).
+            match hir_type_to_valtype(&expr.ty) {
+                ValType::F32 => {
+                    emit_expr(f, operand, ctx)?;
+                    f.instruction(&Instruction::F32Neg);
+                }
+                ValType::F64 => {
+                    emit_expr(f, operand, ctx)?;
+                    f.instruction(&Instruction::F64Neg);
+                }
+                ValType::I64 => {
+                    f.instruction(&Instruction::I64Const(0));
+                    emit_expr(f, operand, ctx)?;
+                    f.instruction(&Instruction::I64Sub);
+                }
+                _ => {
+                    f.instruction(&Instruction::I32Const(0));
+                    emit_expr(f, operand, ctx)?;
+                    f.instruction(&Instruction::I32Sub);
+                }
+            }
+        }
         _ => {
             f.instruction(&Instruction::Unreachable);
         }

@@ -409,43 +409,24 @@ impl<'a> Parser<'a> {
             // Both UnaryMinus (tokenized when whitespace makes it unambiguous)
             // and Minus (tokenized as infix subtract) act as negation in prefix
             // position — the parser knows it's expecting an expression.
+            // Both UnaryMinus (tokenized when whitespace makes it unambiguous)
+            // and Minus (tokenized as infix subtract) act as negation in prefix
+            // position — the parser knows it's expecting an expression.
             Some(TokenKind::UnaryMinus) | Some(TokenKind::Minus) => {
                 let minus_span = self.advance().span; // consume '-'
                 let operand = self.parse_expression(Precedence::UNARY)?;
                 let span = minus_span.cover(operand.span);
-                // Represent unary minus as 0 - operand
                 Ok(Expr {
                     span,
                     ty: Type::Undetermined,
-                    kind: ExprKind::Binary {
-                        left: Box::new(Expr {
-                            span: minus_span,
-                            ty: Type::Undetermined,
-                            kind: ExprKind::Int(0),
-                        }),
-                        op: BinaryOp::Subtract,
-                        right: Box::new(operand),
-                    },
+                    kind: ExprKind::Neg(Box::new(operand)),
                 })
             }
+            // Unary plus is the identity on a numeric value: just parse and
+            // return the operand.
             Some(TokenKind::UnaryPlus) | Some(TokenKind::Plus) => {
-                let plus_span = self.advance().span; // consume '+'
-                let operand = self.parse_expression(Precedence::UNARY)?;
-                let span = plus_span.cover(operand.span);
-                // Represent unary plus as 0 + operand
-                Ok(Expr {
-                    span,
-                    ty: Type::Undetermined,
-                    kind: ExprKind::Binary {
-                        left: Box::new(Expr {
-                            span: plus_span,
-                            ty: Type::Undetermined,
-                            kind: ExprKind::Int(0),
-                        }),
-                        op: BinaryOp::Add,
-                        right: Box::new(operand),
-                    },
-                })
+                self.advance(); // consume '+'
+                self.parse_expression(Precedence::UNARY)
             }
             Some(TokenKind::Bang) => {
                 let bang_span = self.advance().span; // consume '!'

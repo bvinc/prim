@@ -48,6 +48,11 @@ pub enum TypeCheckKind {
     AmbiguousLiteral {
         float: bool,
     },
+    /// An integer literal whose value doesn't fit its determined type.
+    LiteralOutOfRange {
+        value: i64,
+        ty: Type,
+    },
     Legacy(String),
 }
 
@@ -110,6 +115,9 @@ impl std::fmt::Display for TypeCheckError {
                     "ambiguous {kind} literal: its type can't be determined from context; \
                      add a type suffix (e.g. `{suffix}`) or a type annotation"
                 )
+            }
+            TypeCheckKind::LiteralOutOfRange { value, ty } => {
+                write!(f, "literal {value} is out of range for type {ty}")
             }
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
@@ -1025,7 +1033,13 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, TypeCheckError> {
         let Expr { kind, ty, span } = expr;
         match kind {
-            ExprKind::Int(_) => Ok(ty.clone()),
+            ExprKind::Int(value) => {
+                // Once a literal has a determined integer type (from a suffix
+                // or pushed-in context), its value must fit that type. An
+                // undetermined literal is left for `finalize` to reject.
+                self.check_int_literal_fits(*value, ty, *span)?;
+                Ok(ty.clone())
+            }
             ExprKind::Float(_) => Ok(ty.clone()),
             // `spawn(f)` yields the new task's handle.
             ExprKind::Spawn { .. } => {
@@ -1700,6 +1714,31 @@ impl<'a> Checker<'a> {
                     ))
                 }
             }
+            ExprKind::Neg(operand) => {
+                // For a literal operand, range-check the *negated* value so a
+                // type's most-negative literal (e.g. `-128` for i8) is accepted
+                // even though the bare magnitude wouldn't fit. Other operands
+                // are checked normally.
+                let operand_ty = if let ExprKind::Int(n) = &operand.kind {
+                    let t = operand.ty.clone();
+                    self.check_int_literal_fits(n.wrapping_neg(), &t, operand.span)?;
+                    t
+                } else {
+                    self.check_expr(operand, locals)?
+                };
+                if self.is_numeric_or_var(&operand_ty) {
+                    *ty = operand_ty.clone();
+                    Ok(operand_ty)
+                } else {
+                    Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "cannot negate a value of type {}",
+                            self.type_name(&operand_ty)
+                        )),
+                    ))
+                }
+            }
             ExprKind::ArrayLit(elements) => {
                 let mut elem_ty: Option<Type> = None;
                 for elem in elements.iter_mut() {
@@ -2009,6 +2048,39 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Validate that an integer literal's value fits its determined type.
+    /// `usize`/`isize` are 32-bit on wasm32, so they share `u32`/`i32`'s
+    /// range. Non-integer or still-undetermined types are not checked here.
+    fn check_int_literal_fits(
+        &self,
+        value: i64,
+        ty: &Type,
+        span: SpanId,
+    ) -> Result<(), TypeCheckError> {
+        let (min, max): (i128, i128) = match ty {
+            Type::I8 => (i8::MIN as i128, i8::MAX as i128),
+            Type::U8 => (0, u8::MAX as i128),
+            Type::I16 => (i16::MIN as i128, i16::MAX as i128),
+            Type::U16 => (0, u16::MAX as i128),
+            Type::I32 | Type::Isize => (i32::MIN as i128, i32::MAX as i128),
+            Type::U32 | Type::Usize => (0, u32::MAX as i128),
+            Type::I64 => (i64::MIN as i128, i64::MAX as i128),
+            Type::U64 => (0, u64::MAX as i128),
+            _ => return Ok(()),
+        };
+        let v = value as i128;
+        if v < min || v > max {
+            return Err(self.error(
+                span,
+                TypeCheckKind::LiteralOutOfRange {
+                    value,
+                    ty: ty.clone(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
     fn apply_expected(&self, expr: &mut Expr, expected: &Type) {
         if matches!(expected, Type::Undetermined) {
             return;
@@ -2034,6 +2106,14 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     self.apply_expected(left, expected);
                     self.apply_expected(right, expected);
+                    if self.is_numeric(expected) {
+                        *ty = expected.clone();
+                    }
+                }
+            }
+            ExprKind::Neg(operand) => {
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
+                    self.apply_expected(operand, expected);
                     if self.is_numeric(expected) {
                         *ty = expected.clone();
                     }
@@ -2189,6 +2269,12 @@ impl<'a> Checker<'a> {
             ExprKind::BitNot(operand) => {
                 self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::Undetermined) {
+                    *ty = self.finalize_type(&operand.ty);
+                }
+            }
+            ExprKind::Neg(operand) => {
+                self.finalize_expr(operand)?;
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&operand.ty);
                 }
             }

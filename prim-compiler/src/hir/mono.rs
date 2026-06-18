@@ -140,6 +140,7 @@ impl Mono<'_> {
             ExprKind::Field { base, .. } => self.rewrite_expr(base, subst),
             ExprKind::Deref(operand) => self.rewrite_expr(operand, subst),
             ExprKind::BitNot(operand) => self.rewrite_expr(operand, subst),
+            ExprKind::Neg(operand) => self.rewrite_expr(operand, subst),
             ExprKind::StructLit {
                 struct_id,
                 type_args,
@@ -440,6 +441,7 @@ impl Mono<'_> {
             ExprKind::Field { base, .. } => self.substitute_expr(base, subst),
             ExprKind::Deref(operand) => self.substitute_expr(operand, subst),
             ExprKind::BitNot(operand) => self.substitute_expr(operand, subst),
+            ExprKind::Neg(operand) => self.substitute_expr(operand, subst),
             ExprKind::StructLit {
                 type_args, fields, ..
             } => {

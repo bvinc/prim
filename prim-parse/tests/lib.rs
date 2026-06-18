@@ -478,6 +478,50 @@ fn test_runtime_impl_method_requires_no_body() {
 }
 
 #[test]
+fn test_unary_minus_parses_as_neg() {
+    let (program, _) = parse_ok("fn main() { let b = -a }");
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let { value, .. } => assert!(
+            matches!(value.kind, ExprKind::Neg(_)),
+            "expected Neg, got {:?}",
+            value.kind
+        ),
+        other => panic!("expected let, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_negative_literal_is_neg_of_int() {
+    // `-5` is the negation operator applied to the literal `5`, not a folded
+    // `Int(-5)` and not `0 - 5`.
+    let (program, _) = parse_ok("fn main() { let b = -5 }");
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let { value, .. } => match &value.kind {
+            ExprKind::Neg(inner) => assert!(
+                matches!(inner.kind, ExprKind::Int(5)),
+                "expected Int(5) operand, got {:?}",
+                inner.kind
+            ),
+            other => panic!("expected Neg, got {:?}", other),
+        },
+        other => panic!("expected let, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_unary_plus_is_identity() {
+    let (program, _) = parse_ok("fn main() { let b = +a }");
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let { value, .. } => assert!(
+            matches!(value.kind, ExprKind::Ident(_)),
+            "expected bare identifier, got {:?}",
+            value.kind
+        ),
+        other => panic!("expected let, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_parentheses_nested() {
     let source = "fn main() { let result = ((2 + 3) * 4) + 5 }";
     let (program, _) = parse_ok(source);

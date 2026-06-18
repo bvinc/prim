@@ -573,6 +573,8 @@ pub enum ExprKind {
         target_trait: TraitId,
     },
     BitNot(Box<Expr>),
+    /// Unary arithmetic negation, `-operand`.
+    Neg(Box<Expr>),
     ArrayLit(Vec<Expr>),
     Dbg {
         /// Pre-rendered `[path:line:col] expr_text = ` prefix string,

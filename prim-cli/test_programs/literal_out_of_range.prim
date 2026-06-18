@@ -1,0 +1,7 @@
+import std.io.println
+
+// An integer literal whose value doesn't fit its determined type is rejected.
+fn main() {
+    let x: u8 = 256
+    println(x)
+}
