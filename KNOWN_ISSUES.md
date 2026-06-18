@@ -47,6 +47,12 @@ later feature).
   scheduler doesn't propagate wasm traps to the exit code. A halting program and
   a trapping program are indistinguishable from the outside.
 
+- **The scheduler busy-waits while all tasks sleep.** When every live task is
+  parked on a future wake time (`time.sleep`), `std.rt.schedule` spins on
+  `now_nanos()` until the soonest wake instead of blocking. It's correct but
+  burns CPU for the whole sleep. The fix is a real timed wait (WASI
+  `poll_oneoff` with a monotonic-clock subscription) when nothing is runnable.
+
 ## Deferred design
 
 - **No `*const` pointer operations.** `std.ptr` only provides `*mut` ops, so

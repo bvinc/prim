@@ -1,5 +1,13 @@
 mod rt
 
+import std.sys.now_nanos
+import std.vec.Vec
+import std.vec.new
+import std.vec.len
+import std.vec.get
+import std.vec.set
+import std.vec.push
+
 // Cooperatively yield from the current green thread, returning control to
 // the scheduler. The scheduler picks the next runnable task (or, in the
 // single-task case, this same one) and resumes it. Lowers to wasm
@@ -50,18 +58,73 @@ fn boot() {
 // step, so a task created by `spawn` is picked up within the same pass. The
 // runtime provides only the `resume` and `task_*` primitives; the scheduling
 // policy lives here.
+// One-slot channel from a parking task to the scheduler: the wake time (in
+// monotonic nanoseconds) the task wants. The scheduler clears it before each
+// resume and reads it back if the task yielded, so a plain `yield()` (which
+// doesn't touch it) reads as 0 — "runnable immediately".
+let mut PENDING_WAKE: u64 = 0u64;
+
+// Suspend the current task until at least `wake` (monotonic nanoseconds). The
+// task is not resumed before then. This is the primitive `std.time.sleep`
+// builds on; the waker logic lives in `schedule`.
+fn park_until(wake: u64) {
+    PENDING_WAKE = wake
+    yield()
+}
+
+// The scheduler loop, entered from `_start` after `main` is seeded as task 0.
+// Round-robins the task table, resuming any task whose wake time has passed.
+// A task that parks (via `park_until`) records a future wake time and is
+// skipped until the monotonic clock reaches it; if every live task is parked,
+// the scheduler waits for the soonest wake. Exits once no task remains.
 fn schedule() {
-    let mut progress = true
-    while progress {
-        progress = false
+    // wakes[i] is task i's earliest resume time; 0 means runnable now.
+    let mut wakes = new[u64]()
+    loop {
+        let now = now_nanos()
+        let mut any_live = false
+        let mut ran = false
+        let mut have_min = false
+        let mut min_wake = 0u64
+
+        // task_count() is re-read each step so a task spawned mid-pass is
+        // picked up immediately; wakes grows to match.
         let mut i = 0usize
         while i < task_count() {
+            while len[u64](wakes) <= i {
+                push[u64](wakes, 0u64)
+            }
             if task_live(i) {
-                if resume(i) {
-                    progress = true
+                any_live = true
+                let w = get[u64](wakes, i)
+                if now >= w {
+                    PENDING_WAKE = 0u64
+                    if resume(i) {
+                        set[u64](wakes, i, PENDING_WAKE)
+                    }
+                    ran = true
+                } else {
+                    if !have_min {
+                        min_wake = w
+                        have_min = true
+                    }
+                    if w < min_wake {
+                        min_wake = w
+                    }
                 }
             }
-            i = i + 1
+            i = i + 1usize
+        }
+
+        if !any_live {
+            break
+        }
+        // Every live task is parked in the future: wait for the soonest wake.
+        if !ran {
+            if have_min {
+                while now_nanos() < min_wake {
+                }
+            }
         }
     }
 }

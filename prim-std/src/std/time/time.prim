@@ -1,6 +1,7 @@
 mod time
 
 import std.sys.now_nanos
+import std.rt.park_until
 
 // A span of time, stored as a whole number of nanoseconds — the same shape as
 // Rust's `Duration`, just flattened to one field for now.
@@ -39,4 +40,11 @@ fn as_secs(d: Duration) -> u64 {
 // A monotonic instant in nanoseconds. Subtract two to get elapsed time.
 fn now() -> u64 {
     return now_nanos()
+}
+
+// Suspend the current green thread for at least `d`. Control returns to the
+// scheduler, which wakes this task once the monotonic clock has advanced past
+// `now + d`; other runnable tasks make progress in the meantime.
+fn sleep(d: Duration) {
+    park_until(now_nanos() + d.nanos)
 }
