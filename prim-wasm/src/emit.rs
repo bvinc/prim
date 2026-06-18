@@ -225,6 +225,29 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
                 f.instruction(&Instruction::LocalSet(idx));
             }
         }
+        hir::Stmt::LetTuple {
+            names,
+            elem_types,
+            value,
+            ..
+        } => {
+            // Evaluate the tuple once into a scratch local, then load each
+            // element into its binding. (Scratch reserved first to match the
+            // pre-walk order.)
+            let counter = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(counter + 1);
+            let ptr_local = ctx.scratch_base + counter;
+            emit_expr(f, value, ctx)?;
+            f.instruction(&Instruction::LocalSet(ptr_local));
+            let layout = compute_tuple_layout(elem_types);
+            for (name, (offset, ty)) in names.iter().zip(layout.elems.iter()) {
+                f.instruction(&Instruction::LocalGet(ptr_local));
+                emit_field_load(f, ty, *offset);
+                if let Some(&idx) = ctx.locals.get(name) {
+                    f.instruction(&Instruction::LocalSet(idx));
+                }
+            }
+        }
         hir::Stmt::Assign { target, value, .. } => {
             emit_expr(f, value, ctx)?;
             if let Some(&idx) = ctx.locals.get(target) {

@@ -452,6 +452,14 @@ pub enum Stmt {
         value: Expr,
         span: SpanId,
     },
+    /// `let (a, b, ...) = value` — bind each tuple element to a local. Element
+    /// types are filled in at typecheck.
+    LetTuple {
+        names: Vec<SymbolId>,
+        elem_types: Vec<Type>,
+        value: Expr,
+        span: SpanId,
+    },
     Assign {
         target: SymbolId,
         value: Expr,

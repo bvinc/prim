@@ -289,6 +289,12 @@ pub enum Stmt {
         type_annotation: Option<Type>,
         value: Expr,
     },
+    /// Tuple-destructuring binding: `let (a, b, ...) = value`. Each name binds
+    /// the corresponding tuple element.
+    LetTuple {
+        names: Vec<Ident>,
+        value: Expr,
+    },
     Assign {
         target: Ident,
         value: Expr,

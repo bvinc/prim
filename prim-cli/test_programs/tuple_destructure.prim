@@ -1,0 +1,18 @@
+import std.io.println
+
+fn minmax(a: i32, b: i32) -> (i32, i32) {
+    if a < b {
+        return (a, b)
+    }
+    return (b, a)
+}
+
+// `let (a, b) = ...` binds each element; works on a returned tuple or a value.
+fn main() {
+    let (lo, hi) = minmax(8i32, 3i32)
+    println(lo)
+    println(hi)
+    let t = (1i32, 2i32, 3i32)
+    let (x, y, z) = t
+    println(x + y + z)
+}

@@ -98,6 +98,7 @@ impl Mono<'_> {
     fn rewrite_stmt(&mut self, stmt: &mut Stmt, subst: &[Type]) {
         match stmt {
             Stmt::Let { value, .. } => self.rewrite_expr(value, subst),
+            Stmt::LetTuple { value, .. } => self.rewrite_expr(value, subst),
             Stmt::Assign { value, .. } => self.rewrite_expr(value, subst),
             Stmt::DerefAssign { ptr, value, .. } => {
                 self.rewrite_expr(ptr, subst);
@@ -408,6 +409,14 @@ impl Mono<'_> {
         match stmt {
             Stmt::Let { ty, value, .. } => {
                 *ty = self.substitute_type(ty, subst);
+                self.substitute_expr(value, subst);
+            }
+            Stmt::LetTuple {
+                elem_types, value, ..
+            } => {
+                for t in elem_types.iter_mut() {
+                    *t = self.substitute_type(t, subst);
+                }
                 self.substitute_expr(value, subst);
             }
             Stmt::Assign { value, .. } => self.substitute_expr(value, subst),

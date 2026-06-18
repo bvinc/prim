@@ -1037,6 +1037,31 @@ impl<'a> LoweringContext<'a> {
                     span: self.span_id(name.span, file_id),
                 }
             }
+            Stmt::LetTuple { names, value } => {
+                let value_hir = self.lower_expr(value, module, file_id, ast, module_scope);
+                let span =
+                    self.span_id(names.first().map(|n| n.span).unwrap_or(value.span), file_id);
+                let syms: Vec<SymbolId> = names
+                    .iter()
+                    .map(|n| {
+                        let sym = self.insert_symbol(module, n.sym, SymbolKind::Local);
+                        self.local_scope.insert(
+                            self.interner.resolve(&n.sym).to_string(),
+                            LocalBinding {
+                                symbol: sym,
+                                mutable: false,
+                            },
+                        );
+                        sym
+                    })
+                    .collect();
+                hir::Stmt::LetTuple {
+                    names: syms,
+                    elem_types: Vec::new(),
+                    value: value_hir,
+                    span,
+                }
+            }
             Stmt::Assign { target, value } => {
                 let target_name = self.interner.resolve(&target.sym).to_string();
                 let binding = self.local_scope.get(&target_name).copied();

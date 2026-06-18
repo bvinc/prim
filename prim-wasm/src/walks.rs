@@ -37,6 +37,17 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
             locals.push((*name, hir_type_to_valtype(ty)));
             collect_locals_expr(value, locals);
         }
+        hir::Stmt::LetTuple {
+            names,
+            elem_types,
+            value,
+            ..
+        } => {
+            for (name, ty) in names.iter().zip(elem_types.iter()) {
+                locals.push((*name, hir_type_to_valtype(ty)));
+            }
+            collect_locals_expr(value, locals);
+        }
         hir::Stmt::Assign { value, .. } => collect_locals_expr(value, locals),
         hir::Stmt::DerefAssign { ptr, value, .. } => {
             collect_locals_expr(ptr, locals);
@@ -167,6 +178,11 @@ fn collect_scratch_types_stmt(
 ) {
     match stmt {
         hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
+            collect_scratch_types_expr(value, runtime, out);
+        }
+        // One i32 scratch holds the tuple pointer while elements are extracted.
+        hir::Stmt::LetTuple { value, .. } => {
+            out.push(ValType::I32);
             collect_scratch_types_expr(value, runtime, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
@@ -311,7 +327,9 @@ pub(crate) fn collect_dbg_prefixes_block<'a>(block: &'a hir::Block, out: &mut Ve
 
 fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
     match stmt {
-        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
+        hir::Stmt::Let { value, .. }
+        | hir::Stmt::LetTuple { value, .. }
+        | hir::Stmt::Assign { value, .. } => {
             collect_dbg_prefixes_expr(value, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
@@ -431,7 +449,9 @@ pub(crate) fn collect_str_literals_block<'a>(block: &'a hir::Block, out: &mut Ve
 
 fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
     match stmt {
-        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
+        hir::Stmt::Let { value, .. }
+        | hir::Stmt::LetTuple { value, .. }
+        | hir::Stmt::Assign { value, .. } => {
             collect_str_literals_expr(value, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {

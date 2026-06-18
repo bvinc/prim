@@ -1606,6 +1606,25 @@ impl<'a> Parser<'a> {
             self.advance();
         }
 
+        // Tuple-destructuring binding: `let (a, b, ...) = value`.
+        if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+            self.advance(); // consume '('
+            let mut names = Vec::new();
+            loop {
+                let n_span = self.consume(TokenKind::Identifier, "binding name")?.span;
+                names.push(self.ident(n_span));
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+            self.consume(TokenKind::RightParen, "Expected ')' to close tuple pattern")?;
+            self.consume(TokenKind::Equals, "Expected '=' in let statement")?;
+            let value = self.parse_expression(Precedence::NONE)?;
+            return Ok(Stmt::LetTuple { names, value });
+        }
+
         let name_span = self.consume(TokenKind::Identifier, "identifier")?.span;
         let name = self.ident(name_span);
 

@@ -851,6 +851,31 @@ impl<'a> Checker<'a> {
                 locals.insert(*name, ty.clone());
                 Ok(())
             }
+            Stmt::LetTuple {
+                names,
+                elem_types,
+                value,
+                span,
+            } => {
+                let val_ty = self.check_expr(value, locals)?;
+                match val_ty {
+                    Type::Tuple(elems) if elems.len() == names.len() => {
+                        for (name, elem) in names.iter().zip(elems.iter()) {
+                            locals.insert(*name, elem.clone());
+                        }
+                        *elem_types = elems;
+                        Ok(())
+                    }
+                    other => Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "tuple pattern with {} elements doesn't match {}",
+                            names.len(),
+                            self.type_name(&other)
+                        )),
+                    )),
+                }
+            }
             Stmt::Assign {
                 target,
                 value,
@@ -2250,6 +2275,9 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&value.ty);
                 }
+            }
+            Stmt::LetTuple { value, .. } => {
+                self.finalize_expr(value)?;
             }
             Stmt::Assign { value, .. } => {
                 self.finalize_expr(value)?;
