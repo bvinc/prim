@@ -1,7 +1,7 @@
 import std.io.println
 
 fn test_deref(ptr: *const i32) -> i32 {
-    *ptr
+    return *ptr
 }
 
 fn main() {

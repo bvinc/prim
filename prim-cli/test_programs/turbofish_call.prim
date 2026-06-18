@@ -4,7 +4,7 @@ import std.io.println
 // function — the same f[T](args) syntax used by size_of, here pinning T
 // directly instead of relying on inference.
 fn identity[T](x: T) -> T {
-    x
+    return x
 }
 
 fn main() {

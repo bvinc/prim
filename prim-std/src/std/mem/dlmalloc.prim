@@ -80,15 +80,15 @@ let mut GM: usize = 0usize;
 // ---- tiny pointer helpers ----
 
 fn null8() -> *mut u8 {
-    from_addr[u8](0usize)
+    return from_addr[u8](0usize)
 }
 
 fn is_null(p: *mut u8) -> bool {
-    addr[u8](p) == 0usize
+    return addr[u8](p) == 0usize
 }
 
 fn ptr_eq(a: *mut u8, b: *mut u8) -> bool {
-    addr[u8](a) == addr[u8](b)
+    return addr[u8](a) == addr[u8](b)
 }
 
 // ============================================================================
@@ -96,7 +96,7 @@ fn ptr_eq(a: *mut u8, b: *mut u8) -> bool {
 // ============================================================================
 
 fn chunk_head(c: *mut u8) -> usize {
-    *at[usize](c, 4usize)
+    return *at[usize](c, 4usize)
 }
 
 fn set_chunk_head(c: *mut u8, h: usize) {
@@ -104,7 +104,7 @@ fn set_chunk_head(c: *mut u8, h: usize) {
 }
 
 fn chunk_prev_foot(c: *mut u8) -> usize {
-    *at[usize](c, 0usize)
+    return *at[usize](c, 0usize)
 }
 
 fn set_chunk_prev_foot(c: *mut u8, v: usize) {
@@ -112,7 +112,7 @@ fn set_chunk_prev_foot(c: *mut u8, v: usize) {
 }
 
 fn chunk_fd(c: *mut u8) -> *mut u8 {
-    *at[*mut u8](c, 8usize)
+    return *at[*mut u8](c, 8usize)
 }
 
 fn set_chunk_fd(c: *mut u8, p: *mut u8) {
@@ -120,7 +120,7 @@ fn set_chunk_fd(c: *mut u8, p: *mut u8) {
 }
 
 fn chunk_bk(c: *mut u8) -> *mut u8 {
-    *at[*mut u8](c, 12usize)
+    return *at[*mut u8](c, 12usize)
 }
 
 fn set_chunk_bk(c: *mut u8, p: *mut u8) {
@@ -129,53 +129,52 @@ fn set_chunk_bk(c: *mut u8, p: *mut u8) {
 
 // Size of this chunk in bytes, with the status flags masked off.
 fn chunksize(c: *mut u8) -> usize {
-    chunk_head(c) & !7usize
+    return chunk_head(c) & !7usize
 }
 
 // Is this chunk currently allocated?
 fn cinuse(c: *mut u8) -> bool {
-    (chunk_head(c) & 2usize) != 0usize
+    return (chunk_head(c) & 2usize) != 0usize
 }
 
 // Is the physically previous chunk currently allocated?
 fn pinuse(c: *mut u8) -> bool {
-    (chunk_head(c) & 1usize) != 0usize
+    return (chunk_head(c) & 1usize) != 0usize
 }
 
 // Payload pointer for a chunk (what alloc hands back).
 fn chunk2mem(c: *mut u8) -> *mut u8 {
-    byte_add[u8](c, 8usize)
+    return byte_add[u8](c, 8usize)
 }
 
 // Recover the chunk header from a payload pointer (what free receives).
 fn mem2chunk(m: *mut u8) -> *mut u8 {
-    byte_sub[u8](m, 8usize)
+    return byte_sub[u8](m, 8usize)
 }
 
 // The chunk `s` bytes past `c`.
 fn chunk_plus_offset(c: *mut u8, s: usize) -> *mut u8 {
-    byte_add[u8](c, s)
+    return byte_add[u8](c, s)
 }
 
 // The physically adjacent chunk that follows `c`.
 fn next_chunk(c: *mut u8) -> *mut u8 {
-    byte_add[u8](c, chunksize(c))
+    return byte_add[u8](c, chunksize(c))
 }
 
 // The physically adjacent chunk that precedes `c` (valid only when that
 // chunk is free, so its size is recorded in this chunk's prev_foot).
 fn prev_chunk(c: *mut u8) -> *mut u8 {
-    byte_sub[u8](c, chunk_prev_foot(c))
+    return byte_sub[u8](c, chunk_prev_foot(c))
 }
 
 // Round a user request up to the chunk size that will satisfy it: add the
 // one-word overhead, align to 8, and never go below the minimum chunk size.
 fn request2size(req: usize) -> usize {
     if req < 11usize {
-        16usize
-    } else {
-        (req + 4usize + 7usize) & !7usize
+        return 16usize
     }
+    return (req + 4usize + 7usize) & !7usize
 }
 
 // ---- header status setters ----
@@ -218,47 +217,47 @@ fn set_inuse_and_pinuse(p: *mut u8, s: usize) {
 // ============================================================================
 
 fn ms() -> *mut u8 {
-    from_addr[u8](GM)
+    return from_addr[u8](GM)
 }
 
 fn smallmap() -> usize {
-    *at[usize](ms(), 0usize)
+    return *at[usize](ms(), 0usize)
 }
 fn set_smallmap(v: usize) {
     *at[usize](ms(), 0usize) = v
 }
 fn treemap() -> usize {
-    *at[usize](ms(), 4usize)
+    return *at[usize](ms(), 4usize)
 }
 fn set_treemap(v: usize) {
     *at[usize](ms(), 4usize) = v
 }
 fn dvsize() -> usize {
-    *at[usize](ms(), 8usize)
+    return *at[usize](ms(), 8usize)
 }
 fn set_dvsize(v: usize) {
     *at[usize](ms(), 8usize) = v
 }
 fn topsize() -> usize {
-    *at[usize](ms(), 12usize)
+    return *at[usize](ms(), 12usize)
 }
 fn set_topsize(v: usize) {
     *at[usize](ms(), 12usize) = v
 }
 fn dv() -> *mut u8 {
-    *at[*mut u8](ms(), 16usize)
+    return *at[*mut u8](ms(), 16usize)
 }
 fn set_dv(p: *mut u8) {
     *at[*mut u8](ms(), 16usize) = p
 }
 fn top() -> *mut u8 {
-    *at[*mut u8](ms(), 20usize)
+    return *at[*mut u8](ms(), 20usize)
 }
 fn set_top(p: *mut u8) {
     *at[*mut u8](ms(), 20usize) = p
 }
 fn segsize() -> usize {
-    *at[usize](ms(), 28usize)
+    return *at[usize](ms(), 28usize)
 }
 fn set_segsize(v: usize) {
     *at[usize](ms(), 28usize) = v
@@ -266,11 +265,11 @@ fn set_segsize(v: usize) {
 
 // smallbin i is a sentinel "chunk" whose fd/bk are the list head/tail.
 fn smallbin_at(i: usize) -> *mut u8 {
-    byte_add[u8](ms(), 32usize + i * 16usize)
+    return byte_add[u8](ms(), 32usize + i * 16usize)
 }
 
 fn treebin(i: usize) -> *mut u8 {
-    *at[*mut u8](ms(), 544usize + i * 4usize)
+    return *at[*mut u8](ms(), 544usize + i * 4usize)
 }
 fn set_treebin(i: usize, p: *mut u8) {
     *at[*mut u8](ms(), 544usize + i * 4usize) = p
@@ -279,7 +278,7 @@ fn set_treebin(i: usize, p: *mut u8) {
 // ---- bin bitmap ----
 
 fn smallmap_marked(i: usize) -> bool {
-    (smallmap() & (1usize << i)) != 0usize
+    return (smallmap() & (1usize << i)) != 0usize
 }
 fn mark_smallmap(i: usize) {
     set_smallmap(smallmap() | (1usize << i))
@@ -288,7 +287,7 @@ fn clear_smallmap(i: usize) {
     set_smallmap(smallmap() & !(1usize << i))
 }
 fn treemap_marked(i: usize) -> bool {
-    (treemap() & (1usize << i)) != 0usize
+    return (treemap() & (1usize << i)) != 0usize
 }
 fn mark_treemap(i: usize) {
     set_treemap(treemap() | (1usize << i))
@@ -298,13 +297,13 @@ fn clear_treemap(i: usize) {
 }
 
 fn is_small(s: usize) -> bool {
-    s < 256usize
+    return s < 256usize
 }
 fn small_index(s: usize) -> usize {
-    s >> 3usize
+    return s >> 3usize
 }
 fn small_index2size(i: usize) -> usize {
-    i << 3usize
+    return i << 3usize
 }
 
 // ============================================================================
@@ -312,19 +311,19 @@ fn small_index2size(i: usize) -> usize {
 // ============================================================================
 
 fn tchild(p: *mut u8, idx: usize) -> *mut u8 {
-    *at[*mut u8](p, 16usize + idx * 4usize)
+    return *at[*mut u8](p, 16usize + idx * 4usize)
 }
 fn set_tchild(p: *mut u8, idx: usize, c: *mut u8) {
     *at[*mut u8](p, 16usize + idx * 4usize) = c
 }
 fn tparent(p: *mut u8) -> *mut u8 {
-    *at[*mut u8](p, 24usize)
+    return *at[*mut u8](p, 24usize)
 }
 fn set_tparent(p: *mut u8, c: *mut u8) {
     *at[*mut u8](p, 24usize) = c
 }
 fn tindex(p: *mut u8) -> usize {
-    *at[usize](p, 28usize)
+    return *at[usize](p, 28usize)
 }
 fn set_tindex(p: *mut u8, i: usize) {
     *at[usize](p, 28usize) = i
@@ -334,10 +333,9 @@ fn set_tindex(p: *mut u8, i: usize) {
 fn leftmost_child(t: *mut u8) -> *mut u8 {
     let c0 = tchild(t, 0usize)
     if !is_null(c0) {
-        c0
-    } else {
-        tchild(t, 1usize)
+        return c0
     }
+    return tchild(t, 1usize)
 }
 
 // Treebin index for a chunk size. Splits each power-of-two range into two
@@ -345,25 +343,24 @@ fn leftmost_child(t: *mut u8) -> *mut u8 {
 fn compute_tree_index(s: usize) -> usize {
     let x = s >> 8usize
     if x == 0usize {
-        0usize
-    } else if x > 65535usize {
-        31usize
-    } else {
-        let k = 31usize - clz(x)
-        let hi = k << 1usize
-        let lo = (s >> (k + 7usize)) & 1usize
-        hi | lo
+        return 0usize
     }
+    if x > 65535usize {
+        return 31usize
+    }
+    let k = 31usize - clz(x)
+    let hi = k << 1usize
+    let lo = (s >> (k + 7usize)) & 1usize
+    return hi | lo
 }
 
 // Left shift applied to a size when descending the tree for index `i`, so the
 // relevant size bit is at the top of the word at each level.
 fn leftshift_for_tree_index(i: usize) -> usize {
     if i == 31usize {
-        0usize
-    } else {
-        25usize - (i >> 1usize)
+        return 0usize
     }
+    return 25usize - (i >> 1usize)
 }
 
 // ============================================================================
@@ -614,7 +611,7 @@ fn alloc_from_top(nb: usize) -> *mut u8 {
     set_top(r)
     set_chunk_head(r, rsize | 1usize)
     set_inuse_pinuse(p, nb)
-    chunk2mem(p)
+    return chunk2mem(p)
 }
 
 // Grow linear memory and extend the (contiguous) top chunk, then serve nb.
@@ -631,7 +628,7 @@ fn sys_alloc(nb: usize) -> *mut u8 {
     set_segsize(segsize() + added)
     set_topsize(topsize() + added)
     set_chunk_head(top(), topsize() | 1usize)
-    alloc_from_top(nb)
+    return alloc_from_top(nb)
 }
 
 fn alloc_from_dv(nb: usize) -> *mut u8 {
@@ -649,7 +646,7 @@ fn alloc_from_dv(nb: usize) -> *mut u8 {
         set_dv(null8())
         set_inuse_and_pinuse(p, dvs)
     }
-    chunk2mem(p)
+    return chunk2mem(p)
 }
 
 // ============================================================================
@@ -681,7 +678,7 @@ fn tmalloc_small(nb: usize) -> *mut u8 {
         set_free_chunk(r, rsize)
         replace_dv(r, rsize)
     }
-    chunk2mem(v)
+    return chunk2mem(v)
 }
 
 // Best fit for a large request via a tree descent, with a fallback to the
@@ -752,7 +749,7 @@ fn tmalloc_large(nb: usize) -> *mut u8 {
         set_free_chunk(r, rsize)
         insert_chunk(r, rsize)
     }
-    chunk2mem(v)
+    return chunk2mem(v)
 }
 
 // ============================================================================
@@ -819,7 +816,7 @@ fn alloc(nbytes: usize) -> *mut u8 {
     if nb < topsize() {
         return alloc_from_top(nb)
     }
-    sys_alloc(nb)
+    return sys_alloc(nb)
 }
 
 // free(mem) — release a prior allocation, coalescing with free neighbours.
@@ -884,7 +881,7 @@ fn free(mem: *mut u8) {
 // Typed allocation conveniences. at[T] views the fresh bytes as T; dealloc
 // drops back to a raw pointer (from_addr of the address) to free.
 fn alloc_bytes[T](n: usize) -> *mut T {
-    at[T](alloc(n), 0usize)
+    return at[T](alloc(n), 0usize)
 }
 
 fn dealloc[T](p: *mut T) {
@@ -892,5 +889,5 @@ fn dealloc[T](p: *mut T) {
 }
 
 fn alloc_array[T](count: usize) -> *mut T {
-    alloc_bytes[T](count * size_of[T]())
+    return alloc_bytes[T](count * size_of[T]())
 }

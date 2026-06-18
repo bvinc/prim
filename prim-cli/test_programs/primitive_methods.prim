@@ -4,10 +4,10 @@ import std.io.println
 // (no self), called the same way as on a struct or enum.
 impl u8 {
     fn doubled(self) -> u8 {
-        self + self
+        return self + self
     }
     fn from_i32(n: i32) -> u8 {
-        u8.from_i32_wrapping(n)
+        return u8.from_i32_wrapping(n)
     }
 }
 

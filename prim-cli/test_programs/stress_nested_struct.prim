@@ -14,7 +14,7 @@ struct Outer {
 }
 
 fn make_outer() -> Outer {
-    Outer {
+    return Outer {
         a = Inner { x = 1, y = 2 },
         b = Inner { x = 3, y = 4 },
     }

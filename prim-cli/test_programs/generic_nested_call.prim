@@ -2,14 +2,14 @@ import std.io.println
 
 // Inner generic — forwards its arg through identity.
 fn through[T](x: T) -> T {
-    x
+    return x
 }
 
 // Outer generic — forwards T to the inner generic. Mono should
 // substitute the outer's T into the inner's type-arg list and produce
 // one specialization per outer T.
 fn forward[T](x: T) -> T {
-    through(x)
+    return through(x)
 }
 
 fn main() {

@@ -7,13 +7,13 @@ trait Greeter {
 }
 
 impl Greeter for Counter {
-    fn greet(self) -> i32 { self.n }
+    fn greet(self) -> i32 { return self.n }
 }
 
 // Returning a struct from a trait-typed return position should coerce
 // via the trailing expression.
 fn make() -> Greeter {
-    Counter { n = 55 }
+    return Counter { n = 55 }
 }
 
 // Same for early return.
@@ -21,7 +21,7 @@ fn make_early(flag: bool) -> Greeter {
     if flag {
         return Counter { n = 66 }
     }
-    Counter { n = 77 }
+    return Counter { n = 77 }
 }
 
 fn main() {

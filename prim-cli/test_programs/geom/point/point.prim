@@ -12,12 +12,12 @@ trait HasValue {
 
 impl HasValue for Point {
     fn get(self) -> i32 {
-        self.value
+        return self.value
     }
 }
 
 fn new_point() -> Point {
-    Point { value = 42 }
+    return Point { value = 42 }
 }
 
 fn announce() {

@@ -6,14 +6,14 @@ enum Option[T] {
 }
 
 fn unwrap_i32(x: Option[i32]) -> i32 {
-    match x {
+    return match x {
         Option.Some { value } => value,
         Option.None => 0i32,
     }
 }
 
 fn unwrap_i64(x: Option[i64]) -> i64 {
-    match x {
+    return match x {
         Option.Some { value } => value,
         Option.None => 0i64,
     }

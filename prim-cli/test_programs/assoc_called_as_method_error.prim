@@ -2,10 +2,10 @@ struct Counter { n: i32 }
 
 impl Counter {
     fn make(start: i32) -> Self {
-        Counter { n = start }
+        return Counter { n = start }
     }
     fn get(self) -> i32 {
-        self.n
+        return self.n
     }
 }
 

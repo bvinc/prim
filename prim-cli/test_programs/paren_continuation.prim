@@ -1,7 +1,7 @@
 import std.io.println
 
 fn id(x: usize) -> usize {
-    x
+    return x
 }
 
 // A `(` is a call only when glued to the name. Here the parenthesized line
@@ -11,7 +11,7 @@ fn id(x: usize) -> usize {
 // and failed to parse.
 fn f() -> usize {
     let a = id(5usize)
-    (a + 1usize)
+    return (a + 1usize)
 }
 
 fn main() {

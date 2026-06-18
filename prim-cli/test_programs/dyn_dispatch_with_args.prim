@@ -9,19 +9,19 @@ trait Computable {
 
 impl Computable for Adder {
     fn shift(self, by: i32) -> i32 {
-        self.base + by
+        return self.base + by
     }
     fn combine(self, x: i32, y: i32) -> i32 {
-        self.base + x + y
+        return self.base + x + y
     }
 }
 
 fn use_one(c: Computable, n: i32) -> i32 {
-    c.shift(n)
+    return c.shift(n)
 }
 
 fn use_two(c: Computable, x: i32, y: i32) -> i32 {
-    c.combine(x, y)
+    return c.combine(x, y)
 }
 
 fn main() {

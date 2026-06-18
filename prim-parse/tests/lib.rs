@@ -8,6 +8,16 @@ fn parse_ok(source: &str) -> (prim_parse::Program, Arc<Interner>) {
     (program, interner)
 }
 
+/// The expression of a block's last statement. Blocks are statement lists
+/// (no trailing-expression value), so a bare expression on the last line is
+/// a `Stmt::Expr`.
+fn tail_expr(body: &prim_parse::Block) -> &prim_parse::Expr {
+    match body.stmts.last() {
+        Some(Stmt::Expr(e)) => e,
+        other => panic!("expected a trailing expression statement, got {:?}", other),
+    }
+}
+
 #[test]
 fn test_error_same_line_statements() {
     let source = "fn main() { let x = 1 let y = 2 }";
@@ -49,7 +59,7 @@ fn test_glued_call_still_parses() {
     let source = "fn main() { id(5usize) }";
     let (program, _) = parse_ok(source);
     let body = &program.functions[0].body;
-    let call = body.expr.as_ref().expect("trailing call expression");
+    let call = tail_expr(body);
     assert!(
         matches!(call.kind, ExprKind::FunctionCall { .. }),
         "expected FunctionCall, got {:?}",
@@ -65,8 +75,8 @@ fn test_paren_line_is_grouping_not_call() {
     let source = "fn f() -> usize {\n    let a = id(5usize)\n    (a + 1usize)\n}";
     let (program, _) = parse_ok(source);
     let body = &program.functions[0].body;
-    assert_eq!(body.stmts.len(), 1, "the let is the only statement");
-    let trailing = body.expr.as_ref().expect("trailing grouped expression");
+    assert_eq!(body.stmts.len(), 2, "the let plus the grouped expression");
+    let trailing = tail_expr(body);
     assert!(
         matches!(trailing.kind, ExprKind::Binary { .. }),
         "expected a grouped Binary, got {:?}",
@@ -251,7 +261,7 @@ fn test_parse_println() {
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
-    let expr = main_func.body.expr.as_deref().unwrap();
+    let expr = tail_expr(&main_func.body);
     match &expr.kind {
         ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
@@ -275,7 +285,7 @@ fn test_parse_println_with_expression() {
 
     let main_func = &program.functions[0];
     // The function call is a trailing expression (no semicolon)
-    let expr = main_func.body.expr.as_deref().unwrap();
+    let expr = tail_expr(&main_func.body);
     match &expr.kind {
         ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
@@ -631,12 +641,7 @@ fn test_parse_parentheses_function_call_args() {
     let (program, interner) = parse_ok(source);
 
     let main_func = &program.functions[0];
-    // The function call is a trailing expression (no semicolon)
-    let expr = main_func
-        .body
-        .expr
-        .as_deref()
-        .expect("Expected println call");
+    let expr = tail_expr(&main_func.body);
     match &expr.kind {
         ExprKind::FunctionCall { path, args, .. } => {
             assert_eq!(interner.resolve(&path.segments[0].sym), "println");
@@ -1251,8 +1256,8 @@ fn main() {
 
     // Check main function has struct literal and field access
     let main_func = &program.functions[0];
-    // The let statement is in stmts, the println is the trailing expression
-    assert_eq!(main_func.body.stmts.len(), 1);
+    // The let statement and the println call are both statements now.
+    assert_eq!(main_func.body.stmts.len(), 2);
 
     // Check struct literal in let statement
     if let Stmt::Let { value, .. } = &main_func.body.stmts[0] {
@@ -1270,20 +1275,17 @@ fn main() {
 
     // Dotted identifier chains parse as paths. Lowering decides whether
     // this is a value field access or a module/enum path.
-    if let Some(expr) = main_func.body.expr.as_deref() {
-        if let ExprKind::FunctionCall { args, .. } = &expr.kind {
-            if let ExprKind::Path(path) = &args[0].kind {
-                assert_eq!(path.segments.len(), 2);
-                assert_eq!(interner.resolve(&path.segments[0].sym), "p");
-                assert_eq!(interner.resolve(&path.segments[1].sym), "x");
-            } else {
-                panic!("Expected path in println");
-            }
+    let expr = tail_expr(&main_func.body);
+    if let ExprKind::FunctionCall { args, .. } = &expr.kind {
+        if let ExprKind::Path(path) = &args[0].kind {
+            assert_eq!(path.segments.len(), 2);
+            assert_eq!(interner.resolve(&path.segments[0].sym), "p");
+            assert_eq!(interner.resolve(&path.segments[1].sym), "x");
         } else {
-            panic!("Expected function call");
+            panic!("Expected path in println");
         }
     } else {
-        panic!("Expected println call");
+        panic!("Expected function call");
     }
 }
 
@@ -1557,13 +1559,8 @@ fn test_if_condition_no_struct_literal_ambiguity() {
     let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
-    // The if is a trailing expression (no semicolon), so it ends up in body.expr
-    assert!(main_func.body.stmts.is_empty());
-    let expr = main_func
-        .body
-        .expr
-        .as_deref()
-        .expect("Expected if expression");
+    // The `if` is now a statement (blocks carry no trailing value).
+    let expr = tail_expr(&main_func.body);
     match &expr.kind {
         ExprKind::If {
             condition,
@@ -1580,7 +1577,7 @@ fn test_if_condition_no_struct_literal_ambiguity() {
             assert!(then_branch.stmts.is_empty() && then_branch.expr.is_none());
             assert!(else_branch.is_none());
         }
-        _ => panic!("Expected if expression, got {:?}", &main_func.body.expr),
+        other => panic!("Expected if expression, got {:?}", other),
     }
 }
 
@@ -1657,13 +1654,8 @@ fn test_if_condition_with_comparison() {
     let (program, _) = parse_ok(source);
 
     let main_func = &program.functions[0];
-    // The if is a trailing expression (no semicolon), so it ends up in body.expr
-    assert!(main_func.body.stmts.is_empty());
-    let expr = main_func
-        .body
-        .expr
-        .as_deref()
-        .expect("Expected if expression");
+    // The `if` is now a statement (blocks carry no trailing value).
+    let expr = tail_expr(&main_func.body);
     match &expr.kind {
         ExprKind::If {
             condition,

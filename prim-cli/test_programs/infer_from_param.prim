@@ -2,11 +2,11 @@
 import std.io.println
 
 fn add_i64(a: i64, b: i64) -> i64 {
-    a + b
+    return a + b
 }
 
 fn double(x: i64) -> i64 {
-    x * 2
+    return x * 2
 }
 
 fn main() {

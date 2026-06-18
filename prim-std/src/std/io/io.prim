@@ -12,9 +12,9 @@ struct File {
     fd: i32,
 }
 
-fn stdout() -> File { File { fd = 1 } }
-fn stderr() -> File { File { fd = 2 } }
-fn stdin() -> File { File { fd = 0 } }
+fn stdout() -> File { return File { fd = 1 } }
+fn stderr() -> File { return File { fd = 2 } }
+fn stdin() -> File { return File { fd = 0 } }
 
 // A sink for bytes. I/O is byte-oriented; text is just bytes (see the
 // `Display` helpers below, which format into a byte buffer).
@@ -24,7 +24,7 @@ trait Writer {
 
 impl Writer for File {
     fn write(self, bytes: Vec[u8]) -> usize {
-        write_raw(self.fd, bytes.ptr, bytes.len)
+        return write_raw(self.fd, bytes.ptr, bytes.len)
     }
 }
 

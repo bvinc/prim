@@ -15,7 +15,7 @@ struct Formatter {
 }
 
 fn new_formatter() -> Formatter {
-    Formatter { buf = new[u8]() }
+    return Formatter { buf = new[u8]() }
 }
 
 impl Formatter {
@@ -58,7 +58,10 @@ impl Formatter {
     // so trailing zeros can't be un-written); the second pass emits them.
     fn write_f64(self, x: f64) {
         let neg = x < 0.0f64
-        let abs = if neg { 0.0f64 - x } else { x }
+        let mut abs = x
+        if neg {
+            abs = 0.0f64 - x
+        }
         if neg {
             self.write_byte(45u8)
         }
@@ -152,5 +155,5 @@ impl Display for String {
 fn to_string[T: Display](x: T) -> String {
     let f = new_formatter()
     x.fmt(f)
-    from_vec(f.buf)
+    return from_vec(f.buf)
 }

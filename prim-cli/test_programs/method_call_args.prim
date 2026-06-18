@@ -13,7 +13,7 @@ impl Math for Vec2 {
     fn shifted(self, dx: i32, dy: i32) -> i32 {
         // Return x + dx + y + dy — exercises method with multiple args
         // beyond the receiver.
-        self.x + dx + self.y + dy
+        return self.x + dx + self.y + dy
     }
 }
 

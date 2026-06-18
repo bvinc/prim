@@ -11,10 +11,10 @@ trait Bumpable {
 
 impl Bumpable for Counter {
     fn current(self) -> i32 {
-        self.n
+        return self.n
     }
     fn doubled(self) -> i32 {
-        self.n + self.n
+        return self.n + self.n
     }
 }
 

@@ -7,17 +7,17 @@ struct S3 { a: i32, b: i32 }
 
 fn use_s1() -> i32 {
     let s = S1 { a = 1, b = 2 }
-    s.a + s.b
+    return s.a + s.b
 }
 
 fn use_s2() -> i32 {
     let s = S2 { a = 10, b = 20 }
-    s.a + s.b
+    return s.a + s.b
 }
 
 fn use_s3() -> i32 {
     let s = S3 { a = 100, b = 200 }
-    s.a + s.b
+    return s.a + s.b
 }
 
 fn main() {

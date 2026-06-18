@@ -4,7 +4,7 @@ import std.io.println
 // right operand was short-circuited away.
 fn noisy(tag: i32, val: bool) -> bool {
     println(tag)
-    val
+    return val
 }
 
 fn main() {

@@ -13,7 +13,7 @@ fn count_to(limit: i32) -> i32 {
         i = i + 1
         if i == limit { break }
     }
-    i
+    return i
 }
 
 // break inside nested `if`s
@@ -25,7 +25,7 @@ fn nested_if() -> i32 {
             if i == 4 { break }
         }
     }
-    i
+    return i
 }
 
 // break inside a `match` arm
@@ -33,13 +33,16 @@ fn via_match() -> i32 {
     let mut i = 0i32
     loop {
         i = i + 1
-        let s = if i == 3 { Sig.Stop } else { Sig.Go }
+        let mut s = Sig.Go
+        if i == 3 {
+            s = Sig.Stop
+        }
         match s {
             Sig.Stop => { break },
             Sig.Go => {},
         }
     }
-    i
+    return i
 }
 
 // nested loops: the inner break (inside an if) exits only the inner loop;
@@ -57,7 +60,7 @@ fn nested_loops() -> i32 {
         }
         if outer == 2 { break }
     }
-    total
+    return total
 }
 
 // while + break inside an if
@@ -67,7 +70,7 @@ fn while_break() -> i32 {
         i = i + 1
         if i == 7 { break }
     }
-    i
+    return i
 }
 
 fn main() {

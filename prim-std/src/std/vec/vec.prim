@@ -18,16 +18,19 @@ struct Vec[T] {
 }
 
 fn new[T]() -> Vec[T] {
-    Vec { ptr = null[T](), len = 0usize, cap = 0usize }
+    return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
 }
 
 fn len[T](v: Vec[T]) -> usize {
-    v.len
+    return v.len
 }
 
 fn push[T](v: Vec[T], value: T) {
     if v.len == v.cap {
-        let new_cap = if v.cap == 0usize { 4usize } else { v.cap * 2usize }
+        let mut new_cap = 4usize
+        if v.cap != 0usize {
+            new_cap = v.cap * 2usize
+        }
         let new_ptr = alloc_array[T](new_cap)
         if v.len > 0usize {
             copy_bytes[T](new_ptr, v.ptr, v.len * size_of[T]())
@@ -44,7 +47,7 @@ fn get[T](v: Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
-    *add[T](v.ptr, i)
+    return *add[T](v.ptr, i)
 }
 
 fn set[T](v: Vec[T], i: usize, value: T) {

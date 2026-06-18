@@ -15,13 +15,13 @@ trait Opt {
 
 impl Opt for Option {
     fn unwrap_or(o: Option[i32], fallback: i32) -> i32 {
-        match o {
+        return match o {
             Option.Some { value } => value,
             Option.None => fallback,
         }
     }
     fn is_some(o: Option[i32]) -> i32 {
-        match o {
+        return match o {
             Option.Some { value } => 1,
             Option.None => 0,
         }

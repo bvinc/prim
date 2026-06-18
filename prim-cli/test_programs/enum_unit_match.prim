@@ -7,7 +7,7 @@ enum Color {
 }
 
 fn score(c: Color) -> i32 {
-    match c {
+    return match c {
         Color.Red => 1i32,
         Color.Green => 2i32,
         Color.Blue => 3i32,

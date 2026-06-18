@@ -8,7 +8,7 @@ trait Greeter {
 }
 
 fn use_it(g: Greeter) -> i32 {
-    g.greet()
+    return g.greet()
 }
 
 fn main() {

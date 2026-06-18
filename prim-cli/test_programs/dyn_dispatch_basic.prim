@@ -10,7 +10,7 @@ trait Greeter {
 
 impl Greeter for Counter {
     fn greet(self) -> i32 {
-        self.n
+        return self.n
     }
 }
 
@@ -18,7 +18,7 @@ impl Greeter for Counter {
 // into a fat pointer, and the method call inside dispatches dynamically
 // through the vtable.
 fn use_greeter(g: Greeter) -> i32 {
-    g.greet()
+    return g.greet()
 }
 
 fn main() {

@@ -8,7 +8,7 @@ trait Ord {
 
 impl Ord for Value {
     fn lt(self, other: Value) -> bool {
-        self.n < other.n
+        return self.n < other.n
     }
 }
 
@@ -16,7 +16,10 @@ impl Ord for Value {
 // calls `a.lt(b)` which the typechecker resolves through the bound and
 // monomorphization turns into a direct call to Value::lt.
 fn min[T: Ord](a: T, b: T) -> T {
-    if a.lt(b) { a } else { b }
+    if a.lt(b) {
+        return a
+    }
+    return b
 }
 
 fn main() {

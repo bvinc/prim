@@ -10,19 +10,19 @@ trait Geom {
 
 impl Geom for Shape {
     fn perimeter(self) -> i32 {
-        self.side * 4i32
+        return self.side * 4i32
     }
     fn area(self) -> i32 {
-        self.side * self.side
+        return self.side * self.side
     }
     fn diagonal_squared(self) -> i32 {
-        self.side * self.side + self.side * self.side
+        return self.side * self.side + self.side * self.side
     }
 }
 
 fn measure(g: Geom) -> i32 {
     // Three different vtable slots, three indirect calls.
-    g.perimeter() + g.area() + g.diagonal_squared()
+    return g.perimeter() + g.area() + g.diagonal_squared()
 }
 
 fn main() {

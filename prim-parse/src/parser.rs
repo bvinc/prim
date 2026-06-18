@@ -1382,35 +1382,23 @@ impl<'a> Parser<'a> {
         let block_start = left_brace.span.start();
 
         let mut stmts = Vec::new();
-        let mut trailing_expr: Option<Box<Expr>> = None;
 
         while let Some(kind) = self.peek_kind() {
             if kind == TokenKind::RightBrace {
                 break;
             }
 
-            // Try to parse a statement
+            // Blocks are statement lists — there is no trailing-expression
+            // value. A function produces its result with `return`.
             let stmt = self.parse_statement()?;
             let stmt_end = self.previous().span.end();
             let has_semicolon = matches!(self.peek_kind(), Some(TokenKind::Semicolon));
 
             if has_semicolon {
                 self.advance();
-                stmts.push(stmt);
-            } else if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
-                // This is the last item in the block without a semicolon
-                // If it's an expression statement, it becomes the trailing expression
-                match stmt {
-                    Stmt::Expr(expr) => {
-                        trailing_expr = Some(Box::new(expr));
-                    }
-                    other => {
-                        // Non-expression statements at the end still need to be stored
-                        stmts.push(other);
-                    }
-                }
-            } else {
-                // No semicolon and not at closing brace - emit error
+            } else if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                // No semicolon and not at the closing brace: two statements
+                // share a line.
                 if let Some(next) = self.peek() {
                     if self.is_same_line(stmt_end, next.span.start()) {
                         self.emit(
@@ -1420,8 +1408,8 @@ impl<'a> Parser<'a> {
                         );
                     }
                 }
-                stmts.push(stmt);
             }
+            stmts.push(stmt);
         }
 
         let right_brace = self.consume(TokenKind::RightBrace, "Expected '}'")?;
@@ -1429,7 +1417,7 @@ impl<'a> Parser<'a> {
 
         Ok(Block {
             stmts,
-            expr: trailing_expr,
+            expr: None,
             span: Span::new(block_start, block_end),
         })
     }

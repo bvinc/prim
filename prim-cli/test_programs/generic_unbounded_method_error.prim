@@ -6,7 +6,7 @@ trait Ord {
 }
 
 fn bad[T](a: T, b: T) -> bool {
-    a.lt(b)
+    return a.lt(b)
 }
 
 fn main() {

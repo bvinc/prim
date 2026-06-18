@@ -18,7 +18,7 @@ trait Probe {
 
 impl Reveal for Inner {
     fn show(self) -> i32 {
-        self.n + 1i32
+        return self.n + 1i32
     }
 }
 
@@ -26,7 +26,7 @@ impl Probe for Outer {
     fn lookup(self) -> i32 {
         // Method on Outer calls a method on a different struct (Inner).
         // Exercises cross-struct method resolution at typecheck time.
-        self.inner.show()
+        return self.inner.show()
     }
 }
 

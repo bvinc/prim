@@ -1,11 +1,11 @@
 import std.io.println
 
 fn test_const_ptr(ptr: *const u8) -> i32 {
-    42
+    return 42
 }
 
 fn test_mut_ptr(ptr: *mut i32) -> i32 {
-    24
+    return 24
 }
 
 fn main() {

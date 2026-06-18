@@ -6,20 +6,20 @@ struct Counter { n: i32 }
 // using the Self type in return position.
 impl Counter {
     fn make(start: i32) -> Self {
-        Counter { n = start }
+        return Counter { n = start }
     }
     fn get(self) -> i32 {
-        self.n
+        return self.n
     }
     fn bumped(self) -> Self {
-        Counter { n = self.n + 1 }
+        return Counter { n = self.n + 1 }
     }
 }
 
 // Associated function on a primitive type.
 impl u8 {
     fn from_i32(n: i32) -> u8 {
-        u8.from_i32_wrapping(n)
+        return u8.from_i32_wrapping(n)
     }
 }
 

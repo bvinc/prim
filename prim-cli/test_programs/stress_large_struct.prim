@@ -17,7 +17,7 @@ struct Large {
 }
 
 fn make_large() -> Large {
-    Large {
+    return Large {
         a = 1,
         b = 2,
         c = 3,
@@ -32,7 +32,7 @@ fn make_large() -> Large {
 }
 
 fn sum_large(s: Large) -> i32 {
-    s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i + s.j
+    return s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i + s.j
 }
 
 fn main() {

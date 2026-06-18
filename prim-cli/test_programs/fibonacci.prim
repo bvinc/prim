@@ -7,31 +7,29 @@ import std.io.println
 
 fn fib(n: i32) -> i32 {
     if n <= 1 {
-        n
-    } else {
-        let mut a = 0i32
-        let mut b = 1i32
-        let mut i = 2i32
-        while i <= n {
-            let next = a + b
-            a = b
-            b = next
-            i = i + 1
-        }
-        b
+        return n
     }
+    let mut a = 0i32
+    let mut b = 1i32
+    let mut i = 2i32
+    while i <= n {
+        let next = a + b
+        a = b
+        b = next
+        i = i + 1
+    }
+    return b
 }
 
 // Recursive version for comparison
 fn fib_recursive(n: i32) -> i32 {
     if n <= 1 {
-        n
-    } else {
-        fib_recursive(n - 1) + fib_recursive(n - 2)
+        return n
     }
+    return fib_recursive(n - 1) + fib_recursive(n - 2)
 }
 
-fn main() -> i32 {
+fn main() {
     // Print the first 20 Fibonacci numbers
     let mut i = 0i32
     while i < 20 {
@@ -39,6 +37,6 @@ fn main() -> i32 {
         i = i + 1
     }
 
-    // Return fib(10) = 55
+    // fib(10) = 55
     println(fib(10))
 }

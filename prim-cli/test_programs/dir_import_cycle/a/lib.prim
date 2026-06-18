@@ -2,5 +2,5 @@ mod a
 
 import b
 
-fn f() -> i64 { 1 }
+fn f() -> i64 { return 1 }
 

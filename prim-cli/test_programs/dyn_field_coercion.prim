@@ -7,14 +7,14 @@ trait Greeter {
 }
 
 impl Greeter for Counter {
-    fn greet(self) -> i32 { self.n }
+    fn greet(self) -> i32 { return self.n }
 }
 
 // A struct that holds a trait-typed field.
 struct Holder { g: Greeter }
 
 fn unpack(h: Holder) -> i32 {
-    h.g.greet()
+    return h.g.greet()
 }
 
 fn main() {

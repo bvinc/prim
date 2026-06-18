@@ -8,15 +8,15 @@ trait Label {
 }
 
 impl Label for i32 {
-    fn label(self) -> i64 { 100i64 }
+    fn label(self) -> i64 { return 100i64 }
 }
 
 impl Label for bool {
-    fn label(self) -> i64 { 1i64 }
+    fn label(self) -> i64 { return 1i64 }
 }
 
 fn labeled[T: Label](x: T) -> i64 {
-    x.label()
+    return x.label()
 }
 
 fn main() {

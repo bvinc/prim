@@ -1,7 +1,7 @@
 // Negative test: an arg position can't pin T to two different types.
 
 fn pair[T](a: T, b: T) -> T {
-    a
+    return a
 }
 
 fn main() {

@@ -13,10 +13,10 @@ impl Spawn for Box {
     fn inner(self) -> Box {
         // Return a fresh Box with the squared value — exercises a method
         // that returns a struct so the result can be chained.
-        Box { v = self.v * self.v }
+        return Box { v = self.v * self.v }
     }
     fn value(self) -> i32 {
-        self.v
+        return self.v
     }
 }
 

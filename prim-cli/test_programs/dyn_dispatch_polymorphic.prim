@@ -9,18 +9,18 @@ trait Yieldable {
 
 impl Yieldable for Counter {
     fn yield_value(self) -> i32 {
-        self.n
+        return self.n
     }
 }
 
 impl Yieldable for Doubler {
     fn yield_value(self) -> i32 {
-        self.n + self.n
+        return self.n + self.n
     }
 }
 
 fn extract(y: Yieldable) -> i32 {
-    y.yield_value()
+    return y.yield_value()
 }
 
 fn main() {

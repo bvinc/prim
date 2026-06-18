@@ -8,7 +8,7 @@ fn classify(x: i32) -> i32 {
     if x == 0i32 {
         return 0i32
     }
-    1i32
+    return 1i32
 }
 
 // Early return from inside a loop — find first index where i*i > limit.
@@ -20,7 +20,7 @@ fn first_square_above(limit: i32) -> i32 {
         }
         i = i + 1i32
     }
-    -1i32
+    return -1i32
 }
 
 // Early return from a void function — should just exit.

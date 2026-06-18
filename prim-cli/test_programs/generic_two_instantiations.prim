@@ -4,7 +4,7 @@ import std.io.println
 // produce two specializations (identity[i32], identity[i64]) — both
 // callable in the same program.
 fn identity[T](x: T) -> T {
-    x
+    return x
 }
 
 fn main() {

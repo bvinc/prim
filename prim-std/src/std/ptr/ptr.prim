@@ -131,9 +131,9 @@ fn addr[T](p: *mut T) -> usize;
 fn at[T](base: *mut u8, off: usize) -> *mut T;
 
 fn add[T](p: *mut T, n: usize) -> *mut T {
-    byte_add[T](p, n * size_of[T]())
+    return byte_add[T](p, n * size_of[T]())
 }
 
 fn sub[T](p: *mut T, n: usize) -> *mut T {
-    byte_sub[T](p, n * size_of[T]())
+    return byte_sub[T](p, n * size_of[T]())
 }

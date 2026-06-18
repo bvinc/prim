@@ -12,7 +12,7 @@ struct String {
 // Build a String from a byte vector. The buffer is handed over as-is, so this
 // is how dynamic text is assembled: push bytes into a Vec[u8], then wrap it.
 fn from_vec(bytes: Vec[u8]) -> String {
-    String {
+    return String {
         data = bytes.ptr,
         len = bytes.len,
         cap = bytes.cap,
