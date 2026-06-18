@@ -761,7 +761,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-            } else if func.runtime.is_none() {
+            } else if func.runtime.is_none() && !Self::block_always_returns(&func.body) {
                 return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
             }
         } else if let Some(expr) = &mut func.body.expr {
@@ -770,6 +770,42 @@ impl<'a> Checker<'a> {
 
         self.finalize_block(&mut func.body)?;
         Ok(())
+    }
+
+    /// Whether every path through `block` ends in a `return` (or otherwise
+    /// diverges), so a declared return value is guaranteed. A trailing value
+    /// expression also satisfies the obligation. Used so functions can be
+    /// written in statement form with explicit `return`.
+    fn block_always_returns(block: &Block) -> bool {
+        if block.expr.is_some() {
+            return true;
+        }
+        // A statement that always returns makes the rest of the block dead,
+        // so the block diverges if any statement does.
+        block.stmts.iter().any(Self::stmt_always_returns)
+    }
+
+    fn stmt_always_returns(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Return { .. } => true,
+            Stmt::Expr(e) => Self::expr_always_returns(e),
+            _ => false,
+        }
+    }
+
+    fn expr_always_returns(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::If {
+                then_branch,
+                else_branch: Some(else_branch),
+                ..
+            } => Self::block_always_returns(then_branch) && Self::block_always_returns(else_branch),
+            ExprKind::Block(block) => Self::block_always_returns(block),
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|a| Self::expr_always_returns(&a.body))
+            }
+            _ => false,
+        }
     }
 
     fn check_stmt(
