@@ -74,6 +74,9 @@ pub fn compile_and_run_with_root(
     fs::write(temp_wasm.path(), &wasm_bytes)?;
 
     let run_result = Command::new("wasmtime")
+        // Forward the parent's stdin so programs can read it (output() would
+        // otherwise close it, making every read hit EOF).
+        .stdin(std::process::Stdio::inherit())
         .arg("run")
         // The scheduler in `_start` uses cont.new/resume from the
         // stack-switching proposal, typed `(ref $main_cont)` from the

@@ -1,7 +1,10 @@
 mod rt
 
 import std.sys.now_nanos
-import std.sys.sleep_nanos
+import std.sys.poll
+import std.mem.alloc
+import std.mem.free
+import std.ptr.at
 import std.vec.Vec
 import std.vec.new
 import std.vec.len
@@ -54,81 +57,134 @@ fn boot() {
 }
 
 // The scheduler loop, entered from `_start` after `main` is seeded as task 0.
-// Repeatedly scans the task table, resuming each live task, until a full pass
-// makes no progress (every task has finished). `task_count()` is re-read each
-// step, so a task created by `spawn` is picked up within the same pass. The
-// runtime provides only the `resume` and `task_*` primitives; the scheduling
-// policy lives here.
-// One-slot channel from a parking task to the scheduler: the wake time (in
-// monotonic nanoseconds) the task wants. The scheduler clears it before each
-// resume and reads it back if the task yielded, so a plain `yield()` (which
-// doesn't touch it) reads as 0 — "runnable immediately".
-let mut PENDING_WAKE: u64 = 0u64;
+// Park state: a one-slot channel from a parking task to the scheduler. The
+// scheduler clears KIND before each resume; a task that wants to wait sets it
+// (via the park_* helpers) just before yielding, and the scheduler reads it
+// back. A plain yield() leaves KIND = 0, "runnable now".
+//   0 = runnable   1 = timer (DEADLINE)   2 = fd readable   3 = fd writable
+let mut PENDING_KIND: i32 = 0i32;
+let mut PENDING_DEADLINE: u64 = 0u64;
+let mut PENDING_FD: i32 = 0i32;
 
-// Suspend the current task until at least `wake` (monotonic nanoseconds). The
-// task is not resumed before then. This is the primitive `std.time.sleep`
-// builds on; the waker logic lives in `schedule`.
-fn park_until(wake: u64) {
-    PENDING_WAKE = wake
+// Suspend until at least `deadline` (monotonic nanoseconds). Backs time.sleep.
+fn park_until(deadline: u64) {
+    PENDING_KIND = 1i32
+    PENDING_DEADLINE = deadline
     yield()
 }
 
+// Suspend until `fd` is readable. Backs reads in std.io.
+fn park_on_read(fd: i32) {
+    PENDING_KIND = 2i32
+    PENDING_FD = fd
+    yield()
+}
+
+// Suspend until `fd` is writable. Backs writes in std.io.
+fn park_on_write(fd: i32) {
+    PENDING_KIND = 3i32
+    PENDING_FD = fd
+    yield()
+}
+
+// Build one WASI poll_oneoff subscription per parked task, block until at least
+// one fires, then mark those tasks runnable. Each subscription carries the task
+// handle as `userdata`, so a fired event names the task to wake. Subscription
+// layout (48 bytes): userdata@0, eventtype@8, then the variant — clock is
+// id@16/timeout@24/precision@32/flags@40; fd read/write is fd@16. Called only
+// when no task is currently runnable.
+fn poll_parked(kind: Vec[i32], deadline: Vec[u64], fd: Vec[i32]) {
+    let n = task_count()
+    let mut nsubs = 0usize
+    let mut i = 0usize
+    while i < n {
+        if task_live(i) {
+            if get[i32](kind, i) != 0i32 {
+                nsubs = nsubs + 1usize
+            }
+        }
+        i = i + 1usize
+    }
+    if nsubs == 0usize {
+        return
+    }
+
+    let subs = alloc(nsubs * 48usize)
+    let events = alloc(nsubs * 32usize)
+    let mut s = 0usize
+    i = 0usize
+    while i < n {
+        if task_live(i) {
+            let k = get[i32](kind, i)
+            if k != 0i32 {
+                let off = s * 48usize
+                *at[u64](subs, off) = u64.from_usize(i)
+                if k == 1i32 {
+                    *at[u8](subs, off + 8usize) = 0u8
+                    *at[u32](subs, off + 16usize) = 1u32
+                    *at[u64](subs, off + 24usize) = get[u64](deadline, i)
+                    *at[u64](subs, off + 32usize) = 0u64
+                    *at[u16](subs, off + 40usize) = 1u16
+                } else {
+                    *at[u8](subs, off + 8usize) = u8.from_i32_wrapping(k - 1i32)
+                    *at[u32](subs, off + 16usize) = u32.from_i32_wrapping(get[i32](fd, i))
+                }
+                s = s + 1usize
+            }
+        }
+        i = i + 1usize
+    }
+
+    let nready = poll(subs, events, nsubs)
+    let mut e = 0usize
+    while e < nready {
+        let h = usize.from_u64_wrapping(*at[u64](events, e * 32usize))
+        set[i32](kind, h, 0i32)
+        e = e + 1usize
+    }
+    free(subs)
+    free(events)
+}
+
 // The scheduler loop, entered from `_start` after `main` is seeded as task 0.
-// Round-robins the task table, resuming any task whose wake time has passed.
-// A task that parks (via `park_until`) records a future wake time and is
-// skipped until the monotonic clock reaches it; if every live task is parked,
-// the scheduler waits for the soonest wake. Exits once no task remains.
+// Resumes every runnable task in a pass; a task that parks records why and is
+// skipped until its waker fires. When no task is runnable, `poll_parked` blocks
+// on all wakers at once (timers + fd readiness/writability). `task_count()` is
+// re-read each step so a task spawned mid-pass is picked up immediately. Exits
+// once no task remains.
 fn schedule() {
-    // wakes[i] is task i's earliest resume time; 0 means runnable now.
-    let mut wakes = new[u64]()
+    let mut kind = new[i32]()
+    let mut deadline = new[u64]()
+    let mut fd = new[i32]()
     loop {
-        let now = now_nanos()
         let mut any_live = false
         let mut ran = false
-        let mut have_min = false
-        let mut min_wake = 0u64
-
-        // task_count() is re-read each step so a task spawned mid-pass is
-        // picked up immediately; wakes grows to match.
         let mut i = 0usize
         while i < task_count() {
-            while len[u64](wakes) <= i {
-                push[u64](wakes, 0u64)
+            while len[i32](kind) <= i {
+                push[i32](kind, 0i32)
+                push[u64](deadline, 0u64)
+                push[i32](fd, 0i32)
             }
             if task_live(i) {
                 any_live = true
-                let w = get[u64](wakes, i)
-                if now >= w {
-                    PENDING_WAKE = 0u64
+                if get[i32](kind, i) == 0i32 {
+                    PENDING_KIND = 0i32
                     if resume(i) {
-                        set[u64](wakes, i, PENDING_WAKE)
+                        set[i32](kind, i, PENDING_KIND)
+                        set[u64](deadline, i, PENDING_DEADLINE)
+                        set[i32](fd, i, PENDING_FD)
                     }
                     ran = true
-                } else {
-                    if !have_min {
-                        min_wake = w
-                        have_min = true
-                    }
-                    if w < min_wake {
-                        min_wake = w
-                    }
                 }
             }
             i = i + 1usize
         }
-
         if !any_live {
             break
         }
-        // Every live task is parked in the future: block until the soonest
-        // wake instead of spinning.
         if !ran {
-            if have_min {
-                let now2 = now_nanos()
-                if min_wake > now2 {
-                    sleep_nanos(min_wake - now2)
-                }
-            }
+            poll_parked(kind, deadline, fd)
         }
     }
 }

@@ -19,11 +19,19 @@ fn trap();
 @runtime("prim_rt_now")
 fn now_nanos() -> u64;
 
-// Block the process for `nanos` nanoseconds (WASI poll_oneoff on a relative
-// monotonic-clock subscription). The scheduler uses this to idle until the
-// soonest waker instead of spinning.
-@runtime("prim_rt_block")
-fn sleep_nanos(nanos: u64);
+// Read up to `cap` bytes from `fd` into `ptr` (WASI fd_read). Returns the
+// number of bytes read; 0 means end of input. Blocks the process if no data
+// is ready — callers that share the scheduler should park on readability
+// first (see std.io).
+@runtime("prim_rt_read")
+fn read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize;
+
+// Wait (WASI poll_oneoff) on `nsubs` subscriptions laid out at `subs`, writing
+// fired events to `events`; returns how many fired. The scheduler builds the
+// subscription/event structs — one per parked task — so a single call blocks
+// on every waker at once (timers and fd readiness/writability).
+@runtime("prim_rt_poll")
+fn poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize;
 
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.

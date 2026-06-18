@@ -150,10 +150,15 @@ pub enum RuntimeAbi {
     /// `now_nanos() -> u64` — current monotonic time in nanoseconds, via WASI
     /// `clock_time_get`. Backs `std.time` and the scheduler's wakers.
     ClockNow,
-    /// `sleep_nanos(nanos: u64)` — block the process for `nanos` via WASI
-    /// `poll_oneoff` on a relative monotonic clock subscription. Used by the
-    /// scheduler to wait for the soonest waker when every task is parked.
-    Block,
+    /// `read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize` — read up to
+    /// `cap` bytes from `fd` into `ptr` via WASI `fd_read`; returns the count
+    /// read (0 at EOF).
+    Read,
+    /// `poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize` — block in
+    /// WASI `poll_oneoff` on `nsubs` subscriptions until at least one fires;
+    /// returns the number of events written. The scheduler builds the
+    /// subscription/event structs and waits on every parked task's waker.
+    Poll,
     Yield,
     /// `resume(handle) -> bool` — run the task in slot `handle` until it yields
     /// or finishes; true if it yielded. Calls the runtime resume helper.
@@ -257,7 +262,8 @@ impl RuntimeAbi {
         match symbol {
             "prim_rt_write" => Some(Self::Write),
             "prim_rt_now" => Some(Self::ClockNow),
-            "prim_rt_block" => Some(Self::Block),
+            "prim_rt_read" => Some(Self::Read),
+            "prim_rt_poll" => Some(Self::Poll),
             "prim_rt_resume" => Some(Self::Resume),
             "prim_rt_task_count" => Some(Self::TaskCount),
             "prim_rt_task_live" => Some(Self::TaskLive),

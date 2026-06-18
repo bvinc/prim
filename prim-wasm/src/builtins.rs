@@ -26,8 +26,10 @@ pub(crate) struct Builtins {
     pub write_bytes: u32,
     /// Index of the imported WASI `clock_time_get`, backing `now_nanos`.
     pub clock: u32,
-    /// Index of the imported WASI `poll_oneoff`, backing `sleep_nanos`.
+    /// Index of the imported WASI `poll_oneoff`, backing the scheduler's wait.
     pub poll_oneoff: u32,
+    /// Index of the imported WASI `fd_read`, backing `read_raw`.
+    pub fd_read: u32,
     /// Tag index for cooperative yield. Used by `std.rt.yield` which
     /// lowers to `suspend $yield_tag`.
     pub yield_tag: u32,

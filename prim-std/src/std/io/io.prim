@@ -1,6 +1,9 @@
 mod io
 
 import std.sys.write_raw
+import std.sys.read_raw
+import std.rt.park_on_read
+import std.rt.park_on_write
 import std.vec.Vec
 import std.fmt.Display
 import std.fmt.Formatter
@@ -24,7 +27,27 @@ trait Writer {
 
 impl Writer for File {
     fn write(self, bytes: Vec[u8]) -> usize {
+        // Park until the fd is writable so a slow consumer blocks only this
+        // task, not the whole scheduler.
+        park_on_write(self.fd)
         return write_raw(self.fd, bytes.ptr, bytes.len)
+    }
+}
+
+// A source of bytes.
+trait Reader {
+    fn read(self, buf: Vec[u8]) -> usize;
+}
+
+impl Reader for File {
+    // Read up to `buf`'s capacity, parking until the fd is readable so a task
+    // waiting on input yields to others instead of blocking everyone. Sets the
+    // buffer's length to the number of bytes read (0 at end of input).
+    fn read(self, buf: Vec[u8]) -> usize {
+        park_on_read(self.fd)
+        let n = read_raw(self.fd, buf.ptr, buf.cap)
+        buf.len = n
+        return n
     }
 }
 
