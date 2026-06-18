@@ -2,9 +2,9 @@ import std.io.println
 
 fn main() {
     // range bounds from variables; loop var used in the body
-    let lo = 3
-    let hi = 7
-    let mut product = 1
+    let lo = 3i32
+    let hi = 7i32
+    let mut product = 1i32
     for i in lo..hi {
         product = product * i
     }

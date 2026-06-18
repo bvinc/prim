@@ -1,0 +1,9 @@
+import std.io.println
+
+// Under explicit literal typing, a literal with no type from context is an
+// error: `x` has nothing to pin `5` to. The fix is a suffix (`5i32`) or an
+// annotation (`let x: i32 = 5`).
+fn main() {
+    let x = 5
+    println(x)
+}

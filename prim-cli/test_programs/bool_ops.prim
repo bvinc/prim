@@ -9,11 +9,11 @@ fn noisy(tag: i32, val: bool) -> bool {
 
 fn main() {
     // && stops at the first false: 99 is never printed.
-    if noisy(1, false) && noisy(99, true) { println(10) } else { println(20) }
+    if noisy(1, false) && noisy(99, true) { println(10i32) } else { println(20i32) }
     // || stops at the first true: 98 is never printed.
-    if noisy(2, true) || noisy(98, false) { println(30) } else { println(40) }
+    if noisy(2, true) || noisy(98, false) { println(30i32) } else { println(40i32) }
     // logical not and grouping
     let t = true
     let f = false
-    if !f && !(t && f) { println(50) } else { println(60) }
+    if !f && !(t && f) { println(50i32) } else { println(60i32) }
 }

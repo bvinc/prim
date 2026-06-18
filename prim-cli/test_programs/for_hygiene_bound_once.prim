@@ -12,10 +12,10 @@ import std.io.println
 // The `guard` only exists so a buggy build terminates instead of looping; a
 // correct build never trips it.
 fn main() {
-    let mut limit = 5
-    let mut sum = 0
-    let mut guard = 0
-    for i in 0..limit {
+    let mut limit = 5i32
+    let mut sum = 0i32
+    let mut guard = 0i32
+    for i in 0i32..limit {
         sum = sum + 1
         limit = limit - 1
         guard = guard + 1

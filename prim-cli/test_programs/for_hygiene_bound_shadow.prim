@@ -8,9 +8,9 @@ import std.io.println
 // variable's scope, so `0..n` resolves to the loop variable and the loop
 // becomes `while n < n` -> runs zero times, printing 0.
 fn main() {
-    let n = 3
-    let mut count = 0
-    for n in 0..n {
+    let n = 3i32
+    let mut count = 0i32
+    for n in 0i32..n {
         count = count + 1
     }
     println(count)   // 3

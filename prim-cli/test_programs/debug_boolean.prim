@@ -1,7 +1,7 @@
 import std.io.println
 
 fn main() {
-    println(1)
+    println(1i32)
     println(true)
-    println(2)
+    println(2i32)
 }

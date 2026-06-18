@@ -2,11 +2,11 @@ import std.io.println
 
 fn main() {
     loop {
-        println(1)
-        println(2)
+        println(1i32)
+        println(2i32)
         break
-        println(999)
+        println(999i32)
     }
 
-    println(3)
+    println(3i32)
 }

@@ -3,8 +3,8 @@ import std.io.println
 // Hygiene: the loop variable is scoped to the loop and must not leak into or
 // overwrite an enclosing binding of the same name.
 fn main() {
-    let mut i = 100
-    for i in 0..3 {
+    let mut i = 100i32
+    for i in 0i32..3i32 {
     }
     println(i)   // 100 -- the outer `i` is untouched
 }

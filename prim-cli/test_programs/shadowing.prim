@@ -7,26 +7,26 @@
 import std.io.println
 
 fn test_basic_shadow() -> i32 {
-    let x = 1
-    let x = 2
+    let x = 1i32
+    let x = 2i32
     x
 }
 
 fn test_block_shadow() -> i32 {
-    let x = 10
+    let x = 10i32
     {
-        let x = 20
+        let x = 20i32
         // x is 20 here, but doesn't affect outer x
     }
     x  // should be 10
 }
 
 fn test_nested_blocks() -> i32 {
-    let x = 100
+    let x = 100i32
     {
-        let x = 200
+        let x = 200i32
         {
-            let x = 300
+            let x = 300i32
             // x is 300 here
         }
         // x is 200 here
@@ -35,39 +35,39 @@ fn test_nested_blocks() -> i32 {
 }
 
 fn test_shadow_in_if() -> i32 {
-    let x = 1
+    let x = 1i32
     if true {
-        let x = 2
+        let x = 2i32
         // x is 2 here
     }
     x  // should be 1
 }
 
 fn test_shadow_in_if_else() -> i32 {
-    let x = 1
+    let x = 1i32
     if false {
-        let x = 2
+        let x = 2i32
     } else {
-        let x = 3
+        let x = 3i32
     }
     x  // should be 1
 }
 
 fn test_mutability_change() -> i32 {
-    let x = 5
+    let x = 5i32
     let mut x = x + 1  // shadow with mutable version
     x = x + 1
     x  // should be 7
 }
 
 fn test_shadow_uses_outer() -> i32 {
-    let x = 10
+    let x = 10i32
     let x = x + 5  // new x based on old x
     x  // should be 15
 }
 
 fn test_block_shadow_uses_outer() -> i32 {
-    let x = 100
+    let x = 100i32
     {
         let x = x + 50  // inner x based on outer x
         // x is 150 here

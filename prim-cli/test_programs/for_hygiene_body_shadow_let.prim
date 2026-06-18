@@ -9,9 +9,9 @@ import std.io.println
 // variable 'i'", pointing at the `for` line for an assignment the user never
 // wrote. A correct build compiles and runs 3 times.
 fn main() {
-    let mut sum = 0
-    for i in 0..3 {
-        let i = 99
+    let mut sum = 0i32
+    for i in 0i32..3i32 {
+        let i = 99i32
         sum = sum + 1
     }
     println(sum)   // 3

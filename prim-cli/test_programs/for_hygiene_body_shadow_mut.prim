@@ -10,10 +10,10 @@ import std.io.println
 // a buggy build terminates (printing 11) instead of hanging; a correct build
 // runs exactly 3 times and never trips it.
 fn main() {
-    let mut seen = 0
-    let mut guard = 0
-    for i in 0..3 {
-        let mut i = 99
+    let mut seen = 0i32
+    let mut guard = 0i32
+    for i in 0i32..3i32 {
+        let mut i = 99i32
         seen = seen + 1
         guard = guard + 1
         if guard > 10 { break }

@@ -8,5 +8,5 @@ fn main() {
     push(v, 5)
     println(get(v, 0usize))   // 5
     println(get(v, 5usize))   // out of bounds -> panic, halts
-    println(999)              // not reached
+    println(999i32)              // not reached
 }

@@ -9,9 +9,9 @@ fn fib(n: i32) -> i32 {
     if n <= 1 {
         n
     } else {
-        let mut a = 0
-        let mut b = 1
-        let mut i = 2
+        let mut a = 0i32
+        let mut b = 1i32
+        let mut i = 2i32
         while i <= n {
             let next = a + b
             a = b
@@ -33,7 +33,7 @@ fn fib_recursive(n: i32) -> i32 {
 
 fn main() -> i32 {
     // Print the first 20 Fibonacci numbers
-    let mut i = 0
+    let mut i = 0i32
     while i < 20 {
         println(fib(i))
         i = i + 1

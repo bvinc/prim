@@ -55,11 +55,6 @@ later feature).
   but `*const` read/write helpers are still missing for any genuinely-const
   pointer.
 
-- **Int-literal defaulting conflicts with pinned generics.** `let mut i = 0`
-  leaves the literal as an undetermined integer that can conflict with a pinned
-  generic type parameter — e.g. `push(v, i*i)` requires `0i32` to resolve. The
-  inference doesn't unify a defaulted int against a pinned type arg.
-
 - **No impls on generic instantiations.** `impl Opt for Option[i32]` is
   unsupported; impls only target the generic type, not a concrete instantiation.
 

@@ -1,7 +1,7 @@
 import std.io.println
 
 fn main() {
-    let n = 5
+    let n = 5i32
     @dbg(n <= 1)
     @dbg(n + 1)
     @dbg(true)

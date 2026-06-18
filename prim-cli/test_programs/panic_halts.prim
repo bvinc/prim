@@ -5,7 +5,7 @@ import std.sys.panic
 // (It currently exits 0 — traps don't yet propagate a nonzero exit code
 // through the scheduler — so this is checked as a halting program.)
 fn main() {
-    println(1)
+    println(1i32)
     panic("halting here")
-    println(2)
+    println(2i32)
 }

@@ -2,8 +2,8 @@
 import std.io.println
 
 fn main() {
-    let mut x = 1
-    let cond = 5 > 3
+    let mut x = 1i32
+    let cond = 5i32 > 3
     if cond {
         x = 10
     } else {

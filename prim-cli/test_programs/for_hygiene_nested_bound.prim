@@ -4,9 +4,9 @@ import std.io.println
 // references the *outer* loop variable must work -- the outer variable is in scope
 // for the inner bound, and each inner loop counts up to the current outer value.
 fn main() {
-    let mut count = 0
-    for a in 1..4 {
-        for b in 0..a {
+    let mut count = 0i32
+    for a in 1i32..4i32 {
+        for b in 0i32..a {
             count = count + 1
         }
     }

@@ -2,9 +2,9 @@ import std.io.println
 import std.rt.yield
 
 fn main() {
-    println(1)
+    println(1i32)
     yield()
-    println(2)
+    println(2i32)
     yield()
-    println(3)
+    println(3i32)
 }

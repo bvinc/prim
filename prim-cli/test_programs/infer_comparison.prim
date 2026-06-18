@@ -3,24 +3,24 @@ import std.io.println
 
 fn main() {
     // Comparison with inferred integer types
-    let a = 10 > 5
+    let a = 10i32 > 5
     println(a)
 
-    let b = 3 <= 3
+    let b = 3i32 <= 3
     println(b)
 
     // Equality with inferred types
-    let c = 42 == 42
+    let c = 42i32 == 42
     println(c)
 
-    let d = 1 != 2
+    let d = 1i32 != 2
     println(d)
 
     // Comparison in if condition with inferred types
-    let x = 100
+    let x = 100i32
     if x > 50 {
-        println(1)
+        println(1i32)
     } else {
-        println(0)
+        println(0i32)
     }
 }

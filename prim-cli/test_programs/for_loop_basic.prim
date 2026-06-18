@@ -2,23 +2,23 @@ import std.io.println
 
 fn main() {
     // sum over a half-open range
-    let mut sum = 0
-    for i in 0..5 {
+    let mut sum = 0i32
+    for i in 0i32..5i32 {
         sum = sum + i
     }
     println(sum)        // 0+1+2+3+4 = 10
 
     // nested loops with a non-zero, variable upper bound
-    let mut count = 0
-    for a in 2..5 {
-        for b in 0..a {
+    let mut count = 0i32
+    for a in 2i32..5i32 {
+        for b in 0i32..a {
             count = count + 1
         }
     }
     println(count)      // 2 + 3 + 4 = 9
 
     // empty range runs zero times
-    for x in 5..5 {
+    for x in 5i32..5i32 {
         count = count + 100
     }
     println(count)      // still 9

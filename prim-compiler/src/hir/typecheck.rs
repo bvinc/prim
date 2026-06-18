@@ -43,6 +43,11 @@ pub enum TypeCheckKind {
     UndeterminedParamType,
     UndeterminedFieldType,
     AssignToImmutable(SymbolId),
+    /// A numeric literal whose type couldn't be determined from context.
+    /// `float` distinguishes the suggested suffix (`f64` vs `i32`).
+    AmbiguousLiteral {
+        float: bool,
+    },
     Legacy(String),
 }
 
@@ -93,6 +98,18 @@ impl std::fmt::Display for TypeCheckError {
             }
             TypeCheckKind::AssignToImmutable(sym) => {
                 write!(f, "assignment to immutable global {:?}", sym)
+            }
+            TypeCheckKind::AmbiguousLiteral { float } => {
+                let (kind, suffix) = if *float {
+                    ("float", "f64")
+                } else {
+                    ("integer", "i32")
+                };
+                write!(
+                    f,
+                    "ambiguous {kind} literal: its type can't be determined from context; \
+                     add a type suffix (e.g. `{suffix}`) or a type annotation"
+                )
             }
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
@@ -431,17 +448,15 @@ impl<'a> Checker<'a> {
                     )),
                 )
             })?;
-            // A type parameter inferred solely from an undetermined numeric
-            // literal takes that literal's default type (i32 / f64), matching
-            // the finalize pass — so e.g. `println(42)` resolves `T` to `i32`
-            // and satisfies a `Display` bound.
-            let pinned = match pinned {
-                Type::IntVar => Type::I32,
-                Type::FloatVar => Type::F64,
-                other => other,
-            };
-            if let Some(bound) = param.bound {
-                self.check_type_arg_bound(&pinned, bound, mode, span)?;
+            // A type parameter inferred solely from an untyped numeric literal
+            // (e.g. `println(42)`) has no determined type. Skip the bound check
+            // here — the bound would misleadingly report the placeholder type
+            // as lacking the impl. `finalize` reports the underlying literal
+            // with a precise span instead.
+            if !matches!(pinned, Type::IntVar | Type::FloatVar) {
+                if let Some(bound) = param.bound {
+                    self.check_type_arg_bound(&pinned, bound, mode, span)?;
+                }
             }
             resolved.push(pinned);
         }
@@ -745,7 +760,7 @@ impl<'a> Checker<'a> {
             self.check_expr(expr, &mut locals)?;
         }
 
-        self.finalize_block(&mut func.body);
+        self.finalize_block(&mut func.body)?;
         Ok(())
     }
 
@@ -2047,76 +2062,81 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn finalize_block(&self, block: &mut Block) {
+    fn finalize_block(&self, block: &mut Block) -> Result<(), TypeCheckError> {
         for stmt in &mut block.stmts {
-            self.finalize_stmt(stmt);
+            self.finalize_stmt(stmt)?;
         }
         if let Some(expr) = &mut block.expr {
-            self.finalize_expr(expr);
+            self.finalize_expr(expr)?;
         }
+        Ok(())
     }
 
-    fn finalize_stmt(&self, stmt: &mut Stmt) {
+    fn finalize_stmt(&self, stmt: &mut Stmt) -> Result<(), TypeCheckError> {
         match stmt {
             Stmt::Let { ty, value, .. } => {
-                self.finalize_expr(value);
+                self.finalize_expr(value)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&value.ty);
                 }
             }
             Stmt::Assign { value, .. } => {
-                self.finalize_expr(value);
+                self.finalize_expr(value)?;
             }
-            Stmt::Expr(e) => self.finalize_expr(e),
+            Stmt::Expr(e) => self.finalize_expr(e)?,
             Stmt::Loop { body, .. } => {
-                self.finalize_block(body);
+                self.finalize_block(body)?;
             }
             Stmt::While {
                 condition, body, ..
             } => {
-                self.finalize_expr(condition);
-                self.finalize_block(body);
+                self.finalize_expr(condition)?;
+                self.finalize_block(body)?;
             }
             Stmt::Break { .. } => {}
             Stmt::Return { value, .. } => {
                 if let Some(v) = value {
-                    self.finalize_expr(v);
+                    self.finalize_expr(v)?;
                 }
             }
             Stmt::DerefAssign { ptr, value, .. } => {
-                self.finalize_expr(ptr);
-                self.finalize_expr(value);
+                self.finalize_expr(ptr)?;
+                self.finalize_expr(value)?;
             }
             Stmt::FieldAssign { object, value, .. } => {
-                self.finalize_expr(object);
-                self.finalize_expr(value);
+                self.finalize_expr(object)?;
+                self.finalize_expr(value)?;
             }
         }
+        Ok(())
     }
 
-    fn finalize_expr(&self, expr: &mut Expr) {
-        let Expr { kind, ty, .. } = expr;
+    fn finalize_expr(&self, expr: &mut Expr) -> Result<(), TypeCheckError> {
+        let Expr { kind, ty, span } = expr;
         match kind {
+            // A literal still carrying a placeholder type never received one
+            // from context — under explicit-literal-typing that's an error,
+            // not a silent default.
             ExprKind::Int(_) => {
                 if matches!(ty, Type::IntVar) {
-                    *ty = Type::I32;
+                    return Err(self.error(*span, TypeCheckKind::AmbiguousLiteral { float: false }));
                 }
             }
             ExprKind::Float(_) => {
                 if matches!(ty, Type::FloatVar) {
-                    *ty = Type::F64;
+                    return Err(self.error(*span, TypeCheckKind::AmbiguousLiteral { float: true }));
                 }
             }
             ExprKind::Binary { left, right, .. } => {
-                self.finalize_expr(left);
-                self.finalize_expr(right);
+                self.finalize_expr(left)?;
+                self.finalize_expr(right)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&left.ty);
                 }
             }
             ExprKind::Call { args, .. } => {
                 for arg in args {
-                    self.finalize_expr(arg);
+                    self.finalize_expr(arg)?;
                 }
             }
             // After typecheck, MethodCall is rewritten to Call or DynCall so
@@ -2124,62 +2144,57 @@ impl<'a> Checker<'a> {
             // error before the rewrite. Recurse into the children to keep
             // finalize total.
             ExprKind::MethodCall { receiver, args, .. } => {
-                self.finalize_expr(receiver);
+                self.finalize_expr(receiver)?;
                 for arg in args {
-                    self.finalize_expr(arg);
+                    self.finalize_expr(arg)?;
                 }
             }
             ExprKind::DynCall { receiver, args, .. } => {
-                self.finalize_expr(receiver);
+                self.finalize_expr(receiver)?;
                 for arg in args {
-                    self.finalize_expr(arg);
+                    self.finalize_expr(arg)?;
                 }
             }
             ExprKind::TraitBoundCall { receiver, args, .. } => {
-                self.finalize_expr(receiver);
+                self.finalize_expr(receiver)?;
                 for arg in args {
-                    self.finalize_expr(arg);
+                    self.finalize_expr(arg)?;
                 }
             }
             ExprKind::Coerce { value, .. } => {
-                self.finalize_expr(value);
+                self.finalize_expr(value)?;
             }
             ExprKind::StructLit { fields, .. } => {
                 for (_, val) in fields {
-                    self.finalize_expr(val);
+                    self.finalize_expr(val)?;
                 }
             }
             ExprKind::VariantLit { fields, .. } => {
                 for (_, val) in fields {
-                    self.finalize_expr(val);
+                    self.finalize_expr(val)?;
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
-                self.finalize_expr(scrutinee);
+                self.finalize_expr(scrutinee)?;
                 for arm in arms {
-                    self.finalize_expr(&mut arm.body);
+                    self.finalize_expr(&mut arm.body)?;
                 }
             }
             ExprKind::Field { base, .. } => {
-                self.finalize_expr(base);
+                self.finalize_expr(base)?;
             }
             ExprKind::Deref(base) => {
-                self.finalize_expr(base);
+                self.finalize_expr(base)?;
             }
             ExprKind::BitNot(operand) => {
-                self.finalize_expr(operand);
+                self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::Undetermined) {
                     *ty = self.finalize_type(&operand.ty);
                 }
             }
             ExprKind::ArrayLit(elements) => {
                 for elem in elements.iter_mut() {
-                    self.finalize_expr(elem);
-                }
-                if let Type::Array(elem_ty) = ty {
-                    if matches!(elem_ty.as_ref(), Type::IntVar | Type::FloatVar) {
-                        *ty = Type::Array(Box::new(self.finalize_type(elem_ty)));
-                    }
+                    self.finalize_expr(elem)?;
                 }
             }
             ExprKind::If {
@@ -2188,10 +2203,10 @@ impl<'a> Checker<'a> {
                 else_branch,
                 ..
             } => {
-                self.finalize_expr(condition);
-                self.finalize_block(then_branch);
+                self.finalize_expr(condition)?;
+                self.finalize_block(then_branch)?;
                 if let Some(else_block) = else_branch {
-                    self.finalize_block(else_block);
+                    self.finalize_block(else_block)?;
                 }
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     if let Some(then_expr) = &then_branch.expr {
@@ -2200,7 +2215,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Block(block) => {
-                self.finalize_block(block);
+                self.finalize_block(block)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     if let Some(expr) = &block.expr {
                         *ty = self.finalize_type(&expr.ty);
@@ -2208,13 +2223,14 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Dbg { inner, .. } => {
-                self.finalize_expr(inner);
+                self.finalize_expr(inner)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
                     *ty = self.finalize_type(&inner.ty);
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn finalize_type(&self, ty: &Type) -> Type {

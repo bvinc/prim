@@ -3,18 +3,18 @@ import std.io.println
 
 fn main() {
     // Unsuffixed integer defaults to i32
-    let a = 42
+    let a = 42i32
     println(a)
 
     // Unsuffixed float defaults to f64
-    let b = 3.14
+    let b = 3.14f64
     println(b)
 
     // Binary ops with unsuffixed literals default to i32
-    let c = 10 + 20
+    let c = 10i32 + 20
     println(c)
 
     // Nested binary ops
-    let d = 1 + 2 * 3 - 4
+    let d = 1i32 + 2 * 3 - 4
     println(d)
 }

@@ -10,7 +10,7 @@ fn main() {
     println(-12345i16)
     println(54321u16)
     println(0i32)
-    println(-2147483648)
+    println(-2147483648i32)
     println(2147483647i32)
     println(4294967295u32)
     println(-9000000000000000000i64)

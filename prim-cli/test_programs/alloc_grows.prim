@@ -9,7 +9,7 @@ fn main() {
     *first = 11u8
 
     let mut p = alloc(1usize)
-    let mut i = 0
+    let mut i = 0i32
     while i < 128 {
         p = alloc(2048usize)                  // ~256 KB total
         *byte_add[u8](p, 2047usize) = 99u8

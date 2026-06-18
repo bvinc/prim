@@ -4,8 +4,8 @@ import std.io.println
 fn block_as_return() -> i32 {
     // Block as the return expression of a function
     {
-        let x = 10
-        let y = 20
+        let x = 10i32
+        let y = 20i32
         x + y
     }
 }
@@ -13,8 +13,8 @@ fn block_as_return() -> i32 {
 fn assign_block_to_variable() -> i32 {
     // Assign a block expression to a variable
     let result = {
-        let a = 5
-        let b = 7
+        let a = 5i32
+        let b = 7i32
         a * b
     }
     result
@@ -25,7 +25,7 @@ fn nested_blocks() -> i32 {
     let outer = {
         let inner = {
             let deep = {
-                42
+                42i32
             }
             deep + 8
         }
@@ -36,30 +36,30 @@ fn nested_blocks() -> i32 {
 
 fn block_in_arithmetic() -> i32 {
     // Block expression used in arithmetic
-    let x = 10 + {
-        let temp = 5
+    let x = 10i32 + {
+        let temp = 5i32
         temp * 2
     }
     x
 }
 
 fn block_in_middle() -> i32 {
-    let before = 100
+    let before = 100i32
 
     // Random block in the middle for scoping
     {
-        let scoped = 999
+        let scoped = 999i32
         println(scoped)
     }
 
-    let after = 200
+    let after = 200i32
     before + after
 }
 
 fn block_in_function_arg() {
     // Block expression as function argument
     println({
-        let computed = 7 * 8
+        let computed = 7i32 * 8
         computed + 1
     })
 }
@@ -67,13 +67,13 @@ fn block_in_function_arg() {
 fn multiple_blocks_in_expression() -> i32 {
     // Multiple block expressions in one expression
     let sum = {
-        let a = 1
+        let a = 1i32
         a
     } + {
-        let b = 2
+        let b = 2i32
         b
     } + {
-        let c = 3
+        let c = 3i32
         c
     }
     sum
@@ -82,11 +82,11 @@ fn multiple_blocks_in_expression() -> i32 {
 fn block_with_if_inside() -> i32 {
     // Block containing an if expression
     let result = {
-        let condition = 1
+        let condition = 1i32
         if condition == 1 {
-            100
+            100i32
         } else {
-            200
+            200i32
         }
     }
     result
