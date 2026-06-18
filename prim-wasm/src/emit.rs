@@ -702,10 +702,13 @@ fn emit_dbg(f: &mut Function, inner: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
     emit_expr(f, inner, ctx)?;
     f.instruction(&Instruction::LocalSet(scratch_local));
 
-    // Print the prefix ("[file:line:col] expr_text = ") — no trailing newline.
+    // Print the prefix ("[file:line:col] expr_text = ") to stdout — no
+    // trailing newline; ignore the returned byte count.
+    f.instruction(&Instruction::I32Const(1));
     f.instruction(&Instruction::I32Const(site.ptr as i32));
     f.instruction(&Instruction::I32Const(site.len as i32));
-    f.instruction(&Instruction::Call(ctx.builtins.print_bytes));
+    f.instruction(&Instruction::Call(ctx.builtins.write_bytes));
+    f.instruction(&Instruction::Drop);
 
     // Print the value (with trailing newline, via __println_*).
     f.instruction(&Instruction::LocalGet(scratch_local));
@@ -963,7 +966,7 @@ fn emit_runtime_call(
 ) -> Result<(), WasmError> {
     match runtime {
         // write(fd, s: String) — ignore fd for now (always stdout); load
-        // s.data + s.len from the String struct, hand to __print_bytes.
+        // s.data + s.len from the String struct, hand to __write_bytes.
         hir::RuntimeAbi::Write => {
             emit_write(f, args, ctx)?;
         }
@@ -1214,62 +1217,18 @@ fn emit_runtime_call(
 }
 
 fn emit_write(f: &mut Function, args: &[hir::Expr], ctx: &EmitCtx) -> Result<(), WasmError> {
-    if args.len() < 2 {
+    if args.len() < 3 {
         f.instruction(&Instruction::Unreachable);
         return Ok(());
     }
 
-    // Reserve scratch BEFORE evaluating args, matching the pre-walk in
-    // `collect_scratch_types_expr` which adds this slot at the Call node
-    // before descending into its arguments.
-    let scratch_idx = ctx.scratch_counter.get();
-    ctx.scratch_counter.set(scratch_idx + 1);
-    let tmp_local = ctx.scratch_base + scratch_idx;
-
-    // Evaluate fd, drop it — write always goes to stdout for now.
-    emit_expr(f, &args[0], ctx)?;
-    f.instruction(&Instruction::Drop);
-
-    // Evaluate the String, leaving its struct ptr on stack.
-    emit_expr(f, &args[1], ctx)?;
-
-    let struct_id = match &args[1].ty {
-        hir::Type::Struct(id, _) => *id,
-        _ => {
-            f.instruction(&Instruction::Drop);
-            f.instruction(&Instruction::Unreachable);
-            return Ok(());
-        }
-    };
-    let string_layout = match ctx.string_layout {
-        Some(layout) if layout.struct_id == struct_id => layout,
-        Some(_) | None => {
-            f.instruction(&Instruction::Drop);
-            f.instruction(&Instruction::Unreachable);
-            return Ok(());
-        }
-    };
-
-    //   <struct ptr>                  ;; stack: [p]
-    //   local.tee tmp                 ;; stack: [p], tmp=p
-    //   i32.load offset=data_off      ;; stack: [data_ptr]
-    //   local.get tmp                 ;; stack: [data_ptr, p]
-    //   i32.load offset=len_off       ;; stack: [data_ptr, len]
-    //   call __print_bytes
-    f.instruction(&Instruction::LocalTee(tmp_local));
-    f.instruction(&Instruction::I32Load(MemArg {
-        offset: string_layout.data_offset as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    f.instruction(&Instruction::LocalGet(tmp_local));
-    f.instruction(&Instruction::I32Load(MemArg {
-        offset: string_layout.len_offset as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    f.instruction(&Instruction::Call(ctx.builtins.print_bytes));
-
+    // write_raw(fd, ptr, len) -> nwritten: evaluate the three args in order
+    // and call __write_bytes, which leaves the written-byte count on the stack
+    // (the primitive's return value). Byte-oriented — no String/Vec knowledge.
+    emit_expr(f, &args[0], ctx)?; // fd:  i32
+    emit_expr(f, &args[1], ctx)?; // ptr: *mut u8 (i32)
+    emit_expr(f, &args[2], ctx)?; // len: usize (i32)
+    f.instruction(&Instruction::Call(ctx.builtins.write_bytes));
     Ok(())
 }
 

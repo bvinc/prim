@@ -1,0 +1,14 @@
+import std.io.stdout
+import std.vec.Vec
+import std.vec.new
+import std.vec.push
+
+// The byte-stream Writer: build a Vec[u8] and write it to stdout via the
+// File handle. (Writer.write returns the byte count; discarded with `;`.)
+fn main() {
+    let v = new[u8]()
+    push[u8](v, 72u8)
+    push[u8](v, 105u8)
+    push[u8](v, 10u8)
+    stdout().write(v);
+}

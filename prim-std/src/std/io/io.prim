@@ -1,16 +1,63 @@
 mod io
 
-import std.sys.write
+import std.sys.write_raw
+import std.vec.Vec
 import std.fmt.Display
-import std.fmt.to_string
+import std.fmt.Formatter
+import std.fmt.new_formatter
 
-// Render any `Display` value to stdout, with no trailing newline.
-fn print[T: Display](x: T) {
-    write(1, to_string(x))
+// A file-descriptor handle. `stdout`/`stderr`/`stdin` are the standard
+// streams; the same type extends to real files later.
+struct File {
+    fd: i32,
 }
 
-// Render any `Display` value to stdout, followed by a newline.
+fn stdout() -> File { File { fd = 1 } }
+fn stderr() -> File { File { fd = 2 } }
+fn stdin() -> File { File { fd = 0 } }
+
+// A sink for bytes. I/O is byte-oriented; text is just bytes (see the
+// `Display` helpers below, which format into a byte buffer).
+trait Writer {
+    fn write(self, bytes: Vec[u8]) -> usize;
+}
+
+impl Writer for File {
+    fn write(self, bytes: Vec[u8]) -> usize {
+        write_raw(self.fd, bytes.ptr, bytes.len)
+    }
+}
+
+// Render a `Display` value into a byte buffer and write it to `w`, optionally
+// followed by a newline. The `Formatter` accumulates a `Vec[u8]`, so the bytes
+// go straight to the writer with no intermediate `String`.
+fn write_display[T: Display](w: File, x: T, newline: bool) {
+    let f = new_formatter()
+    x.fmt(f)
+    if newline {
+        f.write_byte(10)
+    }
+    // Statement form (trailing `;`): the written-byte count is discarded
+    // rather than becoming this unit function's value.
+    w.write(f.buf);
+}
+
+// Render a `Display` value to stdout.
+fn print[T: Display](x: T) {
+    write_display(stdout(), x, false)
+}
+
+// Render a `Display` value to stdout, followed by a newline.
 fn println[T: Display](x: T) {
-    print(x)
-    write(1, "\n")
+    write_display(stdout(), x, true)
+}
+
+// Render a `Display` value to stderr.
+fn eprint[T: Display](x: T) {
+    write_display(stderr(), x, false)
+}
+
+// Render a `Display` value to stderr, followed by a newline.
+fn eprintln[T: Display](x: T) {
+    write_display(stderr(), x, true)
 }

@@ -1,11 +1,14 @@
 mod sys
 
 // Low-level runtime primitives with no Prim dependencies. Higher-level modules
-// (vec's bounds checks, io's formatted output) build on these without creating
+// (vec's bounds checks, io's byte streams) build on these without creating
 // import cycles back through io.
 
+// Raw byte I/O over a file descriptor, mapping to WASI fd_write / fd_read.
+// Both work on a pointer + length: bytes are bytes, with no String or Vec
+// knowledge. Higher layers (std.io) wrap these in `Writer`/`Reader`.
 @runtime("prim_rt_write")
-fn write(fd: i64, s: String);
+fn write_raw(fd: i32, ptr: *mut u8, len: usize) -> usize;
 
 @runtime("prim_rt_trap")
 fn trap();
@@ -13,7 +16,8 @@ fn trap();
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.
 fn panic(msg: String) {
-    write(1, msg);
-    write(1, "\n");
+    write_raw(1, msg.data, msg.len)
+    let nl = "\n"
+    write_raw(1, nl.data, nl.len)
     trap()
 }

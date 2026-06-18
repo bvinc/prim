@@ -23,7 +23,7 @@ pub(crate) struct Builtins {
     /// upgrades it to the real Prim allocator (`std.mem.alloc`) whenever that
     /// module is linked, so all heap use shares a single allocator.
     pub alloc: u32,
-    pub print_bytes: u32,
+    pub write_bytes: u32,
     /// Tag index for cooperative yield. Used by `std.rt.yield` which
     /// lowers to `suspend $yield_tag`.
     pub yield_tag: u32,
@@ -65,13 +65,15 @@ fn emit_newline(f: &mut Function, fd_write_idx: u32) {
 
 // ---- Builtin function bodies ----
 
-/// `__print_bytes(ptr, len)` — write `len` bytes from `ptr` to stdout via
-/// WASI fd_write. No trailing newline. Used by `@dbg` for its prefix string
-/// and by `write(fd, s: String)` for printing string contents.
-pub(crate) fn emit_print_bytes(fd_write_idx: u32) -> Function {
+/// `__write_bytes(fd, ptr, len) -> nwritten` — write `len` bytes from `ptr`
+/// to `fd` via WASI fd_write, returning the byte count actually written. No
+/// trailing newline. Backs the byte-oriented `write_raw` primitive and `@dbg`'s
+/// prefix string.
+pub(crate) fn emit_write_bytes(fd_write_idx: u32) -> Function {
     let mut f = Function::new(vec![]);
-    let ptr: u32 = 0;
-    let len: u32 = 1;
+    let fd: u32 = 0;
+    let ptr: u32 = 1;
+    let len: u32 = 2;
 
     // iovec at [0..8) = { buf: ptr, buf_len: len }
     f.instruction(&Instruction::I32Const(0));
@@ -81,7 +83,17 @@ pub(crate) fn emit_print_bytes(fd_write_idx: u32) -> Function {
     f.instruction(&Instruction::LocalGet(len));
     f.instruction(&Instruction::I32Store(MEM32));
 
-    emit_fd_write_buf(&mut f, fd_write_idx);
+    // fd_write(fd, iovs=0, iovs_len=1, nwritten=8), discard errno.
+    f.instruction(&Instruction::LocalGet(fd));
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::I32Const(1));
+    f.instruction(&Instruction::I32Const(8));
+    f.instruction(&Instruction::Call(fd_write_idx));
+    f.instruction(&Instruction::Drop);
+
+    // Return the bytes-written count the host stored at offset 8.
+    f.instruction(&Instruction::I32Const(8));
+    f.instruction(&Instruction::I32Load(MEM32));
 
     f.instruction(&Instruction::End);
     f

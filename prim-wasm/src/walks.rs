@@ -225,12 +225,7 @@ fn collect_scratch_types_expr(
             collect_scratch_types_expr(left, runtime, out);
             collect_scratch_types_expr(right, runtime, out);
         }
-        hir::ExprKind::Call { func, args, .. } => {
-            // write(fd, s: String) needs one i32 scratch to duplicate the
-            // String struct ptr across two field loads.
-            if runtime.get(func) == Some(&hir::RuntimeAbi::Write) {
-                out.push(ValType::I32);
-            }
+        hir::ExprKind::Call { args, .. } => {
             for a in args {
                 collect_scratch_types_expr(a, runtime, out);
             }

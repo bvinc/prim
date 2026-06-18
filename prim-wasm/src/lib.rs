@@ -9,7 +9,7 @@
 //! - [`walks`] — pre-walks over HIR (locals, scratch types, dbg prefixes,
 //!   string literals).
 //! - [`builtins`] — hand-written wasm bodies for `__println_*`, `__alloc`,
-//!   `__print_bytes`, `__rt_resume`.
+//!   `__write_bytes`, `__rt_resume`.
 //! - [`emit`] — per-function emission of user code.
 
 mod builtins;
@@ -19,8 +19,8 @@ mod types;
 mod walks;
 
 use crate::builtins::{
-    Builtins, emit_print_bytes, emit_println_bool, emit_println_f64, emit_println_i64,
-    emit_println_u64, emit_rt_resume,
+    Builtins, emit_println_bool, emit_println_f64, emit_println_i64, emit_println_u64,
+    emit_rt_resume, emit_write_bytes,
 };
 use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
 use crate::layout::{
@@ -120,7 +120,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let println_i64_type = types.register(vec![ValType::I64], vec![]);
     let println_bool_type = types.register(vec![ValType::I32], vec![]);
     let println_f64_type = types.register(vec![ValType::F64], vec![]);
-    let print_bytes_type = types.register(vec![ValType::I32, ValType::I32], vec![]);
+    let write_bytes_type = types.register(
+        vec![ValType::I32, ValType::I32, ValType::I32],
+        vec![ValType::I32],
+    );
 
     // Function index layout:
     //   0: fd_write (import)
@@ -128,7 +131,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     //   2: __println_u64
     //   3: __println_bool
     //   4: __println_f64
-    //   5: __print_bytes
+    //   5: __write_bytes
     //   6+: user functions (the `@entry` function is exported as `_start`)
     //   last: __rt_resume
     let fd_write_idx: u32 = 0;
@@ -137,7 +140,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         println_u64: 2,
         println_bool: 3,
         println_f64: 4,
-        print_bytes: 5,
+        write_bytes: 5,
         // Object allocation routes through std.mem.alloc, resolved below. It is
         // always linked (the prelude force-loads std.io, which imports std.mem),
         // so there is no fallback allocator.
@@ -389,7 +392,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     functions.function(println_i64_type); // __println_u64
     functions.function(println_bool_type); // __println_bool
     functions.function(println_f64_type); // __println_f64
-    functions.function(print_bytes_type); // __print_bytes
+    functions.function(write_bytes_type); // __write_bytes
     for &type_idx in &user_func_types {
         functions.function(type_idx);
     }
@@ -508,7 +511,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     codes.function(&emit_println_u64(fd_write_idx));
     codes.function(&emit_println_bool(fd_write_idx));
     codes.function(&emit_println_f64(fd_write_idx));
-    codes.function(&emit_print_bytes(fd_write_idx));
+    codes.function(&emit_write_bytes(fd_write_idx));
     for func in &program.functions {
         if func.runtime.is_none() && func.type_params.is_empty() {
             let dbg_range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
