@@ -1,0 +1,15 @@
+import std.io.println
+
+fn label(n: i32) -> i32 {
+    return match n {
+        -1 => 100i32,
+        -2 => 200i32,
+        _ => 0i32,
+    }
+}
+
+fn main() {
+    println(label(-1i32))
+    println(label(-2i32))
+    println(label(5i32))
+}

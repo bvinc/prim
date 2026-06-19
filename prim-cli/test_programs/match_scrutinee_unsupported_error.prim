@@ -1,0 +1,14 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn f(p: Point) -> i32 {
+    return match p {
+        _ => 0i32,
+    }
+}
+
+fn main() {
+    f(Point { x = 1i32, y = 2i32 })
+}

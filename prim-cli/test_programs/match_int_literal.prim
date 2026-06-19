@@ -1,0 +1,15 @@
+import std.io.println
+
+fn classify(n: i32) -> i32 {
+    return match n {
+        0i32 => 100i32,
+        1i32 => 200i32,
+        other => other,
+    }
+}
+
+fn main() {
+    println(classify(0i32))
+    println(classify(1i32))
+    println(classify(42i32))
+}

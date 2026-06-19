@@ -9,6 +9,8 @@ pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
 pub mod mono;
 pub use mono::monomorphize;
 
+pub mod usefulness;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncId(pub u32);
 
@@ -646,6 +648,17 @@ pub enum Pattern {
         ty: Type,
         span: SpanId,
     },
+    /// An integer literal pattern. `ty` is the resolved scrutinee type.
+    Int {
+        value: i64,
+        ty: Type,
+        span: SpanId,
+    },
+    /// A boolean literal pattern.
+    Bool {
+        value: bool,
+        span: SpanId,
+    },
     Variant {
         enum_id: EnumId,
         variant_idx: u32,
@@ -671,6 +684,8 @@ impl Pattern {
             Pattern::Wildcard { span, .. }
             | Pattern::Binding { span, .. }
             | Pattern::Tuple { span, .. }
+            | Pattern::Int { span, .. }
+            | Pattern::Bool { span, .. }
             | Pattern::Variant { span, .. } => *span,
         }
     }

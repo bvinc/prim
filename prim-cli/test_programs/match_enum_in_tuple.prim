@@ -1,0 +1,22 @@
+import std.io.println
+
+enum Opt {
+    None,
+    Some { value: i32 },
+}
+
+// Mixes a bool column with a nested enum column; the variant test must
+// short-circuit before loading a None payload.
+fn pick(p: (bool, Opt)) -> i32 {
+    return match p {
+        (true, Opt.Some { value }) => value,
+        (true, Opt.None) => 1i32,
+        (false, _) => 2i32,
+    }
+}
+
+fn main() {
+    println(pick((true, Opt.Some { value = 9i32 })))
+    println(pick((true, Opt.None)))
+    println(pick((false, Opt.None)))
+}

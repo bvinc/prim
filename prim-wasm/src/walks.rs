@@ -64,7 +64,7 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
 /// Push a local for every binding a pattern introduces, recursively.
 fn collect_locals_pattern(pattern: &hir::Pattern, locals: &mut Vec<(hir::SymbolId, ValType)>) {
     match pattern {
-        hir::Pattern::Wildcard { .. } => {}
+        hir::Pattern::Wildcard { .. } | hir::Pattern::Int { .. } | hir::Pattern::Bool { .. } => {}
         hir::Pattern::Binding { symbol, ty, .. } => {
             locals.push((*symbol, hir_type_to_valtype(ty)));
         }
@@ -214,12 +214,15 @@ fn collect_scratch_types_stmt(
     }
 }
 
-/// Reserve scratch slots a pattern's binding needs: one i32 pointer per tuple
-/// level (to stash the tuple base while elements are extracted). Mirrors
-/// `emit::emit_bind`.
+/// Reserve scratch slots an irrefutable (`let`) pattern's binding needs: one
+/// i32 pointer per tuple level (to stash the tuple base while elements are
+/// extracted). Mirrors `emit::emit_bind`.
 fn collect_scratch_types_pattern(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
     match pattern {
-        hir::Pattern::Wildcard { .. } | hir::Pattern::Binding { .. } => {}
+        hir::Pattern::Wildcard { .. }
+        | hir::Pattern::Binding { .. }
+        | hir::Pattern::Int { .. }
+        | hir::Pattern::Bool { .. } => {}
         hir::Pattern::Tuple { elems, .. } => {
             out.push(ValType::I32);
             for elem in elems {
@@ -231,6 +234,43 @@ fn collect_scratch_types_pattern(pattern: &hir::Pattern, out: &mut Vec<ValType>)
                 collect_scratch_types_pattern(&fp.pattern, out);
             }
         }
+    }
+}
+
+/// Reserve the scratch temps a `match` arm's test-and-bind needs: one i32 per
+/// *non-root* aggregate (tuple/variant) node, to stash its pointer for repeated
+/// field access. Mirrors `emit::emit_test_bind` / `emit::aggregate_base` (the
+/// root value lives in the scrutinee local, so it needs no temp).
+fn collect_match_arm_temps(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
+    fn child(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
+        match pattern {
+            hir::Pattern::Tuple { elems, .. } => {
+                out.push(ValType::I32);
+                for elem in elems {
+                    child(elem, out);
+                }
+            }
+            hir::Pattern::Variant { fields, .. } => {
+                out.push(ValType::I32);
+                for fp in fields {
+                    child(&fp.pattern, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    match pattern {
+        hir::Pattern::Tuple { elems, .. } => {
+            for elem in elems {
+                child(elem, out);
+            }
+        }
+        hir::Pattern::Variant { fields, .. } => {
+            for fp in fields {
+                child(&fp.pattern, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -262,10 +302,11 @@ fn collect_scratch_types_expr(
             }
         }
         hir::ExprKind::Match { scrutinee, arms } => {
-            out.push(ValType::I32);
+            // The scrutinee local holds the matched value (scalar or pointer).
+            out.push(hir_type_to_valtype(&scrutinee.ty));
             collect_scratch_types_expr(scrutinee, runtime, out);
             for arm in arms {
-                collect_scratch_types_pattern(&arm.pattern, out);
+                collect_match_arm_temps(&arm.pattern, out);
                 collect_scratch_types_expr(&arm.body, runtime, out);
             }
         }

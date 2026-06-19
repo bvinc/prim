@@ -1,0 +1,12 @@
+import std.io.println
+
+// A single tuple-binding arm is exhaustive (tuples have one constructor).
+fn sum(p: (i32, i32)) -> i32 {
+    return match p {
+        (x, y) => x + y,
+    }
+}
+
+fn main() {
+    println(sum((3i32, 4i32)))
+}

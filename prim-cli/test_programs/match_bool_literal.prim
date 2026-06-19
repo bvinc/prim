@@ -1,0 +1,14 @@
+import std.io.println
+
+// Booleans are exhaustive with just `true` and `false` — no wildcard needed.
+fn to_int(b: bool) -> i32 {
+    return match b {
+        true => 1i32,
+        false => 0i32,
+    }
+}
+
+fn main() {
+    println(to_int(true))
+    println(to_int(false))
+}

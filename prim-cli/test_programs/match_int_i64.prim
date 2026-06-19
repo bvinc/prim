@@ -1,0 +1,16 @@
+import std.io.println
+
+// Exercises the 64-bit comparison path and an i64 scrutinee.
+fn pick(n: i64) -> i64 {
+    return match n {
+        0i64 => 100i64,
+        9000000000i64 => 200i64,
+        _ => 0i64,
+    }
+}
+
+fn main() {
+    println(pick(0i64))
+    println(pick(9000000000i64))
+    println(pick(5i64))
+}

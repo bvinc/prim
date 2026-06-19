@@ -1,0 +1,25 @@
+import std.io.println
+
+enum Inner {
+    A,
+    B { n: i32 },
+}
+
+enum Outer {
+    X,
+    Y { inner: Inner },
+}
+
+fn eval(o: Outer) -> i32 {
+    return match o {
+        Outer.Y { inner: Inner.B { n } } => n,
+        Outer.Y { inner: Inner.A } => 1i32,
+        Outer.X => 2i32,
+    }
+}
+
+fn main() {
+    println(eval(Outer.Y { inner = Inner.B { n = 7i32 } }))
+    println(eval(Outer.Y { inner = Inner.A }))
+    println(eval(Outer.X))
+}

@@ -216,6 +216,11 @@ pub enum Pattern {
     },
     /// `(a, b, ...)` — matches a tuple element-wise.
     Tuple { elems: Vec<Pattern>, span: Span },
+    /// An integer literal, e.g. `0` or `-1`. `ty` carries an explicit suffix
+    /// (`Undetermined` otherwise — inferred from the scrutinee at typecheck).
+    Int { value: i64, ty: Type, span: Span },
+    /// A boolean literal, `true` or `false`.
+    Bool { value: bool, span: Span },
     /// A struct-like enum variant, e.g. `Some { value: x }`. Field
     /// sub-patterns bind the payload.
     Variant {
@@ -243,6 +248,8 @@ impl Pattern {
             Pattern::Wildcard { span }
             | Pattern::Binding { span, .. }
             | Pattern::Tuple { span, .. }
+            | Pattern::Int { span, .. }
+            | Pattern::Bool { span, .. }
             | Pattern::Variant { span, .. } => *span,
         }
     }

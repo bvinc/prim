@@ -1839,6 +1839,36 @@ impl<'a> Parser<'a> {
             });
         }
 
+        // Literal patterns: integers (with optional leading `-`) and booleans.
+        if matches!(self.peek_kind(), Some(TokenKind::IntLiteral)) {
+            let span = self.advance().span;
+            let (value, ty) = parse_int_literal(span.text(self.source), span)?;
+            return Ok(crate::Pattern::Int { value, ty, span });
+        }
+        if matches!(
+            self.peek_kind(),
+            Some(TokenKind::Minus | TokenKind::UnaryMinus)
+        ) {
+            let minus_span = self.advance().span;
+            let lit_span = self
+                .consume(TokenKind::IntLiteral, "Expected an integer after '-'")?
+                .span;
+            let (value, ty) = parse_int_literal(lit_span.text(self.source), lit_span)?;
+            return Ok(crate::Pattern::Int {
+                value: -value,
+                ty,
+                span: minus_span.cover(lit_span),
+            });
+        }
+        if matches!(self.peek_kind(), Some(TokenKind::True)) {
+            let span = self.advance().span;
+            return Ok(crate::Pattern::Bool { value: true, span });
+        }
+        if matches!(self.peek_kind(), Some(TokenKind::False)) {
+            let span = self.advance().span;
+            return Ok(crate::Pattern::Bool { value: false, span });
+        }
+
         let first_span = self
             .consume(TokenKind::Identifier, "Expected pattern")?
             .span;

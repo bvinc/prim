@@ -1,0 +1,10 @@
+fn f(n: i32) -> i32 {
+    return match n {
+        0 => 1i32,
+        1 => 2i32,
+    }
+}
+
+fn main() {
+    f(0i32)
+}

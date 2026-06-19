@@ -903,6 +903,19 @@ fn emit_variant_lit(
     Ok(())
 }
 
+/// Where the value a sub-pattern matches against lives.
+#[derive(Clone, Copy)]
+enum Src {
+    /// Directly in a local (the scrutinee, or a stashed aggregate pointer).
+    Local(u32),
+    /// At `base + offset` in linear memory (a tuple element or variant field).
+    Field { base: u32, offset: u32 },
+}
+
+/// Compile a `match` as a chain of fail-blocks wrapped in a result-carrying
+/// block. Each arm tests-and-binds its pattern, short-circuiting to its
+/// fail-block on the first mismatch (so loads behind a non-matching
+/// constructor are never executed), then runs its body and branches to `$done`.
 fn emit_match(
     f: &mut Function,
     scrutinee: &hir::Expr,
@@ -913,118 +926,182 @@ fn emit_match(
     let counter = ctx.scratch_counter.get();
     ctx.scratch_counter.set(counter + 1);
     let scrutinee_local = ctx.scratch_base + counter;
-    let enum_id = match &scrutinee.ty {
-        hir::Type::Enum(id, _) => *id,
-        _ => {
-            f.instruction(&Instruction::Unreachable);
-            return Ok(());
-        }
-    };
-
     emit_expr(f, scrutinee, ctx)?;
     f.instruction(&Instruction::LocalSet(scrutinee_local));
-    emit_match_arm_chain(f, scrutinee_local, enum_id, arms, 0, result_ty, ctx)
+
+    let produces = produces_value(result_ty);
+    // `$done`: every matched arm branches here with its body's value.
+    let done_level = ctx.ctrl_depth.get();
+    if produces {
+        f.instruction(&Instruction::Block(BlockType::Result(hir_type_to_valtype(
+            result_ty,
+        ))));
+    } else {
+        f.instruction(&Instruction::Block(BlockType::Empty));
+    }
+    ctx.enter_ctrl();
+
+    for arm in arms {
+        // `$fail`: a mismatch in this arm's test branches to its end, falling
+        // through to the next arm.
+        f.instruction(&Instruction::Block(BlockType::Empty));
+        ctx.enter_ctrl();
+        emit_test_bind(
+            f,
+            Src::Local(scrutinee_local),
+            &scrutinee.ty,
+            &arm.pattern,
+            ctx,
+        );
+        emit_expr(f, &arm.body, ctx)?;
+        let done_br = ctx.ctrl_depth.get() - 1 - done_level;
+        f.instruction(&Instruction::Br(done_br));
+        f.instruction(&Instruction::End);
+        ctx.exit_ctrl();
+    }
+
+    // Exhaustiveness is checked at typecheck, so no arm matching is
+    // unreachable at runtime; `Unreachable` also satisfies the block's result.
+    f.instruction(&Instruction::Unreachable);
+    f.instruction(&Instruction::End);
+    ctx.exit_ctrl();
+    Ok(())
 }
 
-fn emit_match_arm_chain(
-    f: &mut Function,
-    scrutinee_local: u32,
-    enum_id: hir::EnumId,
-    arms: &[hir::MatchArm],
-    index: usize,
-    result_ty: &hir::Type,
-    ctx: &EmitCtx,
-) -> Result<(), WasmError> {
-    let Some(arm) = arms.get(index) else {
-        f.instruction(&Instruction::Unreachable);
-        if produces_value(result_ty) {
-            emit_default_value(f, result_ty);
+/// Push the value identified by `src` (of type `ty`) onto the stack.
+fn push_src(f: &mut Function, src: Src, ty: &hir::Type) {
+    match src {
+        Src::Local(idx) => {
+            f.instruction(&Instruction::LocalGet(idx));
         }
-        return Ok(());
-    };
+        Src::Field { base, offset } => {
+            f.instruction(&Instruction::LocalGet(base));
+            emit_field_load(f, ty, offset);
+        }
+    }
+}
 
-    match &arm.pattern {
-        hir::Pattern::Wildcard { .. } => {
-            emit_expr(f, &arm.body, ctx)?;
-        }
-        // A bare binding is an irrefutable catch-all: bind the whole
-        // scrutinee, then run the body unconditionally.
+/// Recursively test a value (`src`, of type `ty`) against `pattern`, branching
+/// to the enclosing `$fail` block (relative depth 0 — no blocks are opened
+/// here) on any mismatch, and binding any sub-bindings along the matching path.
+fn emit_test_bind(
+    f: &mut Function,
+    src: Src,
+    ty: &hir::Type,
+    pattern: &hir::Pattern,
+    ctx: &EmitCtx,
+) {
+    match pattern {
+        hir::Pattern::Wildcard { .. } => {}
         hir::Pattern::Binding { symbol, .. } => {
             if let Some(&local) = ctx.locals.get(symbol) {
-                f.instruction(&Instruction::LocalGet(scrutinee_local));
+                push_src(f, src, ty);
                 f.instruction(&Instruction::LocalSet(local));
             }
-            emit_expr(f, &arm.body, ctx)?;
+        }
+        hir::Pattern::Int { value, ty: pty, .. } => {
+            push_src(f, src, ty);
+            if matches!(hir_type_to_valtype(pty), ValType::I64) {
+                f.instruction(&Instruction::I64Const(*value));
+                f.instruction(&Instruction::I64Ne);
+            } else {
+                f.instruction(&Instruction::I32Const(*value as i32));
+                f.instruction(&Instruction::I32Ne);
+            }
+            f.instruction(&Instruction::BrIf(0));
+        }
+        hir::Pattern::Bool { value, .. } => {
+            push_src(f, src, ty);
+            f.instruction(&Instruction::I32Const(*value as i32));
+            f.instruction(&Instruction::I32Ne);
+            f.instruction(&Instruction::BrIf(0));
+        }
+        hir::Pattern::Tuple { elems, .. } => {
+            let base = aggregate_base(f, src, ty, ctx);
+            let elem_types: Vec<hir::Type> = match ty {
+                hir::Type::Tuple(ts) => ts.clone(),
+                _ => Vec::new(),
+            };
+            let layout = compute_tuple_layout(&elem_types);
+            for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
+                emit_test_bind(
+                    f,
+                    Src::Field {
+                        base,
+                        offset: *offset,
+                    },
+                    elem_ty,
+                    elem,
+                    ctx,
+                );
+            }
         }
         hir::Pattern::Variant {
             variant_idx,
             fields,
             ..
         } => {
-            f.instruction(&Instruction::LocalGet(scrutinee_local));
+            // Use the enum id from the value's (monomorphized) type, not the
+            // pattern's — mono rewrites types but not the pattern's `enum_id`.
+            let enum_id = match ty {
+                hir::Type::Enum(id, _) => *id,
+                _ => {
+                    f.instruction(&Instruction::Unreachable);
+                    return;
+                }
+            };
+            let base = aggregate_base(f, src, ty, ctx);
+            // Discriminant test.
+            f.instruction(&Instruction::LocalGet(base));
             emit_field_load(f, &hir::Type::U32, 0);
             f.instruction(&Instruction::I32Const(*variant_idx as i32));
-            f.instruction(&Instruction::I32Eq);
+            f.instruction(&Instruction::I32Ne);
+            f.instruction(&Instruction::BrIf(0));
 
-            if produces_value(result_ty) {
-                f.instruction(&Instruction::If(BlockType::Result(hir_type_to_valtype(
-                    result_ty,
-                ))));
-            } else {
-                f.instruction(&Instruction::If(BlockType::Empty));
+            let variant = ctx
+                .enum_layouts
+                .get(&enum_id)
+                .and_then(|layout| layout.variants.get(*variant_idx as usize))
+                .cloned();
+            let Some(variant) = variant else {
+                f.instruction(&Instruction::Unreachable);
+                return;
+            };
+            for fp in fields {
+                let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field).cloned()
+                else {
+                    f.instruction(&Instruction::Unreachable);
+                    continue;
+                };
+                emit_test_bind(
+                    f,
+                    Src::Field {
+                        base,
+                        offset: 8 + payload_offset,
+                    },
+                    &field_ty,
+                    &fp.pattern,
+                    ctx,
+                );
             }
-            ctx.enter_ctrl();
-
-            emit_match_bindings(f, scrutinee_local, enum_id, *variant_idx, fields, ctx);
-            emit_expr(f, &arm.body, ctx)?;
-
-            f.instruction(&Instruction::Else);
-            emit_match_arm_chain(f, scrutinee_local, enum_id, arms, index + 1, result_ty, ctx)?;
-            f.instruction(&Instruction::End);
-            ctx.exit_ctrl();
-        }
-        hir::Pattern::Tuple { .. } => {
-            // Scrutinee is always an enum; a tuple pattern is a type error
-            // rejected before codegen.
-            f.instruction(&Instruction::Unreachable);
         }
     }
-
-    Ok(())
 }
 
-fn emit_match_bindings(
-    f: &mut Function,
-    scrutinee_local: u32,
-    enum_id: hir::EnumId,
-    variant_idx: u32,
-    fields: &[hir::FieldPattern],
-    ctx: &EmitCtx,
-) {
-    let variant = match ctx
-        .enum_layouts
-        .get(&enum_id)
-        .and_then(|layout| layout.variants.get(variant_idx as usize))
-    {
-        Some(v) => v.clone(),
-        None => {
-            f.instruction(&Instruction::Unreachable);
-            return;
+/// Produce a local holding an aggregate value's pointer for repeated access:
+/// reuse the local directly when `src` already is one, else stash the loaded
+/// pointer in a fresh scratch local. (Mirrored by `walks::collect_match_arm_temps`.)
+fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> u32 {
+    match src {
+        Src::Local(idx) => idx,
+        Src::Field { .. } => {
+            let counter = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(counter + 1);
+            let tmp = ctx.scratch_base + counter;
+            push_src(f, src, ty);
+            f.instruction(&Instruction::LocalSet(tmp));
+            tmp
         }
-    };
-
-    for fp in fields {
-        let (payload_offset, field_ty) = match variant.fields.get(&fp.field) {
-            Some(t) => t.clone(),
-            None => {
-                f.instruction(&Instruction::Unreachable);
-                continue;
-            }
-        };
-        // Load the field value, then bind it via its (irrefutable) sub-pattern.
-        f.instruction(&Instruction::LocalGet(scrutinee_local));
-        emit_field_load(f, &field_ty, 8 + payload_offset);
-        emit_bind(f, &fp.pattern, ctx);
     }
 }
 
@@ -1063,7 +1140,7 @@ fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
                 emit_bind(f, elem, ctx);
             }
         }
-        hir::Pattern::Variant { .. } => {
+        hir::Pattern::Int { .. } | hir::Pattern::Bool { .. } | hir::Pattern::Variant { .. } => {
             // Refutable; never reached in an irrefutable position.
             f.instruction(&Instruction::Unreachable);
         }

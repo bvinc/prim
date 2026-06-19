@@ -1,0 +1,9 @@
+fn f(p: (i32, i32)) -> i32 {
+    return match p {
+        (a, b, c) => a + b + c,
+    }
+}
+
+fn main() {
+    f((1i32, 2i32))
+}

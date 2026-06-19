@@ -1,0 +1,17 @@
+import std.io.println
+
+fn quadrant(p: (i32, i32)) -> i32 {
+    return match p {
+        (0, 0) => 0i32,
+        (0, _) => 1i32,
+        (_, 0) => 2i32,
+        (_, _) => 3i32,
+    }
+}
+
+fn main() {
+    println(quadrant((0i32, 0i32)))
+    println(quadrant((0i32, 5i32)))
+    println(quadrant((5i32, 0i32)))
+    println(quadrant((5i32, 5i32)))
+}

@@ -1,0 +1,9 @@
+fn f(b: bool) -> i32 {
+    return match b {
+        true => 1i32,
+    }
+}
+
+fn main() {
+    f(true)
+}

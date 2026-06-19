@@ -1,0 +1,10 @@
+fn f(b: u8) -> u8 {
+    return match b {
+        256 => 1u8,
+        _ => 0u8,
+    }
+}
+
+fn main() {
+    f(0u8)
+}

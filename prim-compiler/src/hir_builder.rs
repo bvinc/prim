@@ -1323,7 +1323,9 @@ impl<'a> LoweringContext<'a> {
                     self.check_irrefutable(elem, file_id);
                 }
             }
-            prim_parse::Pattern::Variant { span, .. } => {
+            prim_parse::Pattern::Int { span, .. }
+            | prim_parse::Pattern::Bool { span, .. }
+            | prim_parse::Pattern::Variant { span, .. } => {
                 self.errors.push(LoweringError::RefutablePattern {
                     file: file_id,
                     span: *span,
@@ -1374,6 +1376,15 @@ impl<'a> LoweringContext<'a> {
                     span: self.span_id(*span, file_id),
                 }
             }
+            prim_parse::Pattern::Int { value, ty, span } => hir::Pattern::Int {
+                value: *value,
+                ty: self.lower_int_type(ty, module_scope),
+                span: self.span_id(*span, file_id),
+            },
+            prim_parse::Pattern::Bool { value, span } => hir::Pattern::Bool {
+                value: *value,
+                span: self.span_id(*span, file_id),
+            },
             prim_parse::Pattern::Variant {
                 enum_path,
                 variant_name,

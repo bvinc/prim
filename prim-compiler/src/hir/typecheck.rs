@@ -53,6 +53,14 @@ pub enum TypeCheckKind {
         value: i64,
         ty: Type,
     },
+    /// A `match` whose arms don't cover every value. `witness` is an example
+    /// pattern that isn't matched.
+    NonExhaustiveMatch {
+        witness: String,
+    },
+    /// A `match` arm that can never be reached (a prior arm already covers
+    /// everything it would).
+    UnreachablePattern,
     Legacy(String),
 }
 
@@ -119,6 +127,15 @@ impl std::fmt::Display for TypeCheckError {
             TypeCheckKind::LiteralOutOfRange { value, ty } => {
                 write!(f, "literal {value} is out of range for type {ty}")
             }
+            TypeCheckKind::NonExhaustiveMatch { witness } => {
+                write!(f, "non-exhaustive match: pattern `{witness}` not covered")
+            }
+            TypeCheckKind::UnreachablePattern => {
+                write!(
+                    f,
+                    "unreachable match arm: already covered by an earlier arm"
+                )
+            }
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
     }
@@ -162,40 +179,6 @@ struct Checker<'a> {
 struct CheckedField {
     expected: Type,
     actual: Type,
-}
-
-struct MatchCoverage {
-    covered: Vec<bool>,
-    covered_count: u32,
-    has_wildcard: bool,
-}
-
-impl MatchCoverage {
-    fn new(variant_count: u32) -> Self {
-        Self {
-            covered: vec![false; variant_count as usize],
-            covered_count: 0,
-            has_wildcard: false,
-        }
-    }
-
-    fn cover_wildcard(&mut self) {
-        self.has_wildcard = true;
-    }
-
-    fn cover_variant(&mut self, variant_idx: u32) {
-        let Some(slot) = self.covered.get_mut(variant_idx as usize) else {
-            return;
-        };
-        if !*slot {
-            *slot = true;
-            self.covered_count += 1;
-        }
-    }
-
-    fn is_exhaustive(&self) -> bool {
-        self.has_wildcard || self.covered_count == self.covered.len() as u32
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -510,71 +493,144 @@ impl<'a> Checker<'a> {
             .collect()
     }
 
-    fn check_match_pattern(
+    /// Type an irrefutable pattern (wildcard, binding, or tuple) against an
+    /// expected type. Thin wrapper over [`type_pattern`] used by `let`.
+    fn type_irrefutable_pattern(
         &mut self,
         pattern: &mut crate::hir::Pattern,
-        enum_id: crate::hir::EnumId,
-        enum_args: &[Type],
-        variant_count: u32,
-        coverage: &mut MatchCoverage,
-        span: SpanId,
+        expected: &Type,
         locals: &mut HashMap<SymbolId, Type>,
+    ) -> Result<(), TypeCheckError> {
+        self.type_pattern(pattern, expected, locals, false)?;
+        Ok(())
+    }
+
+    /// Type a pattern against an `expected` type, recording each binding's type
+    /// into `locals` and the pattern nodes, and returning the bound symbols.
+    /// When `refutable` is false (a `let` binding), refutable patterns (literal,
+    /// variant) are rejected.
+    fn type_pattern(
+        &mut self,
+        pattern: &mut crate::hir::Pattern,
+        expected: &Type,
+        locals: &mut HashMap<SymbolId, Type>,
+        refutable: bool,
     ) -> Result<Vec<SymbolId>, TypeCheckError> {
-        let scrut_ty = Type::Enum(enum_id, enum_args.to_vec());
         match pattern {
             crate::hir::Pattern::Wildcard { ty, .. } => {
-                coverage.cover_wildcard();
-                *ty = scrut_ty;
+                *ty = expected.clone();
                 Ok(Vec::new())
             }
-            // A bare binding is an irrefutable catch-all that binds the whole
-            // scrutinee.
-            crate::hir::Pattern::Binding {
-                symbol,
-                ty: binding_ty,
-                ..
-            } => {
-                coverage.cover_wildcard();
-                *binding_ty = scrut_ty.clone();
-                locals.insert(*symbol, scrut_ty);
+            crate::hir::Pattern::Binding { symbol, ty, .. } => {
+                *ty = expected.clone();
+                locals.insert(*symbol, expected.clone());
                 Ok(vec![*symbol])
             }
-            crate::hir::Pattern::Tuple { .. } => Err(self.error(
-                span,
-                TypeCheckKind::Legacy("tuple pattern cannot match an enum value".to_string()),
-            )),
+            crate::hir::Pattern::Int { value, ty, span } => {
+                if !refutable {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "refutable pattern in irrefutable position".to_string(),
+                        ),
+                    ));
+                }
+                if !self.is_integer(expected) && !matches!(expected, Type::IntVar) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: self.type_name(expected),
+                            found: "an integer literal".to_string(),
+                        },
+                    ));
+                }
+                *ty = expected.clone();
+                self.check_int_literal_fits(*value, expected, *span)?;
+                Ok(Vec::new())
+            }
+            crate::hir::Pattern::Bool { span, .. } => {
+                if !refutable {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "refutable pattern in irrefutable position".to_string(),
+                        ),
+                    ));
+                }
+                if !matches!(expected, Type::Bool) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::TypeMismatch {
+                            expected: self.type_name(expected),
+                            found: "bool".to_string(),
+                        },
+                    ));
+                }
+                Ok(Vec::new())
+            }
+            crate::hir::Pattern::Tuple { elems, ty, span } => match expected {
+                Type::Tuple(elem_types) if elem_types.len() == elems.len() => {
+                    *ty = expected.clone();
+                    let mut bindings = Vec::new();
+                    let elem_types = elem_types.clone();
+                    for (elem, elem_ty) in elems.iter_mut().zip(elem_types.iter()) {
+                        bindings.extend(self.type_pattern(elem, elem_ty, locals, refutable)?);
+                    }
+                    Ok(bindings)
+                }
+                other => Err(self.error(
+                    *span,
+                    TypeCheckKind::TypeMismatch {
+                        expected: self.type_name(other),
+                        found: format!("a {}-tuple pattern", elems.len()),
+                    },
+                )),
+            },
             crate::hir::Pattern::Variant {
                 enum_id: pattern_enum,
                 variant_idx,
                 fields,
-                ..
+                span,
             } => {
+                if !refutable {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "refutable pattern in irrefutable position".to_string(),
+                        ),
+                    ));
+                }
+                let (enum_id, enum_args) = match expected {
+                    Type::Enum(id, args) => (*id, args.clone()),
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: self.type_name(other),
+                                found: "an enum variant pattern".to_string(),
+                            },
+                        ));
+                    }
+                };
                 if *pattern_enum != enum_id {
                     return Err(self.error(
-                        span,
+                        *span,
                         TypeCheckKind::Legacy(
                             "pattern's enum does not match scrutinee's enum".to_string(),
                         ),
                     ));
                 }
-                if *variant_idx >= variant_count {
-                    return Err(self.error(
-                        span,
-                        TypeCheckKind::Legacy("variant index out of range".to_string()),
-                    ));
-                }
-
-                coverage.cover_variant(*variant_idx);
                 let field_map = self
                     .enum_variant_fields
                     .get(&(enum_id, *variant_idx))
                     .cloned()
                     .ok_or_else(|| {
                         self.error(
-                            span,
+                            *span,
                             TypeCheckKind::Legacy("variant fields not found".to_string()),
                         )
                     })?;
+                let span = *span;
                 let mut arm_bindings = Vec::new();
                 for fp in fields.iter_mut() {
                     let declared = field_map.get(&fp.field).cloned().ok_or_else(|| {
@@ -586,74 +642,16 @@ impl<'a> Checker<'a> {
                             )),
                         )
                     })?;
-                    let resolved = Self::substitute_params_with_slice(&declared, enum_args);
+                    let resolved = Self::substitute_params_with_slice(&declared, &enum_args);
                     fp.ty = resolved.clone();
-                    // Field sub-patterns are irrefutable in this phase.
-                    self.type_irrefutable_pattern(&mut fp.pattern, &resolved, locals)?;
-                    Self::collect_pattern_bindings(&fp.pattern, &mut arm_bindings);
+                    arm_bindings.extend(self.type_pattern(
+                        &mut fp.pattern,
+                        &resolved,
+                        locals,
+                        refutable,
+                    )?);
                 }
                 Ok(arm_bindings)
-            }
-        }
-    }
-
-    /// Type an irrefutable pattern (wildcard, binding, or tuple) against an
-    /// expected type, recording each binding's type into `locals` and the
-    /// pattern node. Used by `let` and by variant field sub-patterns.
-    fn type_irrefutable_pattern(
-        &mut self,
-        pattern: &mut crate::hir::Pattern,
-        expected: &Type,
-        locals: &mut HashMap<SymbolId, Type>,
-    ) -> Result<(), TypeCheckError> {
-        match pattern {
-            crate::hir::Pattern::Wildcard { ty, .. } => {
-                *ty = expected.clone();
-                Ok(())
-            }
-            crate::hir::Pattern::Binding { symbol, ty, .. } => {
-                *ty = expected.clone();
-                locals.insert(*symbol, expected.clone());
-                Ok(())
-            }
-            crate::hir::Pattern::Tuple { elems, ty, span } => match expected {
-                Type::Tuple(elem_types) if elem_types.len() == elems.len() => {
-                    *ty = expected.clone();
-                    for (elem, elem_ty) in elems.iter_mut().zip(elem_types.iter()) {
-                        self.type_irrefutable_pattern(elem, elem_ty, locals)?;
-                    }
-                    Ok(())
-                }
-                other => Err(self.error(
-                    *span,
-                    TypeCheckKind::Legacy(format!(
-                        "tuple pattern with {} elements doesn't match {}",
-                        elems.len(),
-                        self.type_name(other)
-                    )),
-                )),
-            },
-            crate::hir::Pattern::Variant { span, .. } => Err(self.error(
-                *span,
-                TypeCheckKind::Legacy("refutable pattern in irrefutable position".to_string()),
-            )),
-        }
-    }
-
-    /// Collect every symbol bound by a pattern (recursively).
-    fn collect_pattern_bindings(pattern: &crate::hir::Pattern, out: &mut Vec<SymbolId>) {
-        match pattern {
-            crate::hir::Pattern::Wildcard { .. } => {}
-            crate::hir::Pattern::Binding { symbol, .. } => out.push(*symbol),
-            crate::hir::Pattern::Tuple { elems, .. } => {
-                for elem in elems {
-                    Self::collect_pattern_bindings(elem, out);
-                }
-            }
-            crate::hir::Pattern::Variant { fields, .. } => {
-                for fp in fields {
-                    Self::collect_pattern_bindings(&fp.pattern, out);
-                }
             }
         }
     }
@@ -2075,36 +2073,20 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Match { scrutinee, arms } => {
                 let scrut_ty = self.check_expr(scrutinee, locals)?;
-                let (eid, eargs) = match &scrut_ty {
-                    Type::Enum(id, args) => (*id, args.clone()),
-                    other => {
-                        return Err(self.error(
-                            *span,
-                            TypeCheckKind::Legacy(format!(
-                                "match scrutinee must be an enum type, got {}",
-                                self.type_name(other)
-                            )),
-                        ));
-                    }
-                };
-                let variant_count = self
-                    .program
-                    .enums
-                    .get(eid.0 as usize)
-                    .map(|e| e.variants.len() as u32)
-                    .unwrap_or(0);
-                let mut coverage = MatchCoverage::new(variant_count);
+                // The scrutinee must be a type we can match on structurally.
+                if !self.is_matchable(&scrut_ty) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "cannot match on a value of type {}",
+                            self.type_name(&scrut_ty)
+                        )),
+                    ));
+                }
                 let mut result_ty: Option<Type> = None;
                 for arm in arms.iter_mut() {
-                    let arm_bindings = self.check_match_pattern(
-                        &mut arm.pattern,
-                        eid,
-                        &eargs,
-                        variant_count,
-                        &mut coverage,
-                        *span,
-                        locals,
-                    )?;
+                    let arm_bindings =
+                        self.type_pattern(&mut arm.pattern, &scrut_ty, locals, true)?;
                     let body_ty = self.check_expr(&mut arm.body, locals)?;
                     for binding in arm_bindings {
                         locals.remove(&binding);
@@ -2127,16 +2109,9 @@ impl<'a> Checker<'a> {
                         },
                     };
                 }
-                // Exhaustiveness: every variant must be covered, or a
-                // wildcard must be present.
-                if !coverage.is_exhaustive() {
-                    return Err(self.error(
-                        *span,
-                        TypeCheckKind::Legacy(
-                            "non-exhaustive match: not all variants are covered".to_string(),
-                        ),
-                    ));
-                }
+                // Reachability + exhaustiveness via the Maranget usefulness
+                // algorithm.
+                self.check_match_usefulness(arms, &scrut_ty, *span)?;
                 let final_ty = result_ty.unwrap_or(Type::Undetermined);
                 *ty = final_ty.clone();
                 Ok(final_ty)
@@ -2146,6 +2121,31 @@ impl<'a> Checker<'a> {
 
     fn is_dbg_supported(&self, t: &Type) -> bool {
         self.is_numeric(t) || matches!(t, Type::Bool)
+    }
+
+    /// Types a `match` can scrutinize structurally: enums, booleans, integers,
+    /// and tuples. (Floats are excluded — equality matching on floats is a
+    /// footgun.)
+    fn is_matchable(&self, t: &Type) -> bool {
+        matches!(t, Type::Enum(..) | Type::Bool | Type::Tuple(_)) || self.is_integer(t)
+    }
+
+    /// Run reachability + exhaustiveness analysis over a `match`'s arms.
+    fn check_match_usefulness(
+        &self,
+        arms: &[crate::hir::MatchArm],
+        scrut_ty: &Type,
+        span: SpanId,
+    ) -> Result<(), TypeCheckError> {
+        let patterns: Vec<crate::hir::Pattern> = arms.iter().map(|a| a.pattern.clone()).collect();
+        let analysis = crate::hir::usefulness::analyze(&patterns, scrut_ty, self.program);
+        if let Some(&idx) = analysis.unreachable.first() {
+            return Err(self.error(arms[idx].pattern.span(), TypeCheckKind::UnreachablePattern));
+        }
+        if let Some(witness) = analysis.missing {
+            return Err(self.error(span, TypeCheckKind::NonExhaustiveMatch { witness }));
+        }
+        Ok(())
     }
 
     // === Type Inference Helpers ===
@@ -2318,6 +2318,8 @@ impl<'a> Checker<'a> {
         match pattern {
             crate::hir::Pattern::Wildcard { ty, .. } => *ty = self.finalize_type(ty),
             crate::hir::Pattern::Binding { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Int { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Bool { .. } => {}
             crate::hir::Pattern::Tuple { elems, ty, .. } => {
                 *ty = self.finalize_type(ty);
                 for elem in elems {

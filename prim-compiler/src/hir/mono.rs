@@ -443,6 +443,8 @@ impl Mono<'_> {
         match pattern {
             super::Pattern::Wildcard { ty, .. } => *ty = self.substitute_type(ty, subst),
             super::Pattern::Binding { ty, .. } => *ty = self.substitute_type(ty, subst),
+            super::Pattern::Int { ty, .. } => *ty = self.substitute_type(ty, subst),
+            super::Pattern::Bool { .. } => {}
             super::Pattern::Tuple { elems, ty, .. } => {
                 *ty = self.substitute_type(ty, subst);
                 for elem in elems {
