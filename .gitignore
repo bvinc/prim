@@ -17,9 +17,9 @@ output.c
 .DS_Store
 Thumbs.db
 
-# Nix
-result
-result-*
+# Nix (build symlinks at the repo root)
+/result
+/result-*
 
 # direnv
 .direnv/

@@ -1,0 +1,11 @@
+enum Pair { Both(i32, i32) }
+
+fn first(p: Pair) -> i32 {
+    return match p {
+        Pair.Both(a) => a,
+    }
+}
+
+fn main() {
+    first(Pair.Both(1i32, 2i32))
+}

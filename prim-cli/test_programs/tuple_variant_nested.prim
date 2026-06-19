@@ -1,0 +1,19 @@
+import std.io.println
+
+enum Inner { Leaf(i32), Empty }
+enum Outer { Wrap(Inner), Bare }
+
+// Nested tuple-variant patterns: `Wrap(Leaf(n))`.
+fn eval(o: Outer) -> i32 {
+    return match o {
+        Outer.Wrap(Inner.Leaf(n)) => n,
+        Outer.Wrap(Inner.Empty) => 1i32,
+        Outer.Bare => 2i32,
+    }
+}
+
+fn main() {
+    println(eval(Outer.Wrap(Inner.Leaf(9i32))))
+    println(eval(Outer.Wrap(Inner.Empty)))
+    println(eval(Outer.Bare))
+}

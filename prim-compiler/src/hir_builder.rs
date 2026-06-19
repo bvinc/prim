@@ -79,6 +79,14 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    /// An enum variant constructed with the wrong syntax or arity (e.g. a
+    /// tuple variant built with `{ ... }`, or `Ok(a, b)` for a 1-tuple
+    /// variant).
+    VariantConstruction {
+        message: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -138,6 +146,7 @@ impl std::fmt::Display for LoweringError {
             LoweringError::RefutablePattern { .. } => {
                 write!(f, "refutable pattern not allowed in `let` binding")
             }
+            LoweringError::VariantConstruction { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -159,7 +168,8 @@ impl LoweringError {
             | LoweringError::NotAnEnum { span, .. }
             | LoweringError::InvalidImplTarget { span, .. }
             | LoweringError::NotAssociatedFn { span, .. }
-            | LoweringError::RefutablePattern { span, .. } => *span,
+            | LoweringError::RefutablePattern { span, .. }
+            | LoweringError::VariantConstruction { span, .. } => *span,
         }
     }
 
@@ -177,7 +187,8 @@ impl LoweringError {
             | LoweringError::NotAnEnum { file, .. }
             | LoweringError::InvalidImplTarget { file, .. }
             | LoweringError::NotAssociatedFn { file, .. }
-            | LoweringError::RefutablePattern { file, .. } => *file,
+            | LoweringError::RefutablePattern { file, .. }
+            | LoweringError::VariantConstruction { file, .. } => *file,
         }
     }
 }
@@ -677,6 +688,10 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn populate_items(&mut self) {
+        // Pass A: type definitions (structs and enums) for ALL modules. This
+        // runs before any function body is lowered so a body in one module can
+        // resolve a type — including an enum's variants — defined in another
+        // module, regardless of the order modules are processed in.
         for module in &self.program.modules {
             let module_id = module.id;
             let empty = ModuleScope::default();
@@ -739,6 +754,7 @@ impl<'a> LoweringContext<'a> {
                         variants.push(hir::Variant {
                             name: v.name.sym,
                             fields,
+                            is_tuple: v.is_tuple,
                             span: self.span_id(v.span, file.file_id),
                         });
                     }
@@ -749,7 +765,19 @@ impl<'a> LoweringContext<'a> {
                     }
                     self.current_type_params.clear();
                 }
+            }
+        }
 
+        // Pass B: function/global/trait/impl bodies, across all modules. Every
+        // module's types are now populated (Pass A), so cross-module references
+        // resolve regardless of module order.
+        for module in &self.program.modules {
+            let module_id = module.id;
+            let empty = ModuleScope::default();
+            let module_scope = self.module_scopes.get(&module.id).unwrap_or(&empty);
+
+            for file in &module.files {
+                let ast = &file.ast;
                 for f in &ast.functions {
                     let name = self.interner.resolve(&f.name.sym).to_string();
                     let res_id = self.find_top_level_symbol(&name, module.id);
@@ -1312,6 +1340,92 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Lower `Enum.Variant(args)` into a positional `VariantLit`. Returns
+    /// `None` if `path` doesn't name an enum variant (so the caller can fall
+    /// through to associated-call / function-call handling); returns
+    /// `Some(error-expr)` when it is a variant but constructed wrongly.
+    fn lower_tuple_variant_construction(
+        &mut self,
+        path: &prim_parse::NamePath,
+        args: &[prim_parse::Expr],
+        module: ModuleId,
+        file_id: FileId,
+        ast: &prim_parse::Program,
+        module_scope: &ModuleScope,
+    ) -> Option<hir::Expr> {
+        if path.segments.len() < 2 {
+            return None;
+        }
+        let enum_path = prim_parse::NamePath {
+            segments: path.segments[..path.segments.len() - 1].to_vec(),
+        };
+        let res_id = self.lookup_symbol_path(&enum_path, module_scope)?;
+        let eid = *self.enum_ids.get(&res_id)?;
+        let variant_name = path.segments.last().expect("variant segment");
+        let variant_idx = *self
+            .enums
+            .get(eid.0 as usize)?
+            .variant_idx
+            .get(&variant_name.sym)?;
+
+        // It is a variant: from here we always return `Some`.
+        let (is_tuple, arity) = {
+            let variant = &self.enums[eid.0 as usize].variants[variant_idx as usize];
+            (variant.is_tuple, variant.fields.len())
+        };
+        let span_id = self.span_id(variant_name.span, file_id);
+        let enum_ty = hir::Type::Enum(eid, Vec::new());
+        let err_expr = |span_id| hir::Expr {
+            kind: hir::ExprKind::Error,
+            ty: hir::Type::Enum(eid, Vec::new()),
+            span: span_id,
+        };
+        let vname = self.interner.resolve(&variant_name.sym).to_string();
+
+        if !is_tuple {
+            self.errors.push(LoweringError::VariantConstruction {
+                message: format!(
+                    "variant '{vname}' is not a tuple variant; construct it with `{{ field = ... }}`"
+                ),
+                file: file_id,
+                span: variant_name.span,
+            });
+            return Some(err_expr(span_id));
+        }
+        if args.len() != arity {
+            self.errors.push(LoweringError::VariantConstruction {
+                message: format!(
+                    "tuple variant '{vname}' takes {arity} value(s), but {} were given",
+                    args.len()
+                ),
+                file: file_id,
+                span: variant_name.span,
+            });
+            return Some(err_expr(span_id));
+        }
+
+        let fields = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                (
+                    self.interner.get_or_intern(i.to_string()),
+                    self.lower_expr(a, module, file_id, ast, module_scope),
+                )
+            })
+            .collect();
+        Some(hir::Expr {
+            kind: hir::ExprKind::VariantLit {
+                enum_id: eid,
+                variant_idx,
+                type_args: Vec::new(),
+                fields,
+            },
+            ty: enum_ty,
+            span: span_id,
+        })
+    }
+
     /// `let` patterns are irrefutable: they may not contain a variant
     /// (enum) test, which could fail to match at runtime. Tuples and
     /// bindings nest freely.
@@ -1540,6 +1654,19 @@ impl<'a> LoweringContext<'a> {
                         span,
                     };
                 }
+                // Tuple-variant construction: `Enum.Variant(args)` where the
+                // prefix names an enum and the last segment is one of its
+                // variants. Desugars to a positional `VariantLit`.
+                if let Some(expr) = self.lower_tuple_variant_construction(
+                    path,
+                    args,
+                    module,
+                    file_id,
+                    ast,
+                    module_scope,
+                ) {
+                    return expr;
+                }
                 // Associated call: `Type.f(args)` where the head names a
                 // struct/enum/primitive and `f` is one of its associated
                 // functions (no `self`).
@@ -1696,6 +1823,20 @@ impl<'a> LoweringContext<'a> {
                             .get(eid.0 as usize)
                             .and_then(|e| e.variant_idx.get(&variant_name.sym).copied());
                         match variant_idx {
+                            Some(variant_idx)
+                                if self.enums[eid.0 as usize].variants[variant_idx as usize]
+                                    .is_tuple =>
+                            {
+                                let vname = self.interner.resolve(&variant_name.sym).to_string();
+                                self.errors.push(LoweringError::VariantConstruction {
+                                    message: format!(
+                                        "tuple variant '{vname}' is constructed positionally: `{vname}(...)`"
+                                    ),
+                                    file: file_id,
+                                    span: variant_name.span,
+                                });
+                                return error();
+                            }
                             Some(variant_idx) => (
                                 hir::ExprKind::VariantLit {
                                     enum_id: eid,

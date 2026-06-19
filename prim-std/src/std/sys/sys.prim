@@ -41,3 +41,11 @@ fn panic(msg: String) {
     write_raw(1, nl.data, nl.len)
     trap()
 }
+
+// Like `panic`, but usable where a value of any type `T` is expected (e.g. a
+// `match` arm), since it never returns. The trailing `trap()` is unreachable
+// (`panic` already aborts) but proves divergence to the return checker.
+fn panic_value[T](msg: String) -> T {
+    panic(msg)
+    trap()
+}

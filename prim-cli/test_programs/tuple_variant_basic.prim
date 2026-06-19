@@ -1,0 +1,22 @@
+import std.io.println
+
+// A locally-defined enum with tuple variants of varying arity.
+enum Shape {
+    Point,
+    Circle(i32),
+    Rect(i32, i32),
+}
+
+fn area(s: Shape) -> i32 {
+    return match s {
+        Shape.Point => 0i32,
+        Shape.Circle(r) => 3i32 * r * r,
+        Shape.Rect(w, h) => w * h,
+    }
+}
+
+fn main() {
+    println(area(Shape.Point))
+    println(area(Shape.Circle(2i32)))
+    println(area(Shape.Rect(3i32, 4i32)))
+}

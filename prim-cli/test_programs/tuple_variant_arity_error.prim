@@ -1,0 +1,5 @@
+enum Pair { Both(i32, i32) }
+
+fn main() {
+    let x = Pair.Both(1i32)
+}

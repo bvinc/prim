@@ -167,6 +167,9 @@ struct Checker<'a> {
     /// as `StructLit`, and at pattern lowering to look up binding
     /// types.
     enum_variant_fields: HashMap<(crate::hir::EnumId, u32), HashMap<InternSymbol, Type>>,
+    /// Functions whose runtime ABI is `Trap` (they never return); a call to
+    /// one diverges, satisfying a function's return obligation.
+    trap_funcs: std::collections::HashSet<FuncId>,
     loop_depth: usize,
     /// Return type of the function currently being checked. Used by
     /// `Stmt::Return` to validate the value type.
@@ -197,6 +200,7 @@ impl<'a> Checker<'a> {
             struct_fields: HashMap::new(),
             enum_type_params: HashMap::new(),
             enum_variant_fields: HashMap::new(),
+            trap_funcs: std::collections::HashSet::new(),
             loop_depth: 0,
             current_ret: None,
             current_type_params: Vec::new(),
@@ -630,6 +634,20 @@ impl<'a> Checker<'a> {
                             TypeCheckKind::Legacy("variant fields not found".to_string()),
                         )
                     })?;
+                // A tuple-variant pattern is positional, so it must bind every
+                // element (named struct-variant patterns may bind a subset).
+                let variant_def =
+                    &self.program.enums[enum_id.0 as usize].variants[*variant_idx as usize];
+                if variant_def.is_tuple && fields.len() != variant_def.fields.len() {
+                    let expected = variant_def.fields.len();
+                    let found = fields.len();
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "tuple variant pattern expects {expected} element(s), but {found} were given"
+                        )),
+                    ));
+                }
                 let span = *span;
                 let mut arm_bindings = Vec::new();
                 for fp in fields.iter_mut() {
@@ -789,6 +807,9 @@ impl<'a> Checker<'a> {
             if !f.type_params.is_empty() {
                 self.func_type_params.insert(f.id, f.type_params.clone());
             }
+            if matches!(f.runtime, Some(crate::hir::RuntimeAbi::Trap)) {
+                self.trap_funcs.insert(f.id);
+            }
         }
         Ok(())
     }
@@ -839,7 +860,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-            } else if func.runtime.is_none() && !Self::block_always_returns(&func.body) {
+            } else if func.runtime.is_none() && !self.block_always_returns(&func.body) {
                 return Err(self.error(func.span, TypeCheckKind::MissingReturnValue));
             }
         } else if let Some(expr) = &mut func.body.expr {
@@ -854,34 +875,38 @@ impl<'a> Checker<'a> {
     /// diverges), so a declared return value is guaranteed. A trailing value
     /// expression also satisfies the obligation. Used so functions can be
     /// written in statement form with explicit `return`.
-    fn block_always_returns(block: &Block) -> bool {
+    fn block_always_returns(&self, block: &Block) -> bool {
         if block.expr.is_some() {
             return true;
         }
         // A statement that always returns makes the rest of the block dead,
         // so the block diverges if any statement does.
-        block.stmts.iter().any(Self::stmt_always_returns)
+        block.stmts.iter().any(|s| self.stmt_always_returns(s))
     }
 
-    fn stmt_always_returns(stmt: &Stmt) -> bool {
+    fn stmt_always_returns(&self, stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Return { .. } => true,
-            Stmt::Expr(e) => Self::expr_always_returns(e),
+            Stmt::Expr(e) => self.expr_always_returns(e),
             _ => false,
         }
     }
 
-    fn expr_always_returns(expr: &Expr) -> bool {
+    fn expr_always_returns(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::If {
                 then_branch,
                 else_branch: Some(else_branch),
                 ..
-            } => Self::block_always_returns(then_branch) && Self::block_always_returns(else_branch),
-            ExprKind::Block(block) => Self::block_always_returns(block),
+            } => self.block_always_returns(then_branch) && self.block_always_returns(else_branch),
+            ExprKind::Block(block) => self.block_always_returns(block),
             ExprKind::Match { arms, .. } => {
-                !arms.is_empty() && arms.iter().all(|a| Self::expr_always_returns(&a.body))
+                !arms.is_empty() && arms.iter().all(|a| self.expr_always_returns(&a.body))
             }
+            // A call to the `trap` runtime primitive never returns, so it
+            // diverges (satisfies any return obligation). This lets a generic
+            // `never`-style helper be written as `{ ...; trap() }`.
+            ExprKind::Call { func, .. } => self.trap_funcs.contains(func),
             _ => false,
         }
     }

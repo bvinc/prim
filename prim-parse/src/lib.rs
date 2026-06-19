@@ -279,13 +279,15 @@ pub struct EnumDefinition {
 }
 
 /// A single variant of an `enum`. Empty `fields` means a unit variant
-/// (e.g. `None`); otherwise it's a struct-like variant with named
-/// fields (e.g. `Some { value: T }`). Tuple variants aren't supported
-/// — payloads always carry a name.
+/// (e.g. `None`). A struct-like variant has named fields (e.g.
+/// `Some { value: T }`). A tuple variant (e.g. `Some(T)`) is desugared at
+/// parse time into named fields `0`, `1`, … and flagged with `is_tuple`,
+/// which selects positional construction/pattern syntax and arity errors.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDefinition {
     pub name: Ident,
     pub fields: Vec<StructFieldDefinition>,
+    pub is_tuple: bool,
     pub span: Span,
 }
 

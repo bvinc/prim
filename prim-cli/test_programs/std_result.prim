@@ -1,0 +1,22 @@
+import std.io.println
+import std.result.Result
+import std.result.unwrap
+import std.result.unwrap_or
+import std.result.is_ok
+
+fn checked_div(a: i32, b: i32) -> Result[i32, i32] {
+    if b == 0i32 {
+        return Result.Err(0i32)
+    }
+    return Result.Ok(a / b)
+}
+
+fn main() {
+    let ok = checked_div(20i32, 4i32)
+    let err = checked_div(1i32, 0i32)
+    println(unwrap(ok))
+    println(unwrap_or(err, 99i32))
+    if is_ok(ok) {
+        println(1i32)
+    }
+}

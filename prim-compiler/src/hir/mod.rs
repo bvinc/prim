@@ -371,11 +371,14 @@ pub struct Enum {
     pub span: SpanId,
 }
 
-/// One variant of an enum. Unit variants have `fields` empty.
+/// One variant of an enum. Unit variants have `fields` empty. Tuple variants
+/// (`is_tuple`) have positionally-named fields `0`, `1`, … and use positional
+/// construction/pattern syntax.
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub name: InternSymbol,
     pub fields: Vec<Field>,
+    pub is_tuple: bool,
     pub span: SpanId,
 }
 

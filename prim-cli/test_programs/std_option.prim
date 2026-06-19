@@ -1,0 +1,19 @@
+import std.io.println
+import std.option.Option
+import std.option.unwrap
+import std.option.unwrap_or
+import std.option.is_some
+import std.option.is_none
+
+fn main() {
+    let some = Option.Some(42i32)
+    let none: Option[i32] = Option.None
+    println(unwrap(some))
+    println(unwrap_or(none, 7i32))
+    if is_some(some) {
+        println(1i32)
+    }
+    if is_none(none) {
+        println(2i32)
+    }
+}

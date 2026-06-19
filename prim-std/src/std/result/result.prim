@@ -1,0 +1,40 @@
+mod result
+
+import std.sys.panic_value
+
+// The outcome of an operation that can fail: `Ok(t)` on success, `Err(e)`
+// on failure.
+enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
+
+fn is_ok[T, E](r: Result[T, E]) -> bool {
+    return match r {
+        Result.Ok(_) => true,
+        Result.Err(_) => false,
+    }
+}
+
+fn is_err[T, E](r: Result[T, E]) -> bool {
+    return match r {
+        Result.Ok(_) => false,
+        Result.Err(_) => true,
+    }
+}
+
+// Extract the success value, aborting if the result is an `Err`.
+fn unwrap[T, E](r: Result[T, E]) -> T {
+    return match r {
+        Result.Ok(v) => v,
+        Result.Err(_) => panic_value[T]("Result.unwrap called on Err"),
+    }
+}
+
+// Extract the success value, or return `default` if it is an `Err`.
+fn unwrap_or[T, E](r: Result[T, E], default: T) -> T {
+    return match r {
+        Result.Ok(v) => v,
+        Result.Err(_) => default,
+    }
+}

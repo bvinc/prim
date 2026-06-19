@@ -992,19 +992,49 @@ impl<'a> Parser<'a> {
             .span;
         let name = self.ident(name_span);
         let span_start = name_span.start();
-        // Unit variant: `None`. Struct-like variant: `Some { value: T, ... }`.
-        let (fields, span_end) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+        // Unit variant: `None`. Struct-like: `Some { value: T, ... }`.
+        // Tuple variant: `Some(T, ...)` — desugared to fields named `0`, `1`, …
+        let (fields, is_tuple, span_end) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace))
+        {
             self.advance();
             let fields = self.parse_struct_field_list()?;
             let right_brace =
                 self.consume(TokenKind::RightBrace, "Expected '}' to end variant body")?;
-            (fields, right_brace.span.end())
+            (fields, false, right_brace.span.end())
+        } else if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+            self.advance();
+            let mut fields = Vec::new();
+            if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                loop {
+                    let pos_span = self.current_span();
+                    let field_type = self.parse_type()?;
+                    let sym = self.interner.get_or_intern(fields.len().to_string());
+                    fields.push(crate::StructFieldDefinition {
+                        name: crate::Ident {
+                            sym,
+                            span: pos_span,
+                        },
+                        field_type,
+                    });
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+            }
+            let close = self.consume(TokenKind::RightParen, "Expected ')' to end tuple variant")?;
+            (fields, true, close.span.end())
         } else {
-            (Vec::new(), name_span.end())
+            (Vec::new(), false, name_span.end())
         };
         Ok(crate::VariantDefinition {
             name,
             fields,
+            is_tuple,
             span: crate::Span::new(span_start, span_end),
         })
     }
@@ -1911,6 +1941,33 @@ impl<'a> Parser<'a> {
                 }
             }
             let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
+            (fields, close.span)
+        } else if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+            // Tuple variant: `Some(p0, p1, ...)`, desugared to fields `0`, `1`, …
+            self.advance(); // consume '('
+            let mut fields = Vec::new();
+            if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                loop {
+                    let elem = self.parse_pattern()?;
+                    let sym = self.interner.get_or_intern(fields.len().to_string());
+                    fields.push(crate::FieldPattern {
+                        field: crate::Ident {
+                            sym,
+                            span: elem.span(),
+                        },
+                        pattern: elem,
+                    });
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+            }
+            let close = self.consume(TokenKind::RightParen, "Expected ')' in tuple pattern")?;
             (fields, close.span)
         } else {
             (Vec::new(), variant_name.span)

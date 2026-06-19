@@ -1,0 +1,5 @@
+enum Opt { Some(i32) }
+
+fn main() {
+    let x = Opt.Some { value = 1i32 }
+}

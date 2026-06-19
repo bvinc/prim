@@ -1,0 +1,39 @@
+mod option
+
+import std.sys.panic_value
+
+// An optional value: `Some(x)` holds a `T`, `None` holds nothing.
+enum Option[T] {
+    None,
+    Some(T),
+}
+
+fn is_some[T](o: Option[T]) -> bool {
+    return match o {
+        Option.Some(_) => true,
+        Option.None => false,
+    }
+}
+
+fn is_none[T](o: Option[T]) -> bool {
+    return match o {
+        Option.Some(_) => false,
+        Option.None => true,
+    }
+}
+
+// Extract the value, aborting if there is none.
+fn unwrap[T](o: Option[T]) -> T {
+    return match o {
+        Option.Some(v) => v,
+        Option.None => panic_value[T]("Option.unwrap called on None"),
+    }
+}
+
+// Extract the value, or return `default` if there is none.
+fn unwrap_or[T](o: Option[T], default: T) -> T {
+    return match o {
+        Option.Some(v) => v,
+        Option.None => default,
+    }
+}
