@@ -324,15 +324,14 @@ fn predecessors(cfg: &Cfg, include_back_edges: bool) -> Vec<Vec<BlockId>> {
 
 /// Lower a function body to a CFG, recording moves/uses/inits/drops for the
 /// `tracked` locals (the ownership pass tracks every non-`Copy` local; drop
-/// elaboration tracks the droppable ones). `Stmt::Drop`s, if present, become
-/// `Drop` actions whose ids follow their DFS position.
+/// elaboration tracks the droppable ones). Each `Stmt::Drop`, if present,
+/// becomes a `Drop` action carrying the node's own id.
 pub fn build(body: &HirBlock, tracked: &HashSet<SymbolId>) -> Cfg {
     let mut b = Builder {
         cfg: Cfg::new(),
         current: 0,
         loop_exits: Vec::new(),
         tracked,
-        next_drop: 0,
     };
     b.cfg.add_block(); // entry = block 0
     b.block(body);
@@ -349,7 +348,6 @@ struct Builder<'a> {
     /// Exit block of each enclosing loop (innermost last) — a `break` target.
     loop_exits: Vec<BlockId>,
     tracked: &'a HashSet<SymbolId>,
-    next_drop: DropId,
 }
 
 impl Builder<'_> {
@@ -447,10 +445,11 @@ impl Builder<'_> {
                 self.set_term(Terminator::Return);
                 self.current = self.cfg.add_block(); // dead code after return
             }
-            Stmt::Drop { sym, .. } => {
-                let id = self.next_drop;
-                self.next_drop += 1;
-                self.act(Action::Drop { id, local: *sym });
+            Stmt::Drop { sym, id, .. } => {
+                self.act(Action::Drop {
+                    id: *id,
+                    local: *sym,
+                });
             }
         }
     }

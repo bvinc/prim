@@ -15,9 +15,9 @@
 //!    candidate), or `Conditional` (moved on some paths only → a compile error:
 //!    a `Drop` value must be moved on all paths or none).
 //!
-//! Candidate drops and CFG drop actions are produced from the *same* augmented
-//! HIR walked in the same order, so the k-th `Stmt::Drop` in DFS order is the
-//! k-th drop action — the `DropId` is just that position.
+//! Each candidate `Stmt::Drop` carries a unique `id` assigned at insertion. The
+//! CFG drop action and the apply step both read that id, so the three walks
+//! don't have to visit drops in the same order to agree on which is which.
 
 use super::cfg::{self, DropDecision, DropId};
 use super::ownership::{MoveError, MoveErrorKind};
@@ -74,6 +74,7 @@ fn elaborate_function(
         droppable: &droppable,
         scopes: Vec::new(),
         fresh: fresh_base,
+        next_id: 0,
     };
     inserter.block(&mut func.body, false, &params);
 
@@ -89,8 +90,6 @@ fn elaborate_function(
     // Phase 4: apply — drop the removed candidates, error on conditional ones.
     let mut filter = Filter {
         decisions: &decisions,
-        droppable: &droppable,
-        next_drop: 0,
         error: None,
     };
     filter.block(&mut func.body);
@@ -121,11 +120,15 @@ struct Insert<'a> {
     droppable: &'a HashMap<SymbolId, SpanId>,
     scopes: Vec<Frame>,
     fresh: u32,
+    /// Counter for the unique id stamped on each emitted `Stmt::Drop`.
+    next_id: usize,
 }
 
 impl Insert<'_> {
-    fn drop_stmt(sym: SymbolId, ty: Type, span: SpanId) -> Stmt {
-        Stmt::Drop { sym, ty, span }
+    fn drop_stmt(&mut self, sym: SymbolId, ty: Type, span: SpanId) -> Stmt {
+        let id = self.next_id;
+        self.next_id += 1;
+        Stmt::Drop { sym, ty, span, id }
     }
 
     fn block(&mut self, block: &mut Block, is_loop: bool, seed: &[(SymbolId, Type, SpanId)]) {
@@ -137,10 +140,11 @@ impl Insert<'_> {
         for stmt in std::mem::take(&mut block.stmts) {
             self.stmt(stmt, &mut out);
         }
-        for (sym, ty, span) in self.scopes.last().unwrap().locals.iter().rev() {
-            out.push(Self::drop_stmt(*sym, ty.clone(), *span));
+        // Drop this scope's locals at its end, in reverse declaration order.
+        let frame = self.scopes.pop().unwrap();
+        for (sym, ty, span) in frame.locals.into_iter().rev() {
+            out.push(self.drop_stmt(sym, ty, span));
         }
-        self.scopes.pop();
         block.stmts = out;
     }
 
@@ -231,23 +235,30 @@ impl Insert<'_> {
         }
     }
 
-    fn emit_return_drops(&self, out: &mut Vec<Stmt>) {
-        for frame in self.scopes.iter().rev() {
-            for (sym, ty, span) in frame.locals.iter().rev() {
-                out.push(Self::drop_stmt(*sym, ty.clone(), *span));
-            }
-        }
+    fn emit_return_drops(&mut self, out: &mut Vec<Stmt>) {
+        let drops = self.scoped_drops(false);
+        out.extend(drops);
     }
 
-    fn emit_break_drops(&self, out: &mut Vec<Stmt>) {
+    fn emit_break_drops(&mut self, out: &mut Vec<Stmt>) {
+        let drops = self.scoped_drops(true);
+        out.extend(drops);
+    }
+
+    /// Drops for the locals of every enclosing scope, innermost first; when
+    /// `stop_at_loop` is set, stop after the nearest loop scope (for `break`).
+    fn scoped_drops(&mut self, stop_at_loop: bool) -> Vec<Stmt> {
+        let mut sites = Vec::new();
         for frame in self.scopes.iter().rev() {
-            for (sym, ty, span) in frame.locals.iter().rev() {
-                out.push(Self::drop_stmt(*sym, ty.clone(), *span));
-            }
-            if frame.is_loop {
+            sites.extend(frame.locals.iter().rev().cloned());
+            if stop_at_loop && frame.is_loop {
                 break;
             }
         }
+        sites
+            .into_iter()
+            .map(|(sym, ty, span)| self.drop_stmt(sym, ty, span))
+            .collect()
     }
 
     /// Recurse into an expression to elaborate any blocks it contains.
@@ -321,8 +332,6 @@ impl Insert<'_> {
 
 struct Filter<'a> {
     decisions: &'a HashMap<DropId, DropDecision>,
-    droppable: &'a HashMap<SymbolId, SpanId>,
-    next_drop: DropId,
     error: Option<(SpanId, MoveErrorKind)>,
 }
 
@@ -330,18 +339,14 @@ impl Filter<'_> {
     fn block(&mut self, block: &mut Block) {
         let mut out = Vec::with_capacity(block.stmts.len());
         for mut stmt in std::mem::take(&mut block.stmts) {
-            if let Stmt::Drop { sym, span, .. } = &stmt {
-                let id = self.next_drop;
-                self.next_drop += 1;
-                match self.decisions.get(&id).copied() {
+            if let Stmt::Drop { span, id, .. } = &stmt {
+                match self.decisions.get(id).copied() {
                     Some(DropDecision::Remove) => continue, // delete the candidate
                     Some(DropDecision::Conditional) => {
                         if self.error.is_none() {
                             self.error = Some((*span, MoveErrorKind::ConditionalDrop));
                         }
-                        // also keep it out of the program
-                        let _ = self.droppable.get(sym);
-                        continue;
+                        continue; // also keep it out of the program
                     }
                     _ => {} // Keep
                 }

@@ -514,11 +514,14 @@ pub enum Stmt {
     /// Drop the owned local `sym` (of concrete type `ty`): run its `Drop` glue,
     /// recursively drop its fields, then free its heap box. Inserted by the
     /// drop-elaboration pass after monomorphization; never written in source
-    /// and never present before that pass.
+    /// and never present before that pass. `id` is a unique tag assigned at
+    /// insertion that ties this candidate to its CFG drop action and decision
+    /// (so the analysis need not match candidates by traversal position).
     Drop {
         sym: SymbolId,
         ty: Type,
         span: SpanId,
+        id: usize,
     },
 }
 
