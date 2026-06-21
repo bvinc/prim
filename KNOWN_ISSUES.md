@@ -42,6 +42,18 @@ later feature).
   its first bytes and recycles the chunk on the next `alloc`. Until the borrow
   checker exists, `from_vec` should zero the source Vec's ptr/len/cap (or copy).
 
+- **Trait-object coercion is an untracked borrow.** `let g: Trait = s` (`Coerce`)
+  builds a fat pointer `{vtable, data_addr}` that aliases `s`'s box, and the
+  ownership checker treats it as a *borrow* of `s` — but with no lifetimes,
+  nothing keeps `s` pinned for `g`'s lifetime. Moving `s` away (`consume(take s)`)
+  or letting it drop while `g` is still live compiles cleanly and leaves `g`
+  dangling: `let g: T = r; consume(take r); g.say()` runs `r`'s drop in `consume`,
+  then `g.say()` reads the freed box. This is the trait-object case of the
+  general "borrows can't be pinned without lifetimes" gap (Stage 3). A cheaper
+  stopgap is to treat `Coerce` as a *move* of the source, turning the silent UAF
+  into a use-after-move error — at the cost of leaking the value's `Drop` until
+  `dyn` values are themselves drop-elaborated.
+
 - **Traps exit 0.** `panic`, divide-by-zero, and out-of-bounds access all trap
   the wasm module, but the process still exits 0. The `_start` stack-switching
   scheduler doesn't propagate wasm traps to the exit code. A halting program and
