@@ -60,3 +60,25 @@ later feature).
 
 - **Arrays don't codegen.** Array literals are parsed but ignored in codegen
   (`case_byte_array_literal`). No array support end to end yet.
+
+- **Drop/RAII (Stage 2) first cut — no recursive field drops.** A value is
+  RAII-dropped (its `Drop::drop` runs, then its box is freed) when it implements
+  `Drop` or transitively contains a field that does. But the drop glue does *not*
+  yet recurse into fields: a composite that holds a `Drop`-implementing field but
+  doesn't itself implement `Drop` has its own box freed, while the field's
+  `Drop::drop` is **not** called and the field leaks. Compose by implementing
+  `Drop` on the outer type for now; auto-recursion is the immediate follow-up.
+
+- **Drop/RAII — conditionally-moved values and `match` bindings leak.** Drop
+  placement uses a sound *never-moved* rule: a droppable local that might be
+  moved on some path is never auto-dropped (its move transfers ownership). A
+  value moved on only some branches therefore leaks rather than double-frees.
+  Likewise, values bound by `match` arm payloads (and enums consumed by a
+  `match`) are not yet dropped. All sound (no double-free/use-after-free), just
+  leaky; a drop-flag or dataflow pass would tighten this.
+
+- **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** Plain aggregates
+  and the stdlib's `Vec`/`String` (whose backing buffers are raw `*mut`) don't
+  implement `Drop`, so their boxes/buffers still leak (unchanged from before).
+  Giving them `Drop` impls needs generic-impl support and the `from_vec`
+  buffer-ownership fix; that is "full RAII," deliberately deferred.

@@ -23,6 +23,10 @@ pub(crate) struct Builtins {
     /// upgrades it to the real Prim allocator (`std.mem.alloc`) whenever that
     /// module is linked, so all heap use shares a single allocator.
     pub alloc: u32,
+    /// `std.mem.free` (`(*mut u8) -> ()`), used by RAII drop to release an
+    /// owned value's heap box. `u32::MAX` until resolved; only required when the
+    /// program drops anything.
+    pub free: u32,
     pub write_bytes: u32,
     /// Index of the imported WASI `clock_time_get`, backing `now_nanos`.
     pub clock: u32,

@@ -1,0 +1,20 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// The resource drops before each early return (after the return value is read).
+fn pick(c: bool) -> i32 {
+    let r = R { id = 7 }
+    if c {
+        return 1i32
+    }
+    return 2i32
+}
+
+fn main() {
+    println(pick(true))
+    println(pick(false))
+}

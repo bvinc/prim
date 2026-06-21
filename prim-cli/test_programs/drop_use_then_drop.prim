@@ -1,0 +1,13 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// Reading a Copy field does not move the resource; it still drops at scope end.
+fn main() {
+    let r = R { id = 8 }
+    println(r.id)
+    println(0i32)
+}

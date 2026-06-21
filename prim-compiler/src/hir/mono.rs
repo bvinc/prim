@@ -121,6 +121,8 @@ impl Mono<'_> {
                     self.rewrite_expr(v, subst);
                 }
             }
+            // Drop elaboration runs after mono; no Drop statements exist here.
+            Stmt::Drop { .. } => {}
         }
     }
 
@@ -442,6 +444,8 @@ impl Mono<'_> {
                     self.substitute_expr(v, subst);
                 }
             }
+            // Drop elaboration runs after mono; no Drop statements exist here.
+            Stmt::Drop { .. } => {}
         }
     }
 

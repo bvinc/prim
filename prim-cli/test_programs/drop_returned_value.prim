@@ -1,0 +1,16 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A returned resource is dropped by the receiving scope, once.
+fn make() -> R {
+    return R { id = 3 }
+}
+
+fn main() {
+    let r = make()
+    println(0i32)
+}

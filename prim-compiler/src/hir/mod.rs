@@ -12,6 +12,12 @@ pub use mono::monomorphize;
 pub mod ownership;
 pub use ownership::{MoveError, MoveErrorKind, check as check_ownership};
 
+pub mod drop_info;
+pub use drop_info::DropInfo;
+
+pub mod drop_elab;
+pub use drop_elab::elaborate as elaborate_drops;
+
 pub mod usefulness;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -501,6 +507,15 @@ pub enum Stmt {
     },
     Return {
         value: Option<Expr>,
+        span: SpanId,
+    },
+    /// Drop the owned local `sym` (of concrete type `ty`): run its `Drop` glue,
+    /// recursively drop its fields, then free its heap box. Inserted by the
+    /// drop-elaboration pass after monomorphization; never written in source
+    /// and never present before that pass.
+    Drop {
+        sym: SymbolId,
+        ty: Type,
         span: SpanId,
     },
 }

@@ -1,0 +1,16 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A resource declared in an inner block drops at the end of that block.
+fn main() {
+    println(0i32)
+    if true {
+        let r = R { id = 5 }
+        println(1i32)
+    }
+    println(2i32)
+}

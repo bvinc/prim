@@ -169,6 +169,9 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         // always linked (the prelude force-loads std.io, which imports std.mem),
         // so there is no fallback allocator.
         alloc: u32::MAX,
+        // Resolved below alongside `alloc`; only needed when something is
+        // dropped, so a missing `free` is not fatal.
+        free: u32::MAX,
         yield_tag: 0,
         cont_table: 1, // table 1 is the scheduler's task table
         rt_resume: 0,  // resolved once the function layout is known
@@ -224,13 +227,18 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         let Some(sym) = program.symbols.get(func.name.0 as usize) else {
             continue;
         };
-        if program.interner.resolve(&sym.name) != "alloc" {
+        let name = program.interner.resolve(&sym.name);
+        if name != "alloc" && name != "free" {
             continue;
         }
         let m = &program.modules[sym.module.0 as usize].name;
         if m.len() == 2 && m[0] == "std" && m[1] == "mem" {
             if let Some(idx) = func_map.get(&func.id) {
-                builtins.alloc = *idx;
+                match name {
+                    "alloc" => builtins.alloc = *idx,
+                    "free" => builtins.free = *idx,
+                    _ => {}
+                }
             }
         }
     }

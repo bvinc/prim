@@ -242,6 +242,8 @@ impl<'a> Checker<'a> {
                 }
                 true
             }
+            // Drop elaboration runs after this pass; no Drop statements exist.
+            Stmt::Drop { .. } => false,
         }
     }
 

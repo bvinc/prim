@@ -1,0 +1,13 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// Locals drop in reverse declaration order at scope end.
+fn main() {
+    let a = R { id = 1 }
+    let b = R { id = 2 }
+    println(0i32)
+}

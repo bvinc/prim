@@ -1,0 +1,16 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A resource declared in a loop body drops at the end of each iteration.
+fn main() {
+    let mut i = 0i32
+    while i < 3i32 {
+        let r = R { id = i }
+        i = i + 1i32
+    }
+    println(9i32)
+}

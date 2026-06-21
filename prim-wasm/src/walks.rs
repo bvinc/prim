@@ -58,6 +58,7 @@ fn collect_locals_stmt(stmt: &hir::Stmt, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_expr(v, locals);
             }
         }
+        hir::Stmt::Drop { .. } => {}
     }
 }
 
@@ -211,6 +212,7 @@ fn collect_scratch_types_stmt(
                 collect_scratch_types_expr(v, runtime, out);
             }
         }
+        hir::Stmt::Drop { .. } => {}
     }
 }
 
@@ -418,6 +420,7 @@ fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
                 collect_dbg_prefixes_expr(v, out);
             }
         }
+        hir::Stmt::Drop { .. } => {}
     }
 }
 
@@ -538,6 +541,7 @@ fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
                 collect_str_literals_expr(v, out);
             }
         }
+        hir::Stmt::Drop { .. } => {}
     }
 }
 

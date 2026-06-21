@@ -1,0 +1,18 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A resource moved (`take`) into a callee is dropped by the callee, not the
+// caller — exactly once.
+fn consume(take r: R) {
+    println(9i32)
+}
+
+fn main() {
+    let a = R { id = 1 }
+    consume(take a)
+    println(0i32)
+}

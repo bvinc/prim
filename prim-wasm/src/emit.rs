@@ -241,6 +241,9 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             }
             f.instruction(&Instruction::Return);
         }
+        hir::Stmt::Drop { sym, ty, .. } => {
+            emit_drop(f, *sym, ty, ctx);
+        }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
             emit_expr(f, ptr, ctx)?;
             emit_expr(f, value, ctx)?;
@@ -1145,6 +1148,28 @@ fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
             // Refutable; never reached in an irrefutable position.
             f.instruction(&Instruction::Unreachable);
         }
+    }
+}
+
+/// Emit RAII drop of owned local `sym` of type `ty`: run its `Drop::drop`
+/// method (if it implements `Drop`), then free its heap box. Recursive
+/// field-drop glue is a follow-up; here a composite's fields' own `Drop`
+/// methods are not yet invoked, but its box is reclaimed.
+fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx) {
+    let Some(&local) = ctx.locals.get(&sym) else {
+        return;
+    };
+    let info = hir::DropInfo::new(ctx.program);
+    if let Some(drop_fn) = info.drop_method(ty) {
+        if let Some(&widx) = ctx.funcs.get(&drop_fn) {
+            f.instruction(&Instruction::LocalGet(local));
+            f.instruction(&Instruction::Call(widx));
+        }
+    }
+    // Free the heap box. `free` is linked whenever anything is dropped.
+    if ctx.builtins.free != u32::MAX {
+        f.instruction(&Instruction::LocalGet(local));
+        f.instruction(&Instruction::Call(ctx.builtins.free));
     }
 }
 

@@ -1,0 +1,17 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A `view` borrow does not drop the resource; only its owner does, once.
+fn inspect(view r: R) -> i32 {
+    return r.id
+}
+
+fn main() {
+    let r = R { id = 6 }
+    println(inspect(view r))
+    println(0i32)
+}

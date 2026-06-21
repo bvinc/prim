@@ -27,6 +27,9 @@ pub(crate) fn extra_modules() -> Vec<Vec<String>> {
         // (e.g. `u64.from_u32`). They resolve through the global method map, so
         // the module must be loaded even when nothing imports a name from it.
         vec!["std".into(), "convert".into()],
+        // `std.ops` provides the `Drop` trait; the compiler recognizes it by
+        // name to drive RAII, and user code impls it without an explicit import.
+        vec!["std".into(), "ops".into()],
     ]
 }
 
@@ -47,6 +50,10 @@ fn inject_into_module(module: &mut Module) {
     }
     if matches!(origin, ModuleOrigin::User) && segs != ["std", "io"] {
         ensure_import(&mut module.imports, &["std", "io"]);
+    }
+    // `Drop` is a lang-item trait: visible everywhere so any type can impl it.
+    if segs != ["std", "ops"] {
+        ensure_import(&mut module.imports, &["std", "ops"]);
     }
 }
 

@@ -1066,6 +1066,8 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            // Inserted only by drop elaboration, which runs after typecheck.
+            Stmt::Drop { .. } => Ok(()),
             Stmt::DerefAssign { ptr, value, span } => {
                 let ptr_ty = self.check_expr(ptr, locals)?;
                 let pointee = match &ptr_ty {
@@ -2435,6 +2437,8 @@ impl<'a> Checker<'a> {
                 self.finalize_expr(object)?;
                 self.finalize_expr(value)?;
             }
+            // Inserted only by drop elaboration, which runs after typecheck.
+            Stmt::Drop { .. } => {}
         }
         Ok(())
     }

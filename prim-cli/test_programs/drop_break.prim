@@ -1,0 +1,16 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A resource in a loop body drops before `break`.
+fn main() {
+    loop {
+        let r = R { id = 4 }
+        println(0i32)
+        break
+    }
+    println(9i32)
+}

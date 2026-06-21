@@ -768,9 +768,62 @@ impl<'a> LoweringContext<'a> {
             }
         }
 
-        // Pass B: function/global/trait/impl bodies, across all modules. Every
-        // module's types are now populated (Pass A), so cross-module references
-        // resolve regardless of module order.
+        // Pass A.5: trait method signatures for ALL modules, before any impl is
+        // populated — an `impl Trait for T` in one module must see the methods
+        // of a `Trait` defined in another (e.g. user code implementing the
+        // stdlib `Drop` trait), regardless of module order.
+        for module in &self.program.modules {
+            let empty = ModuleScope::default();
+            let module_scope = self.module_scopes.get(&module.id).unwrap_or(&empty);
+
+            for file in &module.files {
+                let ast = &file.ast;
+                for t in &ast.traits {
+                    let name = self.interner.resolve(&t.name.sym).to_string();
+                    let res_id = self.find_top_level_symbol(&name, module.id);
+                    let tid = *self.trait_ids.get(&res_id).expect("missing trait id");
+                    // In a trait declaration `Self`/`self` is the trait type
+                    // (the receiver is a fat pointer for dynamic dispatch).
+                    self.current_self_type = Some(hir::Type::Trait(tid));
+                    let methods: Vec<hir::TraitMethodSig> = t
+                        .methods
+                        .iter()
+                        .map(|m| {
+                            let params = m
+                                .parameters
+                                .iter()
+                                .map(|p| self.lower_type(&p.type_annotation, module_scope))
+                                .collect();
+                            let param_modes = m.parameters.iter().map(|p| p.mode).collect();
+                            let ret = m
+                                .return_type
+                                .as_ref()
+                                .map(|ty| self.lower_type(ty, module_scope));
+                            hir::TraitMethodSig {
+                                name: m.name.sym,
+                                params,
+                                param_modes,
+                                ret,
+                                span: self.span_id(m.name.span, file.file_id),
+                            }
+                        })
+                        .collect();
+                    if let Some(hir_trait) = self.traits.get_mut(tid.0 as usize) {
+                        let mut method_idx = HashMap::with_capacity(methods.len());
+                        for (i, m) in methods.iter().enumerate() {
+                            method_idx.insert(m.name, i as u32);
+                        }
+                        hir_trait.methods = methods;
+                        hir_trait.method_idx = method_idx;
+                    }
+                    self.current_self_type = None;
+                }
+            }
+        }
+
+        // Pass B: function/global/impl bodies, across all modules. Every
+        // module's types and trait signatures are now populated, so cross-module
+        // references resolve regardless of module order.
         for module in &self.program.modules {
             let module_id = module.id;
             let empty = ModuleScope::default();
@@ -844,48 +897,6 @@ impl<'a> LoweringContext<'a> {
                         hir_global.init = init;
                     }
                 }
-
-                // Populate trait method signatures.
-                for t in &ast.traits {
-                    let name = self.interner.resolve(&t.name.sym).to_string();
-                    let res_id = self.find_top_level_symbol(&name, module.id);
-                    let tid = *self.trait_ids.get(&res_id).expect("missing trait id");
-                    // In a trait declaration `Self`/`self` is the trait type
-                    // (the receiver is a fat pointer for dynamic dispatch).
-                    self.current_self_type = Some(hir::Type::Trait(tid));
-                    let methods: Vec<hir::TraitMethodSig> = t
-                        .methods
-                        .iter()
-                        .map(|m| {
-                            let params = m
-                                .parameters
-                                .iter()
-                                .map(|p| self.lower_type(&p.type_annotation, module_scope))
-                                .collect();
-                            let param_modes = m.parameters.iter().map(|p| p.mode).collect();
-                            let ret = m
-                                .return_type
-                                .as_ref()
-                                .map(|ty| self.lower_type(ty, module_scope));
-                            hir::TraitMethodSig {
-                                name: m.name.sym,
-                                params,
-                                param_modes,
-                                ret,
-                                span: self.span_id(m.name.span, file.file_id),
-                            }
-                        })
-                        .collect();
-                    if let Some(hir_trait) = self.traits.get_mut(tid.0 as usize) {
-                        let mut method_idx = HashMap::with_capacity(methods.len());
-                        for (i, m) in methods.iter().enumerate() {
-                            method_idx.insert(m.name, i as u32);
-                        }
-                        hir_trait.methods = methods;
-                        hir_trait.method_idx = method_idx;
-                    }
-                }
-                self.current_self_type = None;
 
                 // Populate impl method bodies. The (struct, method) → FuncId
                 // map was built in pass 3; here we fill in params/ret/body
