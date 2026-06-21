@@ -362,6 +362,31 @@ mod tests {
         assert_eq!(analyze(&cfg)[&0], DropDecision::Keep);
     }
 
+    /// Several drops in one body are decided independently and keyed by id: a
+    /// moved local removes its drop while a live local beside it keeps its own.
+    #[test]
+    fn multiple_drops_decided_independently() {
+        let mut cfg = Cfg::new();
+        let b = cfg.add_block();
+        cfg.block(b).actions = vec![
+            Action::Init(sym(1)),
+            Action::Init(sym(2)),
+            Action::Move(sym(1)),
+            Action::Drop {
+                id: 0,
+                local: sym(1),
+            },
+            Action::Drop {
+                id: 1,
+                local: sym(2),
+            },
+        ];
+        cfg.block(b).term = Terminator::Return;
+        let decisions = analyze(&cfg);
+        assert_eq!(decisions[&0], DropDecision::Remove);
+        assert_eq!(decisions[&1], DropDecision::Keep);
+    }
+
     /// A value moved in a loop body that every path to the exit passes through
     /// is must-moved at a drop after the loop → remove (the back-edge converges).
     #[test]
