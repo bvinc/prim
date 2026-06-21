@@ -1,0 +1,21 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+fn sink(take r: R) {}
+
+fn route(c: bool, take r: R) {
+    if c {
+        sink(take r)
+    } else {
+        sink(take r)
+    }
+}
+
+fn main() {
+    route(true, take R { id = 5 })
+    println(0i32)
+}

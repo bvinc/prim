@@ -52,6 +52,9 @@ pub enum MoveErrorKind {
     ModeMismatch,
     /// `edit`-borrowing a value reachable only through a `view` parameter.
     EditOfView,
+    /// A value that implements `Drop` is moved on some paths but not others, so
+    /// the compiler can't statically decide whether to drop it at scope exit.
+    ConditionalDrop,
 }
 
 impl std::fmt::Display for MoveError {
@@ -64,6 +67,11 @@ impl std::fmt::Display for MoveError {
             MoveErrorKind::EditAlias => write!(f, "cannot edit-borrow the same value twice"),
             MoveErrorKind::ModeMismatch => write!(f, "wrong passing mode for argument"),
             MoveErrorKind::EditOfView => write!(f, "cannot edit-borrow a view parameter"),
+            MoveErrorKind::ConditionalDrop => write!(
+                f,
+                "value may be moved on only some paths; a value that implements \
+                 Drop must be moved on all paths or none"
+            ),
         }
     }
 }

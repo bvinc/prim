@@ -1,0 +1,17 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+fn sink(take r: R) {
+    println(9i32)
+}
+
+fn main() {
+    let mut r = R { id = 1 }
+    sink(take r)
+    r = R { id = 2 }
+    println(0i32)
+}

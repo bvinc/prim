@@ -69,13 +69,12 @@ later feature).
   `Drop::drop` is **not** called and the field leaks. Compose by implementing
   `Drop` on the outer type for now; auto-recursion is the immediate follow-up.
 
-- **Drop/RAII — conditionally-moved values and `match` bindings leak.** Drop
-  placement uses a sound *never-moved* rule: a droppable local that might be
-  moved on some path is never auto-dropped (its move transfers ownership). A
-  value moved on only some branches therefore leaks rather than double-frees.
-  Likewise, values bound by `match` arm payloads (and enums consumed by a
-  `match`) are not yet dropped. All sound (no double-free/use-after-free), just
-  leaky; a drop-flag or dataflow pass would tighten this.
+- **Drop/RAII — `match` bindings leak.** Values bound by `match` arm payloads
+  (and enums consumed by a `match`) are not yet dropped — sound (no
+  double-free), just leaky. (Conditionally-moved resources are now a *compile
+  error*, not a leak: drop placement is decided by a control-flow dataflow over
+  a per-function CFG (`hir/cfg.rs`), and a value that implements `Drop` must be
+  moved on all paths or none.)
 
 - **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** Plain aggregates
   and the stdlib's `Vec`/`String` (whose backing buffers are raw `*mut`) don't

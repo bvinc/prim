@@ -1,0 +1,15 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+fn sink(take r: R) {}
+
+fn main() {
+    let r = R { id = 1 }
+    if true {
+        sink(take r)
+    }
+}

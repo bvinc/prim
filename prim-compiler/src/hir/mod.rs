@@ -12,6 +12,8 @@ pub use mono::monomorphize;
 pub mod ownership;
 pub use ownership::{MoveError, MoveErrorKind, check as check_ownership};
 
+pub mod cfg;
+
 pub mod drop_info;
 pub use drop_info::DropInfo;
 
