@@ -17,6 +17,10 @@
 //!    the per-call rules that don't depend on control flow — `edit` exclusivity,
 //!    call-site/declaration mode match, and `edit`-of-a-`view`-parameter.
 //!
+//! Both read-only walks (`check_borrows` and the `collect_tracked` helper) share
+//! one structural recursion via the [`Visitor`] trait at the bottom of the file,
+//! so the HIR's shape is spelled out once.
+//!
 //! Modes are erased after this pass; mono/codegen ignore them.
 
 use super::cfg::{self, Action, is_copy, root_symbol};
@@ -204,7 +208,7 @@ impl Checker<'_> {
 
     // ---- syntactic borrow rules over call sites -----------------------------
 
-    /// `view`-parameter set for the current function (for `edit`-of-`view`).
+    /// Per-call rules that don't depend on control flow (rules 4, 5, 7).
     fn check_borrows(&mut self, func: &super::Function) {
         let view_params: HashSet<SymbolId> = func
             .params
@@ -212,45 +216,31 @@ impl Checker<'_> {
             .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::View))
             .map(|p| p.name)
             .collect();
-        self.walk_block(&func.body, &view_params);
+        BorrowWalk {
+            chk: self,
+            view_params,
+        }
+        .visit_block(&func.body);
     }
 
-    fn walk_block(&mut self, block: &Block, view_params: &HashSet<SymbolId>) {
-        for stmt in &block.stmts {
-            self.walk_stmt(stmt, view_params);
-        }
-        if let Some(e) = &block.expr {
-            self.walk_expr(e, view_params);
-        }
+    fn func_param_modes(&self, func: FuncId) -> Vec<(PassMode, bool)> {
+        self.program
+            .functions
+            .get(func.0 as usize)
+            .map(|f| f.params.iter().map(|p| (p.mode, is_copy(&p.ty))).collect())
+            .unwrap_or_default()
     }
+}
 
-    fn walk_stmt(&mut self, stmt: &Stmt, view_params: &HashSet<SymbolId>) {
-        match stmt {
-            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-                self.walk_expr(value, view_params)
-            }
-            Stmt::DerefAssign { ptr, value, .. } => {
-                self.walk_expr(ptr, view_params);
-                self.walk_expr(value, view_params);
-            }
-            Stmt::FieldAssign { object, value, .. } => {
-                self.walk_expr(object, view_params);
-                self.walk_expr(value, view_params);
-            }
-            Stmt::Expr(e) => self.walk_expr(e, view_params),
-            Stmt::Loop { body, .. } => self.walk_block(body, view_params),
-            Stmt::While {
-                condition, body, ..
-            } => {
-                self.walk_expr(condition, view_params);
-                self.walk_block(body, view_params);
-            }
-            Stmt::Return { value: Some(v), .. } => self.walk_expr(v, view_params),
-            Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
-        }
-    }
+/// Checks the syntactic borrow rules at each call site. Only calls need a
+/// custom `visit_expr`; everything else uses the default `Visitor` recursion.
+struct BorrowWalk<'a, 'p> {
+    chk: &'a mut Checker<'p>,
+    view_params: HashSet<SymbolId>,
+}
 
-    fn walk_expr(&mut self, expr: &Expr, view_params: &HashSet<SymbolId>) {
+impl Visitor for BorrowWalk<'_, '_> {
+    fn visit_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Call {
                 func,
@@ -258,8 +248,10 @@ impl Checker<'_> {
                 arg_modes,
                 ..
             } => {
-                let param_modes = self.func_param_modes(*func);
-                self.check_call_args(args, arg_modes, &param_modes, view_params);
+                // The receiver of a rewritten method call is `args[0]`, so the
+                // whole argument list is checked (and recursed) together.
+                let param_modes = self.chk.func_param_modes(*func);
+                self.check_args(args, arg_modes, &param_modes);
             }
             ExprKind::DynCall {
                 receiver,
@@ -268,17 +260,18 @@ impl Checker<'_> {
                 args,
                 arg_modes,
             } => {
+                self.visit_expr(receiver);
                 let modes = self
+                    .chk
                     .program
                     .traits
                     .get(trait_id.0 as usize)
                     .and_then(|t| t.methods.get(*method_idx as usize))
                     .map(|m| m.param_modes.clone())
                     .unwrap_or_default();
-                self.walk_expr(receiver, view_params);
                 let param_modes: Vec<(PassMode, bool)> =
                     modes.iter().skip(1).map(|m| (*m, false)).collect();
-                self.check_call_args(args, arg_modes, &param_modes, view_params);
+                self.check_args(args, arg_modes, &param_modes);
             }
             ExprKind::TraitBoundCall {
                 receiver,
@@ -288,7 +281,9 @@ impl Checker<'_> {
                 arg_modes,
                 ..
             } => {
+                self.visit_expr(receiver);
                 let modes = self
+                    .chk
                     .program
                     .traits
                     .get(bound.0 as usize)
@@ -299,83 +294,22 @@ impl Checker<'_> {
                     })
                     .map(|m| m.param_modes.clone())
                     .unwrap_or_default();
-                self.walk_expr(receiver, view_params);
                 let param_modes: Vec<(PassMode, bool)> =
                     modes.iter().skip(1).map(|m| (*m, false)).collect();
-                self.check_call_args(args, arg_modes, &param_modes, view_params);
+                self.check_args(args, arg_modes, &param_modes);
             }
-            ExprKind::Binary { left, right, .. } => {
-                self.walk_expr(left, view_params);
-                self.walk_expr(right, view_params);
-            }
-            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
-                for (_, v) in fields {
-                    self.walk_expr(v, view_params);
-                }
-            }
-            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
-                for e in elems {
-                    self.walk_expr(e, view_params);
-                }
-            }
-            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
-                self.walk_expr(base, view_params)
-            }
-            ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => {
-                self.walk_expr(e, view_params)
-            }
-            ExprKind::Coerce { value, .. } => self.walk_expr(value, view_params),
-            ExprKind::Dbg { inner, .. } => self.walk_expr(inner, view_params),
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.walk_expr(receiver, view_params);
-                for a in args {
-                    self.walk_expr(a, view_params);
-                }
-            }
-            ExprKind::Match { scrutinee, arms } => {
-                self.walk_expr(scrutinee, view_params);
-                for arm in arms {
-                    self.walk_expr(&arm.body, view_params);
-                }
-            }
-            ExprKind::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.walk_expr(condition, view_params);
-                self.walk_block(then_branch, view_params);
-                if let Some(b) = else_branch {
-                    self.walk_block(b, view_params);
-                }
-            }
-            ExprKind::Block(b) => self.walk_block(b, view_params),
-            ExprKind::Int(_)
-            | ExprKind::Float(_)
-            | ExprKind::Bool(_)
-            | ExprKind::Str(_)
-            | ExprKind::Ident(_)
-            | ExprKind::Spawn { .. }
-            | ExprKind::Error => {}
+            _ => walk_expr(self, expr),
         }
     }
+}
 
-    fn func_param_modes(&self, func: FuncId) -> Vec<(PassMode, bool)> {
-        self.program
-            .functions
-            .get(func.0 as usize)
-            .map(|f| f.params.iter().map(|p| (p.mode, is_copy(&p.ty))).collect())
-            .unwrap_or_default()
-    }
-
-    /// Rules 4, 5, 7: `edit` exclusivity, mode/declaration match, and
-    /// `edit`-of-a-`view`-parameter. Also recurses into the argument expressions.
-    fn check_call_args(
+impl BorrowWalk<'_, '_> {
+    /// Rules 4, 5, 7 over one call's arguments, then recurse into each.
+    fn check_args(
         &mut self,
         args: &[Expr],
         arg_modes: &[PassMode],
         param_modes: &[(PassMode, bool)],
-        view_params: &HashSet<SymbolId>,
     ) {
         // Rule 5: the same root place may not be `edit`-borrowed twice, nor
         // `edit` together with any other mode.
@@ -385,128 +319,43 @@ impl Checker<'_> {
             if let Some(root) = root_symbol(arg) {
                 if let Some(prev) = seen.insert(root, mode) {
                     if prev == PassMode::Edit || mode == PassMode::Edit {
-                        self.emit(arg.span, MoveErrorKind::EditAlias);
+                        self.chk.emit(arg.span, MoveErrorKind::EditAlias);
                     }
                 }
             }
             // Rule 7: non-Copy params must be passed with the declared mode.
             if let Some((decl_mode, copy)) = param_modes.get(i).copied() {
                 if !copy && mode != decl_mode {
-                    self.emit(arg.span, MoveErrorKind::ModeMismatch);
+                    self.chk.emit(arg.span, MoveErrorKind::ModeMismatch);
                 }
             }
             // Rule 4: `edit`-borrowing through a `view` parameter is illegal.
             if mode == PassMode::Edit {
                 if let Some(root) = root_symbol(arg) {
-                    if view_params.contains(&root) {
-                        self.emit(arg.span, MoveErrorKind::EditOfView);
+                    if self.view_params.contains(&root) {
+                        self.chk.emit(arg.span, MoveErrorKind::EditOfView);
                     }
                 }
             }
-            self.walk_expr(arg, view_params);
+            self.visit_expr(arg);
         }
     }
 }
 
-/// Collect every non-`Copy` local bound in a body: `let` and `match`-arm
-/// patterns (recursively through tuples and variant fields). Parameters are
-/// added by the caller. These are exactly the locals the CFG must track.
+/// Collect every non-`Copy` local bound in a body (`let` and `match`-arm
+/// patterns, recursively). Parameters are added by the caller. These are exactly
+/// the locals the CFG must track.
 fn collect_tracked(block: &Block, out: &mut HashSet<SymbolId>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                tracked_pattern(pattern, out);
-                collect_tracked_expr(value, out);
-            }
-            Stmt::Assign { value, .. }
-            | Stmt::Return {
-                value: Some(value), ..
-            } => collect_tracked_expr(value, out),
-            Stmt::DerefAssign { ptr, value, .. } => {
-                collect_tracked_expr(ptr, out);
-                collect_tracked_expr(value, out);
-            }
-            Stmt::FieldAssign { object, value, .. } => {
-                collect_tracked_expr(object, out);
-                collect_tracked_expr(value, out);
-            }
-            Stmt::Expr(e) => collect_tracked_expr(e, out),
-            Stmt::Loop { body, .. } => collect_tracked(body, out),
-            Stmt::While {
-                condition, body, ..
-            } => {
-                collect_tracked_expr(condition, out);
-                collect_tracked(body, out);
-            }
-            Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
-        }
-    }
-    if let Some(e) = &block.expr {
-        collect_tracked_expr(e, out);
-    }
+    TrackedCollector { out }.visit_block(block);
 }
 
-fn collect_tracked_expr(expr: &Expr, out: &mut HashSet<SymbolId>) {
-    match &expr.kind {
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_tracked_expr(condition, out);
-            collect_tracked(then_branch, out);
-            if let Some(b) = else_branch {
-                collect_tracked(b, out);
-            }
-        }
-        ExprKind::Block(b) => collect_tracked(b, out),
-        ExprKind::Match { scrutinee, arms } => {
-            collect_tracked_expr(scrutinee, out);
-            for arm in arms {
-                tracked_pattern(&arm.pattern, out);
-                collect_tracked_expr(&arm.body, out);
-            }
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_tracked_expr(left, out);
-            collect_tracked_expr(right, out);
-        }
-        ExprKind::Call { args, .. } => {
-            for a in args {
-                collect_tracked_expr(a, out);
-            }
-        }
-        ExprKind::DynCall { receiver, args, .. }
-        | ExprKind::TraitBoundCall { receiver, args, .. }
-        | ExprKind::MethodCall { receiver, args, .. } => {
-            collect_tracked_expr(receiver, out);
-            for a in args {
-                collect_tracked_expr(a, out);
-            }
-        }
-        ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
-            for (_, v) in fields {
-                collect_tracked_expr(v, out);
-            }
-        }
-        ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
-            for e in elems {
-                collect_tracked_expr(e, out);
-            }
-        }
-        ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
-            collect_tracked_expr(base, out)
-        }
-        ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => collect_tracked_expr(e, out),
-        ExprKind::Coerce { value, .. } => collect_tracked_expr(value, out),
-        ExprKind::Dbg { inner, .. } => collect_tracked_expr(inner, out),
-        ExprKind::Int(_)
-        | ExprKind::Float(_)
-        | ExprKind::Bool(_)
-        | ExprKind::Str(_)
-        | ExprKind::Ident(_)
-        | ExprKind::Spawn { .. }
-        | ExprKind::Error => {}
+struct TrackedCollector<'a> {
+    out: &'a mut HashSet<SymbolId>,
+}
+
+impl Visitor for TrackedCollector<'_> {
+    fn visit_pattern(&mut self, pattern: &Pattern) {
+        tracked_pattern(pattern, self.out);
     }
 }
 
@@ -529,5 +378,122 @@ fn tracked_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
             }
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
+    }
+}
+
+/// A read-only structural walk over a function body. Implementors override only
+/// the nodes they care about; the default methods recurse via the free `walk_*`
+/// functions, so the HIR's shape is spelled out exactly once.
+trait Visitor: Sized {
+    fn visit_block(&mut self, block: &Block) {
+        walk_block(self, block);
+    }
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        walk_stmt(self, stmt);
+    }
+    fn visit_expr(&mut self, expr: &Expr) {
+        walk_expr(self, expr);
+    }
+    fn visit_pattern(&mut self, _pattern: &Pattern) {}
+}
+
+fn walk_block<V: Visitor>(v: &mut V, block: &Block) {
+    for stmt in &block.stmts {
+        v.visit_stmt(stmt);
+    }
+    if let Some(e) = &block.expr {
+        v.visit_expr(e);
+    }
+}
+
+fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Stmt) {
+    match stmt {
+        Stmt::Let { pattern, value, .. } => {
+            v.visit_pattern(pattern);
+            v.visit_expr(value);
+        }
+        Stmt::Assign { value, .. } => v.visit_expr(value),
+        Stmt::DerefAssign { ptr, value, .. } => {
+            v.visit_expr(ptr);
+            v.visit_expr(value);
+        }
+        Stmt::FieldAssign { object, value, .. } => {
+            v.visit_expr(object);
+            v.visit_expr(value);
+        }
+        Stmt::Expr(e) => v.visit_expr(e),
+        Stmt::Loop { body, .. } => v.visit_block(body),
+        Stmt::While {
+            condition, body, ..
+        } => {
+            v.visit_expr(condition);
+            v.visit_block(body);
+        }
+        Stmt::Return {
+            value: Some(val), ..
+        } => v.visit_expr(val),
+        Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
+    }
+}
+
+fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
+    match &expr.kind {
+        ExprKind::Binary { left, right, .. } => {
+            v.visit_expr(left);
+            v.visit_expr(right);
+        }
+        ExprKind::Call { args, .. } => {
+            for a in args {
+                v.visit_expr(a);
+            }
+        }
+        ExprKind::DynCall { receiver, args, .. }
+        | ExprKind::TraitBoundCall { receiver, args, .. }
+        | ExprKind::MethodCall { receiver, args, .. } => {
+            v.visit_expr(receiver);
+            for a in args {
+                v.visit_expr(a);
+            }
+        }
+        ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
+            for (_, val) in fields {
+                v.visit_expr(val);
+            }
+        }
+        ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                v.visit_expr(e);
+            }
+        }
+        ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => v.visit_expr(base),
+        ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => v.visit_expr(e),
+        ExprKind::Coerce { value, .. } => v.visit_expr(value),
+        ExprKind::Dbg { inner, .. } => v.visit_expr(inner),
+        ExprKind::Match { scrutinee, arms } => {
+            v.visit_expr(scrutinee);
+            for arm in arms {
+                v.visit_pattern(&arm.pattern);
+                v.visit_expr(&arm.body);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            v.visit_expr(condition);
+            v.visit_block(then_branch);
+            if let Some(b) = else_branch {
+                v.visit_block(b);
+            }
+        }
+        ExprKind::Block(b) => v.visit_block(b),
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Spawn { .. }
+        | ExprKind::Error => {}
     }
 }
