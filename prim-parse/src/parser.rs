@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
     BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
-    ImportSelector, Interner, NamePath, Parameter, ParseError, Program, Severity, Span, Stmt,
-    StructDefinition, StructField, StructFieldDefinition, Type,
+    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, Severity, Span,
+    Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -339,7 +339,7 @@ impl<'a> Parser<'a> {
                 // absorbed as a call of the previous one.
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) && self.glued_to_prev() {
                     self.advance(); // consume '('
-                    let args = self.parse_argument_list()?;
+                    let (args, arg_modes) = self.parse_argument_list()?;
                     let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
                     let span = ident.span.cover(end_span.span);
                     Ok(Expr {
@@ -348,6 +348,7 @@ impl<'a> Parser<'a> {
                         kind: ExprKind::FunctionCall {
                             path: NamePath::from_single(ident),
                             args,
+                            arg_modes,
                             type_args: Vec::new(),
                         },
                     })
@@ -569,7 +570,7 @@ impl<'a> Parser<'a> {
                     }
                 };
                 self.advance();
-                let args = self.parse_argument_list()?;
+                let (args, arg_modes) = self.parse_argument_list()?;
                 let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
                 let span = left.span.cover(end_span.span);
                 Ok(Expr {
@@ -578,6 +579,7 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::FunctionCall {
                         path,
                         args,
+                        arg_modes,
                         type_args: Vec::new(),
                     },
                 })
@@ -604,7 +606,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.consume(TokenKind::LeftParen, "Expected '(' after type arguments")?;
-                let args = self.parse_argument_list()?;
+                let (args, arg_modes) = self.parse_argument_list()?;
                 let end_span = self.consume(TokenKind::RightParen, "Expected ')'")?;
                 Ok(Expr {
                     span: left.span.cover(end_span.span),
@@ -612,6 +614,7 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::FunctionCall {
                         path,
                         args,
+                        arg_modes,
                         type_args,
                     },
                 })
@@ -641,7 +644,7 @@ impl<'a> Parser<'a> {
                 // `(` after the name → method call; otherwise field access.
                 if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
                     self.advance(); // consume '('
-                    let args = self.parse_argument_list()?;
+                    let (args, arg_modes) = self.parse_argument_list()?;
                     let close =
                         self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
                     let span = left.span.cover(close.span);
@@ -653,6 +656,7 @@ impl<'a> Parser<'a> {
                             kind: ExprKind::FunctionCall {
                                 path,
                                 args,
+                                arg_modes,
                                 type_args: Vec::new(),
                             },
                         });
@@ -664,6 +668,7 @@ impl<'a> Parser<'a> {
                             receiver: Box::new(left),
                             method: name,
                             args,
+                            arg_modes,
                         },
                     })
                 } else {
@@ -794,23 +799,49 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parse_argument_list(&mut self) -> Result<Vec<Expr>, ParseError> {
+    /// Parse a comma-separated argument list, each argument optionally prefixed
+    /// by a passing mode (`edit v`, `take x`); a bare argument is `View`. The
+    /// returned mode vec is parallel to (same length as) the args vec.
+    fn parse_argument_list(&mut self) -> Result<(Vec<Expr>, Vec<PassMode>), ParseError> {
         let mut args = Vec::new();
+        let mut modes = Vec::new();
 
         if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-            return Ok(args); // Empty argument list
+            return Ok((args, modes)); // Empty argument list
         }
 
         // Parse first argument
+        modes.push(self.parse_pass_mode());
         args.push(self.parse_expression(Precedence::NONE)?);
 
         // Parse remaining arguments
         while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
+            modes.push(self.parse_pass_mode());
             args.push(self.parse_expression(Precedence::NONE)?);
         }
 
-        Ok(args)
+        Ok((args, modes))
+    }
+
+    /// Consume an optional leading `view`/`edit`/`take` mode keyword (on a call
+    /// argument or a parameter name), defaulting to `View`.
+    fn parse_pass_mode(&mut self) -> PassMode {
+        match self.peek_kind() {
+            Some(TokenKind::View) => {
+                self.advance();
+                PassMode::View
+            }
+            Some(TokenKind::Edit) => {
+                self.advance();
+                PassMode::Edit
+            }
+            Some(TokenKind::Take) => {
+                self.advance();
+                PassMode::Take
+            }
+            _ => PassMode::View,
+        }
     }
 
     // Helper methods
@@ -1293,13 +1324,25 @@ impl<'a> Parser<'a> {
             return Ok(parameters);
         }
 
-        let leading_self = matches!(self.peek_kind(), Some(TokenKind::Identifier))
-            && self.peek().map(|t| t.span.text(self.source)) == Some("self");
+        // A receiver is `self` optionally prefixed by a mode (`edit self`).
+        // Detect by looking past an optional leading mode keyword.
+        let self_offset = match self.peek_kind() {
+            Some(TokenKind::View | TokenKind::Edit | TokenKind::Take) => 1,
+            _ => 0,
+        };
+        let leading_self = matches!(self.peek_kind_at(self_offset), Some(TokenKind::Identifier))
+            && self
+                .tokens
+                .get(self.current + self_offset)
+                .map(|t| t.span.text(self.source))
+                == Some("self");
         if leading_self {
-            let span = self.advance().span;
+            let mode = self.parse_pass_mode(); // consumes the mode keyword if present
+            let span = self.advance().span; // consume `self`
             parameters.push(Parameter {
                 name: self.ident(span),
                 type_annotation: Type::SelfType,
+                mode,
             });
             // `(self)` — no further parameters.
             if !matches!(self.peek_kind(), Some(TokenKind::Comma)) {
@@ -1319,6 +1362,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
+        // Optional leading passing mode: `edit v: Vec[T]`. The keyword precedes
+        // the parameter name; a bare parameter defaults to `View`.
+        let mode = self.parse_pass_mode();
+
         let name_span = self
             .consume(TokenKind::Identifier, "Expected parameter name")?
             .span;
@@ -1330,6 +1377,7 @@ impl<'a> Parser<'a> {
         Ok(Parameter {
             name,
             type_annotation,
+            mode,
         })
     }
 

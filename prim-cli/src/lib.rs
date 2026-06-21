@@ -139,6 +139,9 @@ pub fn format_compile_error(
         CompileError::TypeCheck(e) => {
             format_error_with_file(source_map, e.file, e.span, e, fallback_path)
         }
+        CompileError::MoveCheck(e) => {
+            format_error_with_file(source_map, e.file, e.span, e, fallback_path)
+        }
         CompileError::Resolve(errors) => errors
             .iter()
             .map(|e| format_error_with_file(source_map, e.file(), e.span(), e, fallback_path))

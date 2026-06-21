@@ -532,6 +532,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             trait_id,
             method_idx,
             args,
+            arg_modes: _,
         } => {
             // Stash the fat pointer once so we can load data_ptr (for the
             // receiver argument) and vtable_addr (to index for the function

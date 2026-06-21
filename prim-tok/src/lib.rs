@@ -43,6 +43,9 @@ pub enum TokenKind {
     False,
     Const,
     Mut,
+    View,
+    Edit,
+    Take,
 
     // Types
     U8,
@@ -545,6 +548,9 @@ impl<'a> Tokenizer<'a> {
             "false" => TokenKind::False,
             "const" => TokenKind::Const,
             "mut" => TokenKind::Mut,
+            "view" => TokenKind::View,
+            "edit" => TokenKind::Edit,
+            "take" => TokenKind::Take,
             "u8" => TokenKind::U8,
             "i8" => TokenKind::I8,
             "u16" => TokenKind::U16,

@@ -1,0 +1,14 @@
+import std.io.println
+
+struct S { n: i32 }
+
+// A `view` borrow may read the value repeatedly; the caller keeps ownership.
+fn read_twice(view s: S) -> i32 {
+    return s.n + s.n
+}
+
+fn main() {
+    let a = S { n = 21 }
+    println(read_twice(view a))
+    println(a.n)
+}

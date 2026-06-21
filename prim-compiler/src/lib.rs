@@ -5,7 +5,7 @@ mod prelude;
 mod program;
 mod resolver;
 
-pub use hir::{Program, TypeCheckError};
+pub use hir::{MoveError, Program, TypeCheckError};
 pub use hir_builder::LoweringError;
 pub use loader::{LoadError, LoadOptions, prim_root};
 pub use prim_tok::FileId;
@@ -78,6 +78,7 @@ pub enum CompileError {
     Resolve(Vec<ResolveError>),
     Lowering(Vec<LoweringError>),
     TypeCheck(TypeCheckError),
+    MoveCheck(MoveError),
 }
 
 impl std::fmt::Display for CompileError {
@@ -99,6 +100,7 @@ impl std::fmt::Display for CompileError {
                 Ok(())
             }
             CompileError::TypeCheck(err) => err.fmt(f),
+            CompileError::MoveCheck(err) => err.fmt(f),
         }
     }
 }
@@ -126,6 +128,12 @@ impl From<Vec<LoweringError>> for CompileError {
 impl From<hir::TypeCheckError> for CompileError {
     fn from(e: hir::TypeCheckError) -> Self {
         CompileError::TypeCheck(e)
+    }
+}
+
+impl From<hir::MoveError> for CompileError {
+    fn from(e: hir::MoveError) -> Self {
+        CompileError::MoveCheck(e)
     }
 }
 
@@ -157,6 +165,7 @@ pub fn compile(
         let module_scopes = resolver::collect_scopes(&mut program)?;
         let mut hir = hir_builder::lower_to_hir(&program, &module_scopes, source_map.clone())?;
         hir::type_check(&mut hir)?;
+        hir::check_ownership(&hir)?;
         hir::monomorphize(&mut hir);
         Ok(hir)
     })();

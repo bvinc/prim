@@ -34,5 +34,7 @@ fn main() {
     let i = Inner { n = 41 }
     let o = Outer { inner = i }
     println(o.lookup())     // 42
-    println(i.show())       // 42
+    // `i` was moved into `o` above, so the standalone call uses a fresh Inner.
+    let i2 = Inner { n = 41 }
+    println(i2.show())      // 42
 }

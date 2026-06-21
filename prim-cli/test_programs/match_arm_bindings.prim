@@ -1,0 +1,15 @@
+import std.io.println
+
+struct S { n: i32 }
+enum Box { Full { s: S }, Empty }
+
+// Matching an owned value and binding its non-Copy payload moves it out of the
+// scrutinee into the arm binding.
+fn main() {
+    let b = Box.Full { s = S { n = 42 } }
+    let r = match b {
+        Box.Full { s } => s.n,
+        Box.Empty => 0i32,
+    }
+    println(r)
+}

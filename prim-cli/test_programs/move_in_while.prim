@@ -1,0 +1,12 @@
+struct S { n: i32 }
+
+fn sink(take s: S) -> i32 { return s.n }
+
+fn main() {
+    let a = S { n = 1 }
+    let mut i = 0i32
+    while i < 3i32 {
+        let x = sink(take a)
+        i = i + 1i32
+    }
+}

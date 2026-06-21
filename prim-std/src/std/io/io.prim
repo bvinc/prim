@@ -36,14 +36,14 @@ impl Writer for File {
 
 // A source of bytes.
 trait Reader {
-    fn read(self, buf: Vec[u8]) -> usize;
+    fn read(self, edit buf: Vec[u8]) -> usize;
 }
 
 impl Reader for File {
     // Read up to `buf`'s capacity, parking until the fd is readable so a task
     // waiting on input yields to others instead of blocking everyone. Sets the
     // buffer's length to the number of bytes read (0 at end of input).
-    fn read(self, buf: Vec[u8]) -> usize {
+    fn read(self, edit buf: Vec[u8]) -> usize {
         park_on_read(self.fd)
         let n = read_raw(self.fd, buf.ptr, buf.cap)
         buf.len = n
@@ -56,7 +56,7 @@ impl Reader for File {
 // go straight to the writer with no intermediate `String`.
 fn write_display[T: Display](w: File, x: T, newline: bool) {
     let f = new_formatter()
-    x.fmt(f)
+    x.fmt(edit f)
     if newline {
         f.write_byte(10)
     }

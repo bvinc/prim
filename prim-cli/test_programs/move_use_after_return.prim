@@ -1,0 +1,11 @@
+struct S { n: i32 }
+
+fn f(take s: S) -> S {
+    let r = s
+    return s
+}
+
+fn main() {
+    let a = S { n = 1 }
+    let b = f(take a)
+}

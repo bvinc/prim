@@ -23,7 +23,7 @@ fn is_none[T](o: Option[T]) -> bool {
 }
 
 // Extract the value, aborting if there is none.
-fn unwrap[T](o: Option[T]) -> T {
+fn unwrap[T](take o: Option[T]) -> T {
     return match o {
         Option.Some(v) => v,
         Option.None => panic_value[T]("Option.unwrap called on None"),
@@ -31,7 +31,7 @@ fn unwrap[T](o: Option[T]) -> T {
 }
 
 // Extract the value, or return `default` if there is none.
-fn unwrap_or[T](o: Option[T], default: T) -> T {
+fn unwrap_or[T](take o: Option[T], take default: T) -> T {
     return match o {
         Option.Some(v) => v,
         Option.None => default,

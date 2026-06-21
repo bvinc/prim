@@ -24,7 +24,7 @@ fn is_err[T, E](r: Result[T, E]) -> bool {
 }
 
 // Extract the success value, aborting if the result is an `Err`.
-fn unwrap[T, E](r: Result[T, E]) -> T {
+fn unwrap[T, E](take r: Result[T, E]) -> T {
     return match r {
         Result.Ok(v) => v,
         Result.Err(_) => panic_value[T]("Result.unwrap called on Err"),
@@ -32,7 +32,7 @@ fn unwrap[T, E](r: Result[T, E]) -> T {
 }
 
 // Extract the success value, or return `default` if it is an `Err`.
-fn unwrap_or[T, E](r: Result[T, E], default: T) -> T {
+fn unwrap_or[T, E](take r: Result[T, E], take default: T) -> T {
     return match r {
         Result.Ok(v) => v,
         Result.Err(_) => default,

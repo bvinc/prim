@@ -1,0 +1,11 @@
+import std.io.println
+
+struct S { x: i32, y: i32 }
+
+// Reading Copy fields borrows the struct; it isn't moved.
+fn main() {
+    let a = S { x = 40, y = 2 }
+    let sum = a.x + a.y
+    println(sum)
+    println(a.x)
+}

@@ -1,0 +1,9 @@
+import std.io.println
+
+// Scalars are Copy: binding from one doesn't move it, so it stays usable.
+fn main() {
+    let a = 5i32
+    let b = a
+    let c = a
+    println(a + b + c)
+}

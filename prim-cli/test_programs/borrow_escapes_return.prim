@@ -1,0 +1,10 @@
+struct S { n: i32 }
+
+fn leak(view s: S) -> S {
+    return s
+}
+
+fn main() {
+    let a = S { n = 1 }
+    let r = leak(view a)
+}

@@ -1,0 +1,14 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.string.from_vec
+
+// Moving an owned buffer out by value (rule 8 via `take`), mirroring
+// `to_string`'s `from_vec(take f.buf)`.
+fn main() {
+    let buf = new[u8]()
+    push(edit buf, take 72u8)
+    push(edit buf, take 73u8)
+    let s = from_vec(take buf)
+    println(s)
+}

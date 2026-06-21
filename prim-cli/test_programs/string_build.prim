@@ -8,10 +8,10 @@ fn main() {
     let bytes = new[u8]()
     let mut c = 65i32              // 'A'
     while c < 70i32 {             // through 'E'
-        push(bytes, u8.from_i32_wrapping(c))
+        push(edit bytes, take u8.from_i32_wrapping(c))
         c = c + 1
     }
-    let s = from_vec(bytes)
+    let s = from_vec(take bytes)
     println(s)                  // ABCDE
     println(s.len)          // 5
 }

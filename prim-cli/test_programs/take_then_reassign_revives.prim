@@ -1,0 +1,13 @@
+import std.io.println
+
+struct S { n: i32 }
+
+fn sink(take s: S) -> i32 { return s.n }
+
+// After a move, reassigning the binding makes it usable again.
+fn main() {
+    let mut a = S { n = 1 }
+    let x = sink(take a)
+    a = S { n = 42 }
+    println(a.n)
+}

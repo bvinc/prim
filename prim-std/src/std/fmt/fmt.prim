@@ -19,30 +19,30 @@ fn new_formatter() -> Formatter {
 }
 
 impl Formatter {
-    fn write_byte(self, b: u8) {
-        push[u8](self.buf, b)
+    fn write_byte(edit self, b: u8) {
+        push[u8](edit self.buf, take b)
     }
 
-    fn write_str(self, s: String) {
+    fn write_str(edit self, s: String) {
         let mut i = 0usize
         while i < s.len {
-            push[u8](self.buf, *byte_add[u8](s.data, i))
+            push[u8](edit self.buf, take *byte_add[u8](s.data, i))
             i = i + 1usize
         }
     }
 
     // Unsigned decimal. Digits are emitted most-significant first by recursing
     // before writing the low digit.
-    fn write_u64(self, x: u64) {
+    fn write_u64(edit self, x: u64) {
         if x >= 10u64 {
             self.write_u64(x / 10u64)
         }
-        push[u8](self.buf, u8.from_u64_wrapping(48u64 + x % 10u64))
+        push[u8](edit self.buf, take u8.from_u64_wrapping(48u64 + x % 10u64))
     }
 
     // Signed decimal. The magnitude is negated in u64 so the most-negative
     // value (whose positive doesn't fit in i64) still formats correctly.
-    fn write_i64(self, x: i64) {
+    fn write_i64(edit self, x: i64) {
         if x < 0i64 {
             self.write_byte(45u8)
             self.write_u64(0u64 - u64.from_i64_wrapping(x))
@@ -56,7 +56,7 @@ impl Formatter {
     // formatting. Digits cross the float/int boundary by truncation. A first
     // pass counts the fractional digits worth keeping (the buffer only grows,
     // so trailing zeros can't be un-written); the second pass emits them.
-    fn write_f64(self, x: f64) {
+    fn write_f64(edit self, x: f64) {
         let neg = x < 0.0f64
         let mut abs = x
         if neg {
@@ -90,7 +90,7 @@ impl Formatter {
         while i < keep {
             frac = frac * 10.0f64
             let digit = u64.from_f64_trunc(frac)
-            push[u8](self.buf, u8.from_u64_wrapping(48u64 + digit))
+            push[u8](edit self.buf, take u8.from_u64_wrapping(48u64 + digit))
             frac = frac - f64.from_u64(digit)
             i = i + 1usize
         }
@@ -99,47 +99,47 @@ impl Formatter {
 
 // A type that can be rendered as text by writing into a `Formatter`.
 trait Display {
-    fn fmt(self, f: Formatter);
+    fn fmt(view self, edit f: Formatter);
 }
 
 impl Display for u8 {
-    fn fmt(self, f: Formatter) { f.write_u64(u64.from_u8(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u8(self)) }
 }
 impl Display for u16 {
-    fn fmt(self, f: Formatter) { f.write_u64(u64.from_u16(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u16(self)) }
 }
 impl Display for u32 {
-    fn fmt(self, f: Formatter) { f.write_u64(u64.from_u32(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u32(self)) }
 }
 impl Display for u64 {
-    fn fmt(self, f: Formatter) { f.write_u64(self) }
+    fn fmt(view self, edit f: Formatter) { f.write_u64(self) }
 }
 impl Display for usize {
-    fn fmt(self, f: Formatter) { f.write_u64(u64.from_usize(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_usize(self)) }
 }
 impl Display for i8 {
-    fn fmt(self, f: Formatter) { f.write_i64(i64.from_i8(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i8(self)) }
 }
 impl Display for i16 {
-    fn fmt(self, f: Formatter) { f.write_i64(i64.from_i16(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i16(self)) }
 }
 impl Display for i32 {
-    fn fmt(self, f: Formatter) { f.write_i64(i64.from_i32(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i32(self)) }
 }
 impl Display for i64 {
-    fn fmt(self, f: Formatter) { f.write_i64(self) }
+    fn fmt(view self, edit f: Formatter) { f.write_i64(self) }
 }
 impl Display for isize {
-    fn fmt(self, f: Formatter) { f.write_i64(i64.from_isize(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_isize(self)) }
 }
 impl Display for f32 {
-    fn fmt(self, f: Formatter) { f.write_f64(f64.from_f32(self)) }
+    fn fmt(view self, edit f: Formatter) { f.write_f64(f64.from_f32(self)) }
 }
 impl Display for f64 {
-    fn fmt(self, f: Formatter) { f.write_f64(self) }
+    fn fmt(view self, edit f: Formatter) { f.write_f64(self) }
 }
 impl Display for bool {
-    fn fmt(self, f: Formatter) {
+    fn fmt(view self, edit f: Formatter) {
         if self {
             f.write_str("true")
         } else {
@@ -148,12 +148,12 @@ impl Display for bool {
     }
 }
 impl Display for String {
-    fn fmt(self, f: Formatter) { f.write_str(self) }
+    fn fmt(view self, edit f: Formatter) { f.write_str(self) }
 }
 
 // Render a value to a fresh `String`.
 fn to_string[T: Display](x: T) -> String {
     let f = new_formatter()
-    x.fmt(f)
-    return from_vec(f.buf)
+    x.fmt(edit f)
+    return from_vec(take f.buf)
 }

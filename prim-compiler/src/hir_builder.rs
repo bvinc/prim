@@ -808,6 +808,7 @@ impl<'a> LoweringContext<'a> {
                             Param {
                                 name: sym,
                                 ty: self.lower_type(&p.type_annotation, module_scope),
+                                mode: p.mode,
                                 span: self.span_id(p.name.span, file.file_id),
                             }
                         })
@@ -861,6 +862,7 @@ impl<'a> LoweringContext<'a> {
                                 .iter()
                                 .map(|p| self.lower_type(&p.type_annotation, module_scope))
                                 .collect();
+                            let param_modes = m.parameters.iter().map(|p| p.mode).collect();
                             let ret = m
                                 .return_type
                                 .as_ref()
@@ -868,6 +870,7 @@ impl<'a> LoweringContext<'a> {
                             hir::TraitMethodSig {
                                 name: m.name.sym,
                                 params,
+                                param_modes,
                                 ret,
                                 span: self.span_id(m.name.span, file.file_id),
                             }
@@ -950,6 +953,7 @@ impl<'a> LoweringContext<'a> {
                                 Param {
                                     name: sym,
                                     ty: self.lower_type(&p.type_annotation, module_scope),
+                                    mode: p.mode,
                                     span: self.span_id(p.name.span, file.file_id),
                                 }
                             })
@@ -1637,6 +1641,7 @@ impl<'a> LoweringContext<'a> {
             ExprKind::FunctionCall {
                 path,
                 args,
+                arg_modes,
                 type_args,
             } => {
                 if let Some(receiver) = self.lower_path_call_receiver(path, file_id) {
@@ -1649,6 +1654,7 @@ impl<'a> LoweringContext<'a> {
                                 .iter()
                                 .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
                                 .collect(),
+                            arg_modes: arg_modes.clone(),
                         },
                         ty: self.lower_type(&expr.ty, module_scope),
                         span,
@@ -1687,6 +1693,7 @@ impl<'a> LoweringContext<'a> {
                                     func: impl_fn.func,
                                     type_args: lowered_type_args,
                                     args: lowered_args,
+                                    arg_modes: arg_modes.clone(),
                                 },
                                 ty: self.lower_type(&expr.ty, module_scope),
                                 span,
@@ -1762,6 +1769,7 @@ impl<'a> LoweringContext<'a> {
                                     .iter()
                                     .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
                                     .collect(),
+                                arg_modes: arg_modes.clone(),
                             },
                             ty: self.lower_type(&expr.ty, module_scope),
                             span: self.span_id(call_span, file_id),
@@ -1910,6 +1918,7 @@ impl<'a> LoweringContext<'a> {
                 receiver,
                 method,
                 args,
+                arg_modes,
             } => (
                 hir::ExprKind::MethodCall {
                     receiver: Box::new(self.lower_expr(
@@ -1924,6 +1933,7 @@ impl<'a> LoweringContext<'a> {
                         .iter()
                         .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
                         .collect(),
+                    arg_modes: arg_modes.clone(),
                 },
                 self.lower_type(&expr.ty, module_scope),
             ),

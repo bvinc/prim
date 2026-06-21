@@ -1,0 +1,12 @@
+struct S { n: i32 }
+
+fn bump(edit s: S) { s.n = s.n + 1i32 }
+
+fn outer(view s: S) {
+    bump(edit s)
+}
+
+fn main() {
+    let a = S { n = 1 }
+    outer(view a)
+}

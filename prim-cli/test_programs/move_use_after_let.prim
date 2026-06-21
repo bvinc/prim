@@ -1,0 +1,7 @@
+struct S { n: i32 }
+
+fn main() {
+    let a = S { n = 1 }
+    let b = a
+    let c = a
+}

@@ -13,7 +13,7 @@
 //! recursion work because each mono_map entry is inserted *before* the
 //! cloned body / fields are processed.
 
-use super::{Block, EnumId, Expr, ExprKind, FuncId, Program, Stmt, StructId, Type};
+use super::{Block, EnumId, Expr, ExprKind, FuncId, PassMode, Program, Stmt, StructId, Type};
 use std::collections::HashMap;
 
 pub fn monomorphize(program: &mut Program) {
@@ -225,6 +225,7 @@ impl Mono<'_> {
                 func,
                 type_args,
                 args,
+                arg_modes: _,
             } => {
                 for a in args.iter_mut() {
                     self.rewrite_expr(a, subst);
@@ -281,10 +282,15 @@ impl Mono<'_> {
                 let mut new_args = Vec::with_capacity(args.len() + 1);
                 new_args.push(receiver_owned);
                 new_args.append(args);
+                // Modes are already checked and erased by this point; keep a
+                // parallel placeholder vec so the `arg_modes`/`args` length
+                // invariant holds for any later consumer.
+                let arg_modes = vec![PassMode::View; new_args.len()];
                 expr.kind = ExprKind::Call {
                     func: impl_fid,
                     type_args: Vec::new(),
                     args: new_args,
+                    arg_modes,
                 };
             }
         }

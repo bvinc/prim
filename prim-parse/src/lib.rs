@@ -88,6 +88,10 @@ pub enum ExprKind {
     FunctionCall {
         path: NamePath,
         args: Vec<Expr>,
+        /// Per-argument passing modes, parallel to `args` (same length). A
+        /// bare argument is `View`. Kept as a parallel vec so existing `args`
+        /// iteration sites are untouched.
+        arg_modes: Vec<PassMode>,
         /// Explicit type arguments from a turbofish call `f[T](args)`.
         /// Empty when omitted; the type checker infers them from value
         /// arguments in that case.
@@ -120,6 +124,10 @@ pub enum ExprKind {
         receiver: Box<Expr>,
         method: Ident,
         args: Vec<Expr>,
+        /// Per-argument passing modes for the non-receiver `args` (parallel,
+        /// same length). The receiver's mode comes from the resolved callee's
+        /// `self` parameter at typecheck time.
+        arg_modes: Vec<PassMode>,
     },
     Dereference(Box<Expr>),
     BitNot(Box<Expr>),
@@ -388,10 +396,31 @@ pub struct TypeParam {
     pub bound: Option<Ident>,
 }
 
+/// How a value crosses a call boundary. A *property of the parameter/binding*,
+/// not a type modifier: the value's type is unchanged in all three cases. Modes
+/// are checked then erased before monomorphization.
+///
+/// - `View` — shared read borrow; caller keeps ownership, callee reads only.
+/// - `Edit` — exclusive mutable borrow; caller keeps ownership, callee may
+///   mutate in place (visible to the caller via aliasing).
+/// - `Take` — ownership transfer (move); the caller loses access.
+///
+/// `View` is the default at both declaration and call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PassMode {
+    #[default]
+    View,
+    Edit,
+    Take,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: Ident,
     pub type_annotation: Type,
+    /// How this parameter is passed. The keyword precedes the parameter name
+    /// (`edit v: Vec[T]`); a bare parameter defaults to `View`.
+    pub mode: PassMode,
 }
 
 /// Parsed AST for a single source file.

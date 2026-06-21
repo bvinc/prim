@@ -1,0 +1,11 @@
+struct Inner { n: i32 }
+struct S { inner: Inner }
+
+fn steal(view s: S) -> Inner {
+    return s.inner
+}
+
+fn main() {
+    let a = S { inner = Inner { n = 1 } }
+    let r = steal(view a)
+}

@@ -152,6 +152,11 @@ pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
 struct Checker<'a> {
     program: &'a mut Program,
     func_sigs: HashMap<FuncId, (Vec<Type>, Option<Type>)>,
+    /// Per-function parameter passing modes, parallel to the signature's
+    /// params. Kept separately because `program.functions` is taken out of the
+    /// program while bodies are checked, so it can't be indexed during the
+    /// `MethodCall`→`Call` rewrite.
+    func_modes: HashMap<FuncId, Vec<crate::hir::PassMode>>,
     /// Type parameters of each generic function, indexed by callee
     /// `FuncId`. Non-generic functions are absent — `get()` returning
     /// `None` is the signal that no inference is needed at a call site.
@@ -195,6 +200,7 @@ impl<'a> Checker<'a> {
         Self {
             program,
             func_sigs: HashMap::new(),
+            func_modes: HashMap::new(),
             func_type_params: HashMap::new(),
             struct_type_params: HashMap::new(),
             struct_fields: HashMap::new(),
@@ -804,6 +810,8 @@ impl<'a> Checker<'a> {
             }
             let params = f.params.iter().map(|p| p.ty.clone()).collect();
             self.func_sigs.insert(f.id, (params, f.ret.clone()));
+            self.func_modes
+                .insert(f.id, f.params.iter().map(|p| p.mode).collect());
             if !f.type_params.is_empty() {
                 self.func_type_params.insert(f.id, f.type_params.clone());
             }
@@ -1292,6 +1300,7 @@ impl<'a> Checker<'a> {
                 receiver,
                 method,
                 args,
+                arg_modes,
             } => {
                 // Step 1: typecheck the receiver. Dispatch differs based on
                 // whether it's a concrete struct (direct call) or a trait
@@ -1338,12 +1347,14 @@ impl<'a> Checker<'a> {
                             },
                         );
                         let args_owned = std::mem::take(args);
+                        let arg_modes_owned = std::mem::take(arg_modes);
                         let trait_id = *tid;
                         *kind = ExprKind::DynCall {
                             receiver: Box::new(receiver_owned),
                             trait_id,
                             method_idx,
                             args: args_owned,
+                            arg_modes: arg_modes_owned,
                         };
                         // Typecheck args inside the DynCall against the
                         // trait method signature (skipping the receiver
@@ -1459,6 +1470,7 @@ impl<'a> Checker<'a> {
                             },
                         );
                         let args_owned = std::mem::take(args);
+                        let arg_modes_owned = std::mem::take(arg_modes);
                         let tp_id = *tp_id;
                         *kind = ExprKind::TraitBoundCall {
                             receiver: Box::new(receiver_owned),
@@ -1466,6 +1478,7 @@ impl<'a> Checker<'a> {
                             bound: bound_tid,
                             method: method_name,
                             args: args_owned,
+                            arg_modes: arg_modes_owned,
                         };
                         let ExprKind::TraitBoundCall { args, .. } = kind else {
                             unreachable!()
@@ -1555,12 +1568,25 @@ impl<'a> Checker<'a> {
                 let mut new_args = Vec::with_capacity(args.len() + 1);
                 new_args.push(receiver_owned);
                 new_args.append(args);
+                // The receiver's passing mode comes from the callee's `self`
+                // parameter; prepend it so `arg_modes` stays parallel to the
+                // rewritten `args` (index 0 = receiver) for the ownership pass.
+                let self_mode = self
+                    .func_modes
+                    .get(&func)
+                    .and_then(|m| m.first())
+                    .copied()
+                    .unwrap_or_default();
+                let mut new_arg_modes = Vec::with_capacity(arg_modes.len() + 1);
+                new_arg_modes.push(self_mode);
+                new_arg_modes.append(arg_modes);
                 // Step 4: rewrite in place to a Call. Impl methods are
                 // not yet generic, so type_args stays empty.
                 *kind = ExprKind::Call {
                     func,
                     type_args: Vec::new(),
                     args: new_args,
+                    arg_modes: new_arg_modes,
                 };
                 // Step 5: typecheck the rewritten call. The receiver's type
                 // is already known so check_expr on it is a no-op.
@@ -1611,6 +1637,7 @@ impl<'a> Checker<'a> {
                 func,
                 type_args,
                 args,
+                arg_modes: _,
             } => {
                 let (params, ret) = self
                     .func_sigs

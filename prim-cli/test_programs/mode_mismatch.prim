@@ -1,0 +1,8 @@
+struct S { n: i32 }
+
+fn need_take(take s: S) -> i32 { return s.n }
+
+fn main() {
+    let a = S { n = 1 }
+    let r = need_take(view a)
+}

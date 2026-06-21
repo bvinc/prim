@@ -1,0 +1,8 @@
+struct S { n: i32 }
+
+fn two(take x: S, take y: S) -> i32 { return x.n + y.n }
+
+fn main() {
+    let a = S { n = 1 }
+    let r = two(take a, take a)
+}

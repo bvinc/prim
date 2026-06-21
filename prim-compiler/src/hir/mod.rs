@@ -1,4 +1,4 @@
-pub use prim_parse::{BinaryOp, InternSymbol, Interner};
+pub use prim_parse::{BinaryOp, InternSymbol, Interner, PassMode};
 pub use prim_tok::{FileId, ModuleId, Span};
 use std::fmt;
 use std::sync::Arc;
@@ -8,6 +8,9 @@ pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
 
 pub mod mono;
 pub use mono::monomorphize;
+
+pub mod ownership;
+pub use ownership::{MoveError, MoveErrorKind, check as check_ownership};
 
 pub mod usefulness;
 
@@ -402,6 +405,9 @@ pub struct Trait {
 pub struct TraitMethodSig {
     pub name: InternSymbol,
     pub params: Vec<Type>,
+    /// Passing modes parallel to `params` (including the receiver at index 0),
+    /// so receiver/arg modes are known for dynamically/bound-dispatched calls.
+    pub param_modes: Vec<PassMode>,
     pub ret: Option<Type>,
     pub span: SpanId,
 }
@@ -431,6 +437,9 @@ pub enum GlobalInit {
 pub struct Param {
     pub name: SymbolId,
     pub ty: Type,
+    /// How the parameter is passed (`view`/`edit`/`take`). Checked by the
+    /// ownership pass, then ignored by mono/codegen.
+    pub mode: PassMode,
     pub span: SpanId,
 }
 
@@ -523,6 +532,9 @@ pub enum ExprKind {
         /// to dispatch the call to the right specialization.
         type_args: Vec<Type>,
         args: Vec<Expr>,
+        /// Passing modes parallel to `args` (after the MethodCall→Call rewrite,
+        /// index 0 is the receiver's mode). Consumed by the ownership pass.
+        arg_modes: Vec<PassMode>,
     },
     /// `spawn(f)` — create a green-thread task from a `fn() -> ()` and return
     /// its handle (a `usize` slot in the task table). Lowers to
@@ -564,6 +576,9 @@ pub enum ExprKind {
         receiver: Box<Expr>,
         method: InternSymbol,
         args: Vec<Expr>,
+        /// Passing modes for the non-receiver `args` (parallel). The receiver's
+        /// mode is resolved from the callee's `self` parameter at typecheck.
+        arg_modes: Vec<PassMode>,
     },
     /// Dynamic method dispatch through a trait fat pointer. Emitted by
     /// typecheck when the receiver type is `Type::Trait(tid)`. `method_idx`
@@ -574,6 +589,9 @@ pub enum ExprKind {
         trait_id: TraitId,
         method_idx: u32,
         args: Vec<Expr>,
+        /// Passing modes for the non-receiver `args` (parallel). The receiver's
+        /// mode comes from the trait method's `param_modes[0]`.
+        arg_modes: Vec<PassMode>,
     },
     /// A method call on a value whose type is `Type::Param(i)` with a
     /// declared bound. Resolved at monomorphization: after `T` is
@@ -585,6 +603,9 @@ pub enum ExprKind {
         bound: TraitId,
         method: InternSymbol,
         args: Vec<Expr>,
+        /// Passing modes for the non-receiver `args` (parallel). The receiver's
+        /// mode comes from the bound trait method's `param_modes[0]`.
+        arg_modes: Vec<PassMode>,
     },
     /// Box a concrete-typed value into a trait fat pointer. Emitted by
     /// typecheck when a `Type::Struct(sid)` value flows into a
