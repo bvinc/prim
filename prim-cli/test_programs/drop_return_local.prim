@@ -1,0 +1,19 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// Returning an owned local moves it out of the callee: it must NOT be dropped
+// in `make` (it would free the box the caller is about to use) — only the
+// receiving scope drops it, once.
+fn make() -> R {
+    let x = R { id = 5 }
+    return x
+}
+
+fn main() {
+    let r = make()
+    println(0i32)
+}

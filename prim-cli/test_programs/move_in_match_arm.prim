@@ -1,0 +1,15 @@
+struct S { n: i32 }
+
+fn sink(take s: S) -> i32 { return s.n }
+
+// Moved on one match arm only: after the match the value is moved on some
+// paths, so using it is a use-after-move (the CFG joins the arm successors).
+fn main() {
+    let a = S { n = 1 }
+    let k = 0i32
+    let r = match k {
+        0 => sink(take a),
+        _ => 0i32,
+    }
+    let b = a
+}

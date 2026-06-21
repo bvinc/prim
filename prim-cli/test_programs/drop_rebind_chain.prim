@@ -1,0 +1,15 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// A chain of moves: only the final owner `c` is live at scope exit, so the
+// value drops exactly once despite three bindings naming it.
+fn main() {
+    let a = R { id = 7 }
+    let b = a
+    let c = b
+    println(0i32)
+}

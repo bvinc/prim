@@ -19,14 +19,14 @@
 //! HIR walked in the same order, so the k-th `Stmt::Drop` in DFS order is the
 //! k-th drop action — the `DropId` is just that position.
 
-use super::cfg::{self, Action, BlockId, Cfg, DropDecision, DropId, Terminator};
+use super::cfg::{self, DropDecision, DropId};
 use super::ownership::{MoveError, MoveErrorKind};
 use super::{
     Block, DropInfo, Expr, ExprKind, Function, MatchArm, PassMode, Pattern, Program, SpanId, Stmt,
     SymbolId, Type,
 };
 use prim_tok::{FileId, Span};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub fn elaborate(program: &mut Program) -> Result<(), MoveError> {
     let fresh_base = program.symbols.len() as u32;
@@ -77,18 +77,11 @@ fn elaborate_function(
     };
     inserter.block(&mut func.body, false, &params);
 
-    // Phase 2: lower the augmented body to a CFG.
-    let mut builder = CfgBuilder {
-        cfg: Cfg::new(),
-        current: 0,
-        loop_exits: Vec::new(),
-        droppable: &droppable,
-        next_drop: 0,
-    };
-    builder.cfg.add_block(); // entry = block 0
-    builder.block(&func.body);
-    builder.cfg.block(builder.current).term = Terminator::Return;
-    let cfg = builder.cfg;
+    // Phase 2: lower the augmented body to the shared CFG, tracking the
+    // droppable locals. The builder is the single definition of "what is a
+    // move", shared with the ownership pass.
+    let tracked: HashSet<SymbolId> = droppable.keys().copied().collect();
+    let cfg = cfg::build(&func.body, &tracked);
 
     // Phase 3: decide each candidate.
     let decisions = cfg::analyze(&cfg);
@@ -324,227 +317,6 @@ impl Insert<'_> {
     }
 }
 
-// === Phase 2: lower the augmented HIR to a CFG ===
-
-struct CfgBuilder<'a> {
-    cfg: Cfg,
-    current: BlockId,
-    /// Exit block of each enclosing loop (innermost last) — a `break` target.
-    loop_exits: Vec<BlockId>,
-    droppable: &'a HashMap<SymbolId, SpanId>,
-    next_drop: DropId,
-}
-
-impl CfgBuilder<'_> {
-    fn act(&mut self, action: Action) {
-        self.cfg.block(self.current).actions.push(action);
-    }
-
-    fn block(&mut self, block: &Block) {
-        for stmt in &block.stmts {
-            self.stmt(stmt);
-        }
-    }
-
-    fn stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                self.read(value);
-                let mut binds = Vec::new();
-                pattern_bindings(pattern, &mut binds);
-                for (sym, _) in binds {
-                    if self.droppable.contains_key(&sym) {
-                        self.act(Action::Init(sym));
-                    }
-                }
-            }
-            Stmt::Assign { target, value, .. } => {
-                self.read(value);
-                if self.droppable.contains_key(target) {
-                    self.act(Action::Init(*target));
-                }
-            }
-            Stmt::DerefAssign { ptr, value, .. } => {
-                self.read(ptr);
-                self.read(value);
-            }
-            Stmt::FieldAssign { object, value, .. } => {
-                self.read(object);
-                self.read(value);
-            }
-            Stmt::Expr(e) => self.read(e),
-            Stmt::Loop { body, .. } => {
-                let header = self.cfg.add_block();
-                let exit = self.cfg.add_block();
-                self.goto(header);
-                self.loop_exits.push(exit);
-                self.current = header;
-                self.block(body);
-                self.goto(header); // back-edge
-                self.loop_exits.pop();
-                self.current = exit;
-            }
-            Stmt::While {
-                condition, body, ..
-            } => {
-                let header = self.cfg.add_block();
-                let body_b = self.cfg.add_block();
-                let exit = self.cfg.add_block();
-                self.goto(header);
-                self.current = header;
-                self.read(condition);
-                self.cfg.block(header).term = Terminator::Switch(vec![body_b, exit]);
-                self.loop_exits.push(exit);
-                self.current = body_b;
-                self.block(body);
-                self.goto(header); // back-edge
-                self.loop_exits.pop();
-                self.current = exit;
-            }
-            Stmt::Break { .. } => {
-                let target = *self.loop_exits.last().expect("break outside loop");
-                self.cfg.block(self.current).term = Terminator::Goto(target);
-                self.current = self.cfg.add_block(); // dead code after break
-            }
-            Stmt::Return { value, .. } => {
-                if let Some(v) = value {
-                    self.read(v);
-                }
-                self.cfg.block(self.current).term = Terminator::Return;
-                self.current = self.cfg.add_block(); // dead code after return
-            }
-            Stmt::Drop { sym, .. } => {
-                let id = self.next_drop;
-                self.next_drop += 1;
-                self.act(Action::Drop { id, local: *sym });
-            }
-        }
-    }
-
-    /// Set the current block's terminator to `Goto(target)` (unless it already
-    /// diverged via an inner return/break).
-    fn goto(&mut self, target: BlockId) {
-        if matches!(self.cfg.block(self.current).term, Terminator::Unreachable) {
-            self.cfg.block(self.current).term = Terminator::Goto(target);
-        }
-    }
-
-    /// An expression in move position: a droppable place is moved out.
-    fn moved(&mut self, expr: &Expr) {
-        if !is_copy(&expr.ty) {
-            if let Some(root) = root_symbol(expr) {
-                if self.droppable.contains_key(&root) {
-                    self.act(Action::Move(root));
-                }
-                return;
-            }
-        }
-        self.read(expr);
-    }
-
-    /// An expression in read/borrow position: recurse, emitting moves from its
-    /// move-position children and splitting the CFG at `match`/`if`.
-    fn read(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Match { scrutinee, arms } => {
-                // A matched non-`Copy` scrutinee is consumed.
-                self.moved(scrutinee);
-                let join = self.cfg.add_block();
-                let mut arm_blocks = Vec::with_capacity(arms.len());
-                for _ in arms {
-                    arm_blocks.push(self.cfg.add_block());
-                }
-                self.cfg.block(self.current).term = Terminator::Switch(arm_blocks.clone());
-                for (arm, &b) in arms.iter().zip(&arm_blocks) {
-                    self.current = b;
-                    self.read(&arm.body);
-                    self.goto(join);
-                }
-                self.current = join;
-            }
-            ExprKind::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.read(condition);
-                let then_b = self.cfg.add_block();
-                let else_b = self.cfg.add_block();
-                let join = self.cfg.add_block();
-                self.cfg.block(self.current).term = Terminator::Switch(vec![then_b, else_b]);
-                self.current = then_b;
-                self.block(then_branch);
-                self.goto(join);
-                self.current = else_b;
-                if let Some(b) = else_branch {
-                    self.block(b);
-                }
-                self.goto(join);
-                self.current = join;
-            }
-            ExprKind::Block(b) => self.block(b),
-            ExprKind::Binary { left, right, .. } => {
-                self.read(left);
-                self.read(right);
-            }
-            ExprKind::Call {
-                args, arg_modes, ..
-            } => {
-                for (i, a) in args.iter().enumerate() {
-                    if matches!(arg_modes.get(i), Some(PassMode::Take)) {
-                        self.moved(a);
-                    } else {
-                        self.read(a);
-                    }
-                }
-            }
-            ExprKind::DynCall {
-                receiver,
-                args,
-                arg_modes,
-                ..
-            } => {
-                self.read(receiver);
-                for (i, a) in args.iter().enumerate() {
-                    if matches!(arg_modes.get(i), Some(PassMode::Take)) {
-                        self.moved(a);
-                    } else {
-                        self.read(a);
-                    }
-                }
-            }
-            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
-                for (_, v) in fields {
-                    self.moved(v);
-                }
-            }
-            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
-                for e in elems {
-                    self.moved(e);
-                }
-            }
-            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.read(base),
-            ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.read(e),
-            ExprKind::Coerce { value, .. } => self.read(value),
-            ExprKind::Dbg { inner, .. } => self.read(inner),
-            ExprKind::MethodCall { receiver, args, .. }
-            | ExprKind::TraitBoundCall { receiver, args, .. } => {
-                self.read(receiver);
-                for a in args {
-                    self.read(a);
-                }
-            }
-            ExprKind::Int(_)
-            | ExprKind::Float(_)
-            | ExprKind::Bool(_)
-            | ExprKind::Str(_)
-            | ExprKind::Ident(_)
-            | ExprKind::Spawn { .. }
-            | ExprKind::Error => {}
-        }
-    }
-}
-
 // === Phase 4: apply the decisions ===
 
 struct Filter<'a> {
@@ -769,39 +541,4 @@ fn pattern_binding_spans(pattern: &Pattern, out: &mut Vec<(SymbolId, Type, SpanI
         | Pattern::Bool { .. }
         | Pattern::Variant { .. } => {}
     }
-}
-
-/// The local a place expression is rooted at (`x`, `x.f`, `x.0`, `*x`).
-fn root_symbol(expr: &Expr) -> Option<SymbolId> {
-    match &expr.kind {
-        ExprKind::Ident(sym) => Some(*sym),
-        ExprKind::Field { base, .. }
-        | ExprKind::TupleIndex { base, .. }
-        | ExprKind::Deref(base) => root_symbol(base),
-        _ => None,
-    }
-}
-
-/// Scalars and raw pointers are `Copy`; aggregates are not.
-fn is_copy(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::U8
-            | Type::I8
-            | Type::U16
-            | Type::I16
-            | Type::U32
-            | Type::I32
-            | Type::U64
-            | Type::I64
-            | Type::Usize
-            | Type::Isize
-            | Type::F32
-            | Type::F64
-            | Type::Bool
-            | Type::Pointer { .. }
-            | Type::IntVar
-            | Type::FloatVar
-            | Type::Undetermined
-    )
 }

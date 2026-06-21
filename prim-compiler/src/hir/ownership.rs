@@ -5,27 +5,22 @@
 //! is `args[0]` of a rewritten `Call`) and generic bodies are checked once with
 //! `Type::Param` treated as a non-`Copy` (owned) type.
 //!
-//! The discipline, with no lifetimes (borrows are call-scoped and cannot
-//! escape):
+//! The pass is split in two, sharing one notion of "what is a move" with drop
+//! elaboration via [`cfg::build`]:
 //!
-//! - **Move semantics** for non-`Copy` aggregates. A value is *moved* when it is
-//!   bound (`let b = a`), assigned, returned, stored into an aggregate literal,
-//!   passed as a `take` argument, or matched-with-payload-extraction. After a
-//!   move the source is dead; using it again is an error (rule 1).
-//! - **Borrows can't escape** (rule 6): a `view`/`edit` parameter may not be
-//!   moved out of the function.
-//! - **`edit` exclusivity** (rule 5): the same place may not be `edit`-borrowed
-//!   twice (nor `edit` together with another mode) in one call.
-//! - **Mode match** (rule 7): a non-`Copy` argument's call-site mode must equal
-//!   the callee parameter's declared mode. `Copy` params accept any mode.
-//! - **`edit` of a `view` parameter** (rule 4): you may not `edit`-borrow a
-//!   value reachable only through a shared (`view`) parameter.
+//!  - **Move dataflow** (`check_moves`): lower the body to a CFG and run a
+//!    forward may-moved dataflow. A `Use`/`Move` of a may-moved local is a
+//!    use-after-move; running the dataflow with and without loop back-edges
+//!    tells a loop-carried move (`MoveInLoop`) from a straight-line one
+//!    (`UseAfterMove`). Moving a `view`/`edit` parameter is a borrow escape.
+//!  - **Borrow rules** (`check_borrows`): a syntactic walk over call sites for
+//!    the per-call rules that don't depend on control flow — `edit` exclusivity,
+//!    call-site/declaration mode match, and `edit`-of-a-`view`-parameter.
 //!
 //! Modes are erased after this pass; mono/codegen ignore them.
 
-use super::{
-    Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId, Type,
-};
+use super::cfg::{self, Action, is_copy, root_symbol};
+use super::{Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId};
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -78,65 +73,15 @@ impl std::fmt::Display for MoveError {
 
 impl std::error::Error for MoveError {}
 
-/// Whether a value of this type is `Copy` (passed by value, ignores modes,
-/// never tracked for moves). Scalars and raw pointers are `Copy`; aggregates
-/// and type parameters (conservatively) are not.
-fn is_copy(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::U8
-            | Type::I8
-            | Type::U16
-            | Type::I16
-            | Type::U32
-            | Type::I32
-            | Type::U64
-            | Type::I64
-            | Type::Usize
-            | Type::Isize
-            | Type::F32
-            | Type::F64
-            | Type::Bool
-            | Type::Pointer { .. }
-            | Type::IntVar
-            | Type::FloatVar
-            | Type::Undetermined
-    )
-}
-
-#[derive(Clone, Copy)]
-enum LocalState {
-    Live,
-    Moved(SpanId),
-}
-
-/// Per-function move-checking state. `borrow_params`/`view_params` are fixed for
-/// the function; `env` flows through the walk.
-struct Checker<'a> {
-    program: &'a Program,
-    errors: Vec<MoveError>,
-    env: HashMap<SymbolId, LocalState>,
-    /// `view`/`edit` parameters — moving any of these escapes the borrow.
-    borrow_params: HashSet<SymbolId>,
-    /// `view` parameters specifically — may not be `edit`-borrowed (rule 4).
-    view_params: HashSet<SymbolId>,
-    /// When re-walking a loop body, the symbols moved by the first iteration;
-    /// a use/move of one of these is reported as `MoveInLoop`.
-    loop_moved: HashSet<SymbolId>,
-}
-
 pub fn check(program: &Program) -> Result<(), MoveError> {
     let mut errors = Vec::new();
     for func in &program.functions {
         let mut checker = Checker {
             program,
             errors: Vec::new(),
-            env: HashMap::new(),
-            borrow_params: HashSet::new(),
-            view_params: HashSet::new(),
-            loop_moved: HashSet::new(),
         };
-        checker.check_function(func);
+        checker.check_moves(func);
+        checker.check_borrows(func);
         errors.append(&mut checker.errors);
     }
     // Report deterministically: earliest span first.
@@ -147,177 +92,175 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
     }
 }
 
-impl<'a> Checker<'a> {
-    fn check_function(&mut self, func: &super::Function) {
-        for p in &func.params {
-            if is_copy(&p.ty) {
-                continue;
-            }
-            self.env.insert(p.name, LocalState::Live);
-            match p.mode {
-                PassMode::View => {
-                    self.borrow_params.insert(p.name);
-                    self.view_params.insert(p.name);
-                }
-                PassMode::Edit => {
-                    self.borrow_params.insert(p.name);
-                }
-                // `take` params are owned and may be moved freely.
-                PassMode::Take => {}
-            }
-        }
-        self.walk_block(&func.body);
+struct Checker<'a> {
+    program: &'a Program,
+    errors: Vec<MoveError>,
+}
+
+impl Checker<'_> {
+    fn emit(&mut self, span_id: SpanId, kind: MoveErrorKind) {
+        let (file, span) = self
+            .program
+            .spans
+            .get(span_id.0 as usize)
+            .copied()
+            .expect("missing span");
+        self.errors.push(MoveError { file, span, kind });
     }
 
-    fn span_of(&self, span_id: SpanId) -> (FileId, Span) {
+    fn span(&self, span_id: SpanId) -> Span {
         self.program
             .spans
             .get(span_id.0 as usize)
             .copied()
             .expect("missing span")
+            .1
     }
 
-    fn emit(&mut self, span_id: SpanId, kind: MoveErrorKind) {
-        let (file, span) = self.span_of(span_id);
-        self.errors.push(MoveError { file, span, kind });
-    }
+    // ---- move dataflow ------------------------------------------------------
 
-    // ---- walking ------------------------------------------------------------
-
-    /// Walk a block, returning whether it always diverges (returns/breaks).
-    /// Inner `let` bindings persist in `env` (shadowing is by fresh `SymbolId`).
-    fn walk_block(&mut self, block: &Block) -> bool {
-        for stmt in &block.stmts {
-            if self.walk_stmt(stmt) {
-                return true;
+    /// Use-after-move, move-in-loop, and borrow-escape via a forward may-moved
+    /// dataflow over the shared CFG.
+    fn check_moves(&mut self, func: &super::Function) {
+        // Track every non-`Copy` local: parameters plus all `let`/`match`
+        // bindings. `take` params are owned (movable); `view`/`edit` params are
+        // borrows that may not be moved out.
+        let mut tracked: HashSet<SymbolId> = HashSet::new();
+        let mut borrow_params: HashSet<SymbolId> = HashSet::new();
+        for p in &func.params {
+            if is_copy(&p.ty) {
+                continue;
             }
+            tracked.insert(p.name);
+            if matches!(p.mode, PassMode::View | PassMode::Edit) {
+                borrow_params.insert(p.name);
+            }
+        }
+        collect_tracked(&func.body, &mut tracked);
+
+        let cfg = cfg::build(&func.body, &tracked);
+        let fwd = cfg::may_in_sets(&cfg, false);
+        let full = cfg::may_in_sets(&cfg, true);
+
+        // Replay each block from its entry state, classifying each use/move.
+        // `moved_fwd` ignores back-edges (straight-line, within one iteration);
+        // `moved_full` includes them. A local moved only via `moved_full` is
+        // loop-carried → `MoveInLoop`; via `moved_fwd` → `UseAfterMove`.
+        for b in 0..cfg.blocks.len() {
+            let mut moved_fwd: HashMap<SymbolId, SpanId> =
+                fwd[b].iter().map(|s| (*s, SpanId(0))).collect();
+            let mut moved_full: HashMap<SymbolId, SpanId> =
+                full[b].iter().map(|s| (*s, SpanId(0))).collect();
+            for action in &cfg.blocks[b].actions {
+                match *action {
+                    Action::Init(l) => {
+                        moved_fwd.remove(&l);
+                        moved_full.remove(&l);
+                    }
+                    Action::Use { local, span } => {
+                        self.check_moved(local, span, &moved_fwd, &moved_full);
+                    }
+                    Action::Move {
+                        local,
+                        span,
+                        partial,
+                    } => {
+                        if borrow_params.contains(&local) {
+                            // Moving a borrow out of the function: a whole-value
+                            // move escapes; a field move is "out of a borrow".
+                            let kind = if partial {
+                                MoveErrorKind::MoveOutOfBorrow
+                            } else {
+                                MoveErrorKind::BorrowEscapes
+                            };
+                            self.emit(span, kind);
+                            continue; // borrow not consumed; don't mark moved
+                        }
+                        self.check_moved(local, span, &moved_fwd, &moved_full);
+                        moved_fwd.insert(local, span);
+                        moved_full.insert(local, span);
+                    }
+                    Action::Drop { .. } => {} // no Drop actions before this pass
+                }
+            }
+        }
+    }
+
+    /// Emit a use-after-move / move-in-loop error if `local` is already moved.
+    fn check_moved(
+        &mut self,
+        local: SymbolId,
+        span: SpanId,
+        moved_fwd: &HashMap<SymbolId, SpanId>,
+        moved_full: &HashMap<SymbolId, SpanId>,
+    ) {
+        if let Some(&moved_at) = moved_fwd.get(&local) {
+            let moved_at = self.span(moved_at);
+            self.emit(span, MoveErrorKind::UseAfterMove { moved_at });
+        } else if moved_full.contains_key(&local) {
+            self.emit(span, MoveErrorKind::MoveInLoop);
+        }
+    }
+
+    // ---- syntactic borrow rules over call sites -----------------------------
+
+    /// `view`-parameter set for the current function (for `edit`-of-`view`).
+    fn check_borrows(&mut self, func: &super::Function) {
+        let view_params: HashSet<SymbolId> = func
+            .params
+            .iter()
+            .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::View))
+            .map(|p| p.name)
+            .collect();
+        self.walk_block(&func.body, &view_params);
+    }
+
+    fn walk_block(&mut self, block: &Block, view_params: &HashSet<SymbolId>) {
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt, view_params);
         }
         if let Some(e) = &block.expr {
-            return self.eval(e);
+            self.walk_expr(e, view_params);
         }
-        false
     }
 
-    fn walk_stmt(&mut self, stmt: &Stmt) -> bool {
+    fn walk_stmt(&mut self, stmt: &Stmt, view_params: &HashSet<SymbolId>) {
         match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                if self.eval_moved(value) {
-                    return true;
-                }
-                self.bind_pattern(pattern);
-                false
-            }
-            Stmt::Assign { target, value, .. } => {
-                if self.eval_moved(value) {
-                    return true;
-                }
-                // Reassignment revives the binding (if tracked).
-                if self.env.contains_key(target) {
-                    self.env.insert(*target, LocalState::Live);
-                }
-                false
+            Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+                self.walk_expr(value, view_params)
             }
             Stmt::DerefAssign { ptr, value, .. } => {
-                if self.eval(ptr) {
-                    return true;
-                }
-                self.eval_moved(value)
+                self.walk_expr(ptr, view_params);
+                self.walk_expr(value, view_params);
             }
             Stmt::FieldAssign { object, value, .. } => {
-                // Writing a field reads the base (it must be live) and moves the
-                // new value into the field.
-                if self.eval(object) {
-                    return true;
-                }
-                self.eval_moved(value)
+                self.walk_expr(object, view_params);
+                self.walk_expr(value, view_params);
             }
-            Stmt::Expr(e) => self.eval(e),
-            Stmt::Loop { body, .. } => {
-                self.walk_loop_body(body);
-                false
-            }
+            Stmt::Expr(e) => self.walk_expr(e, view_params),
+            Stmt::Loop { body, .. } => self.walk_block(body, view_params),
             Stmt::While {
                 condition, body, ..
             } => {
-                self.eval(condition);
-                self.walk_loop_body(body);
-                false
+                self.walk_expr(condition, view_params);
+                self.walk_block(body, view_params);
             }
-            Stmt::Break { .. } => true,
-            Stmt::Return { value, .. } => {
-                if let Some(v) = value {
-                    self.eval_moved(v);
-                }
-                true
-            }
-            // Drop elaboration runs after this pass; no Drop statements exist.
-            Stmt::Drop { .. } => false,
+            Stmt::Return { value: Some(v), .. } => self.walk_expr(v, view_params),
+            Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
         }
     }
 
-    /// Rule 3: walk a loop body, then flag any outer symbol it moves — on the
-    /// next iteration that symbol would already be dead.
-    fn walk_loop_body(&mut self, body: &Block) {
-        let before: HashMap<SymbolId, bool> = self
-            .env
-            .iter()
-            .map(|(k, v)| (*k, matches!(v, LocalState::Live)))
-            .collect();
-        self.walk_block(body);
-        let mut looped = HashSet::new();
-        for (sym, was_live) in &before {
-            if *was_live {
-                if let Some(LocalState::Moved(span_id)) = self.env.get(sym).copied() {
-                    looped.insert(*sym);
-                    self.emit(span_id, MoveErrorKind::MoveInLoop);
-                }
-            }
-        }
-        self.loop_moved.extend(looped);
-    }
-
-    /// Evaluate `expr` in read/borrow context, returning whether it diverges.
-    fn eval(&mut self, expr: &Expr) -> bool {
+    fn walk_expr(&mut self, expr: &Expr, view_params: &HashSet<SymbolId>) {
         match &expr.kind {
-            ExprKind::Int(_)
-            | ExprKind::Float(_)
-            | ExprKind::Bool(_)
-            | ExprKind::Str(_)
-            | ExprKind::Spawn { .. }
-            | ExprKind::Error => false,
-            ExprKind::Ident(sym) => {
-                self.check_live(*sym, expr.span);
-                false
-            }
-            ExprKind::Binary { left, right, .. } => self.eval(left) || self.eval(right),
-            ExprKind::BitNot(e) | ExprKind::Neg(e) | ExprKind::Deref(e) => self.eval(e),
-            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.eval(base),
-            ExprKind::Dbg { inner, .. } => self.eval(inner),
-            // Coercing a struct into a trait fat pointer references the struct's
-            // data rather than copying it, so it is a borrow, not a move.
-            ExprKind::Coerce { value, .. } => self.eval(value),
-            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
-                for e in elems {
-                    if self.eval_moved(e) {
-                        return true;
-                    }
-                }
-                false
-            }
-            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
-                for (_, v) in fields {
-                    if self.eval_moved(v) {
-                        return true;
-                    }
-                }
-                false
-            }
             ExprKind::Call {
                 func,
                 args,
                 arg_modes,
                 ..
-            } => self.eval_call(*func, args, arg_modes),
+            } => {
+                let param_modes = self.func_param_modes(*func);
+                self.check_call_args(args, arg_modes, &param_modes, view_params);
+            }
             ExprKind::DynCall {
                 receiver,
                 trait_id,
@@ -332,7 +275,10 @@ impl<'a> Checker<'a> {
                     .and_then(|t| t.methods.get(*method_idx as usize))
                     .map(|m| m.param_modes.clone())
                     .unwrap_or_default();
-                self.eval_dispatch(receiver, args, arg_modes, &modes)
+                self.walk_expr(receiver, view_params);
+                let param_modes: Vec<(PassMode, bool)> =
+                    modes.iter().skip(1).map(|m| (*m, false)).collect();
+                self.check_call_args(args, arg_modes, &param_modes, view_params);
             }
             ExprKind::TraitBoundCall {
                 receiver,
@@ -353,104 +299,84 @@ impl<'a> Checker<'a> {
                     })
                     .map(|m| m.param_modes.clone())
                     .unwrap_or_default();
-                self.eval_dispatch(receiver, args, arg_modes, &modes)
+                self.walk_expr(receiver, view_params);
+                let param_modes: Vec<(PassMode, bool)> =
+                    modes.iter().skip(1).map(|m| (*m, false)).collect();
+                self.check_call_args(args, arg_modes, &param_modes, view_params);
             }
-            // Typecheck rewrites every `MethodCall` to `Call`/`DynCall`/
-            // `TraitBoundCall` before this pass runs; handle it defensively as a
-            // plain read of receiver + args so the match stays exhaustive.
+            ExprKind::Binary { left, right, .. } => {
+                self.walk_expr(left, view_params);
+                self.walk_expr(right, view_params);
+            }
+            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
+                for (_, v) in fields {
+                    self.walk_expr(v, view_params);
+                }
+            }
+            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+                for e in elems {
+                    self.walk_expr(e, view_params);
+                }
+            }
+            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
+                self.walk_expr(base, view_params)
+            }
+            ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => {
+                self.walk_expr(e, view_params)
+            }
+            ExprKind::Coerce { value, .. } => self.walk_expr(value, view_params),
+            ExprKind::Dbg { inner, .. } => self.walk_expr(inner, view_params),
             ExprKind::MethodCall { receiver, args, .. } => {
-                if self.eval(receiver) {
-                    return true;
-                }
+                self.walk_expr(receiver, view_params);
                 for a in args {
-                    if self.eval(a) {
-                        return true;
-                    }
+                    self.walk_expr(a, view_params);
                 }
-                false
             }
-            ExprKind::Match { scrutinee, arms } => self.eval_match(scrutinee, arms),
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee, view_params);
+                for arm in arms {
+                    self.walk_expr(&arm.body, view_params);
+                }
+            }
             ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                if self.eval(condition) {
-                    return true;
+                self.walk_expr(condition, view_params);
+                self.walk_block(then_branch, view_params);
+                if let Some(b) = else_branch {
+                    self.walk_block(b, view_params);
                 }
-                let base = self.env.clone();
-                let then_div = self.walk_block(then_branch);
-                let then_env = std::mem::replace(&mut self.env, base.clone());
-                let else_div = match else_branch {
-                    Some(b) => self.walk_block(b),
-                    None => false,
-                };
-                let else_env = std::mem::replace(&mut self.env, base);
-                self.env = join_envs(&then_env, &else_env, then_div, else_div);
-                then_div && else_div
             }
-            ExprKind::Block(b) => self.walk_block(b),
+            ExprKind::Block(b) => self.walk_block(b, view_params),
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Ident(_)
+            | ExprKind::Spawn { .. }
+            | ExprKind::Error => {}
         }
     }
 
-    /// Evaluate `expr` where its value is consumed (moved) by the context.
-    /// Differs from `eval` only for non-`Copy` place expressions.
-    fn eval_moved(&mut self, expr: &Expr) -> bool {
-        if is_copy(&expr.ty) {
-            return self.eval(expr);
-        }
-        match &expr.kind {
-            ExprKind::Ident(sym) => {
-                self.move_symbol(*sym, expr.span);
-                false
-            }
-            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
-                self.move_place(expr, base);
-                false
-            }
-            // Any other shape produces a fresh temporary; moving it is a no-op
-            // on the environment, but its subexpressions still need walking.
-            _ => self.eval(expr),
-        }
-    }
-
-    fn eval_call(&mut self, func: FuncId, args: &[Expr], arg_modes: &[PassMode]) -> bool {
-        let param_modes: Vec<(PassMode, bool)> = self
-            .program
+    fn func_param_modes(&self, func: FuncId) -> Vec<(PassMode, bool)> {
+        self.program
             .functions
             .get(func.0 as usize)
             .map(|f| f.params.iter().map(|p| (p.mode, is_copy(&p.ty))).collect())
-            .unwrap_or_default();
-        self.check_call_args(args, arg_modes, &param_modes)
+            .unwrap_or_default()
     }
 
-    /// A dynamically/bound-dispatched call: the receiver is separate, and
-    /// `trait_modes` is the trait method signature's modes (receiver at 0).
-    fn eval_dispatch(
-        &mut self,
-        receiver: &Expr,
-        args: &[Expr],
-        arg_modes: &[PassMode],
-        trait_modes: &[PassMode],
-    ) -> bool {
-        let recv_mode = trait_modes.first().copied().unwrap_or(PassMode::View);
-        if self.move_arg(receiver, recv_mode) {
-            return true;
-        }
-        // Non-receiver params are `trait_modes[1..]`.
-        let param_modes: Vec<(PassMode, bool)> =
-            trait_modes.iter().skip(1).map(|m| (*m, false)).collect();
-        self.check_call_args(args, arg_modes, &param_modes)
-    }
-
-    /// Shared argument-list checking: rules 4, 5, 7, plus the per-argument move
-    /// (for `take`) or read (for `view`/`edit`).
+    /// Rules 4, 5, 7: `edit` exclusivity, mode/declaration match, and
+    /// `edit`-of-a-`view`-parameter. Also recurses into the argument expressions.
     fn check_call_args(
         &mut self,
         args: &[Expr],
         arg_modes: &[PassMode],
         param_modes: &[(PassMode, bool)],
-    ) -> bool {
+        view_params: &HashSet<SymbolId>,
+    ) {
         // Rule 5: the same root place may not be `edit`-borrowed twice, nor
         // `edit` together with any other mode.
         let mut seen: HashMap<SymbolId, PassMode> = HashMap::new();
@@ -472,195 +398,136 @@ impl<'a> Checker<'a> {
             // Rule 4: `edit`-borrowing through a `view` parameter is illegal.
             if mode == PassMode::Edit {
                 if let Some(root) = root_symbol(arg) {
-                    if self.view_params.contains(&root) {
+                    if view_params.contains(&root) {
                         self.emit(arg.span, MoveErrorKind::EditOfView);
                     }
                 }
             }
-            if self.move_arg(arg, mode) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Walk a single argument: `take` moves it, `view`/`edit` read-borrow it.
-    fn move_arg(&mut self, arg: &Expr, mode: PassMode) -> bool {
-        match mode {
-            PassMode::Take => self.eval_moved(arg),
-            PassMode::View | PassMode::Edit => self.eval(arg),
+            self.walk_expr(arg, view_params);
         }
     }
-
-    fn eval_match(&mut self, scrutinee: &Expr, arms: &[super::MatchArm]) -> bool {
-        // A match consumes its scrutinee only when an arm binds a non-`Copy`
-        // payload out of it; a discriminant-only match (`_`/`Copy` bindings) is
-        // a read-borrow, so `view` values can still be matched.
-        let consumes = arms.iter().any(|a| pattern_binds_noncopy(&a.pattern));
-        if consumes {
-            if self.eval_moved(scrutinee) {
-                return true;
-            }
-        } else if self.eval(scrutinee) {
-            return true;
-        }
-
-        let base = self.env.clone();
-        let mut arm_envs: Vec<(HashMap<SymbolId, LocalState>, bool)> = Vec::new();
-        for arm in arms {
-            self.env = base.clone();
-            self.bind_pattern(&arm.pattern);
-            let div = self.eval(&arm.body);
-            arm_envs.push((std::mem::take(&mut self.env), div));
-        }
-        // Join all non-diverging arms; if every arm diverges, so does the match.
-        let all_diverge = !arm_envs.is_empty() && arm_envs.iter().all(|(_, d)| *d);
-        let mut result = base;
-        let mut first = true;
-        for (env, div) in &arm_envs {
-            if *div {
-                continue;
-            }
-            if first {
-                result = env.clone();
-                first = false;
-            } else {
-                result = join_envs(env, &result, false, false);
-            }
-        }
-        self.env = result;
-        all_diverge
-    }
-
-    // ---- moves & reads ------------------------------------------------------
-
-    fn check_live(&mut self, sym: SymbolId, span_id: SpanId) {
-        if let Some(LocalState::Moved(moved_id)) = self.env.get(&sym).copied() {
-            self.emit_use_after_move(sym, span_id, moved_id);
-        }
-    }
-
-    fn emit_use_after_move(&mut self, sym: SymbolId, span_id: SpanId, moved_id: SpanId) {
-        let kind = if self.loop_moved.contains(&sym) {
-            MoveErrorKind::MoveInLoop
-        } else {
-            let (_, moved_at) = self.span_of(moved_id);
-            MoveErrorKind::UseAfterMove { moved_at }
-        };
-        self.emit(span_id, kind);
-    }
-
-    fn move_symbol(&mut self, sym: SymbolId, span_id: SpanId) {
-        if self.borrow_params.contains(&sym) {
-            self.emit(span_id, MoveErrorKind::BorrowEscapes);
-            return;
-        }
-        match self.env.get(&sym).copied() {
-            Some(LocalState::Moved(moved_id)) => {
-                self.emit_use_after_move(sym, span_id, moved_id);
-            }
-            Some(LocalState::Live) => {
-                self.env.insert(sym, LocalState::Moved(span_id));
-            }
-            None => {} // untracked (Copy / global) — nothing to do
-        }
-    }
-
-    /// Rule 8: move a non-`Copy` field/payload out of `place` (whose base chain
-    /// is `base`). Allowed only from a fully owned, live local — it consumes the
-    /// whole base. Moving out of a borrow is rejected.
-    fn move_place(&mut self, place: &Expr, base: &Expr) {
-        match root_symbol(place) {
-            Some(root) if self.env.contains_key(&root) => {
-                if self.borrow_params.contains(&root) {
-                    self.emit(place.span, MoveErrorKind::MoveOutOfBorrow);
-                } else {
-                    self.move_symbol(root, place.span);
-                }
-            }
-            // Base is a temporary (e.g. `foo().field`): moving out is fine, but
-            // the base still needs walking for nested effects.
-            _ => {
-                self.eval(base);
-            }
-        }
-    }
-
-    fn bind_pattern(&mut self, pattern: &Pattern) {
-        match pattern {
-            Pattern::Binding { symbol, ty, .. } => {
-                if !is_copy(ty) {
-                    self.env.insert(*symbol, LocalState::Live);
-                }
-            }
-            Pattern::Tuple { elems, .. } => {
-                for e in elems {
-                    self.bind_pattern(e);
-                }
-            }
-            Pattern::Variant { fields, .. } => {
-                for f in fields {
-                    self.bind_pattern(&f.pattern);
-                }
-            }
-            Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
-        }
-    }
-
-    // ---- span helpers for loop reporting ------------------------------------
 }
 
-/// The root local/parameter a place expression is rooted at, following
-/// field/tuple projections. `None` for anything not rooted at a bare binding
-/// (e.g. a temporary, a deref, or a call result).
-fn root_symbol(expr: &Expr) -> Option<SymbolId> {
+/// Collect every non-`Copy` local bound in a body: `let` and `match`-arm
+/// patterns (recursively through tuples and variant fields). Parameters are
+/// added by the caller. These are exactly the locals the CFG must track.
+fn collect_tracked(block: &Block, out: &mut HashSet<SymbolId>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { pattern, value, .. } => {
+                tracked_pattern(pattern, out);
+                collect_tracked_expr(value, out);
+            }
+            Stmt::Assign { value, .. }
+            | Stmt::Return {
+                value: Some(value), ..
+            } => collect_tracked_expr(value, out),
+            Stmt::DerefAssign { ptr, value, .. } => {
+                collect_tracked_expr(ptr, out);
+                collect_tracked_expr(value, out);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                collect_tracked_expr(object, out);
+                collect_tracked_expr(value, out);
+            }
+            Stmt::Expr(e) => collect_tracked_expr(e, out),
+            Stmt::Loop { body, .. } => collect_tracked(body, out),
+            Stmt::While {
+                condition, body, ..
+            } => {
+                collect_tracked_expr(condition, out);
+                collect_tracked(body, out);
+            }
+            Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
+        }
+    }
+    if let Some(e) = &block.expr {
+        collect_tracked_expr(e, out);
+    }
+}
+
+fn collect_tracked_expr(expr: &Expr, out: &mut HashSet<SymbolId>) {
     match &expr.kind {
-        ExprKind::Ident(sym) => Some(*sym),
-        ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => root_symbol(base),
-        _ => None,
-    }
-}
-
-/// Whether a pattern binds at least one non-`Copy` value by name (which forces
-/// a move out of the matched scrutinee).
-fn pattern_binds_noncopy(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Binding { ty, .. } => !is_copy(ty),
-        Pattern::Tuple { elems, .. } => elems.iter().any(pattern_binds_noncopy),
-        Pattern::Variant { fields, .. } => fields.iter().any(|f| pattern_binds_noncopy(&f.pattern)),
-        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
-    }
-}
-
-/// Join two control-flow branches: a symbol is `Moved` after the join if it is
-/// `Moved` on any branch that can reach it. A diverging branch contributes
-/// nothing.
-fn join_envs(
-    a: &HashMap<SymbolId, LocalState>,
-    b: &HashMap<SymbolId, LocalState>,
-    a_div: bool,
-    b_div: bool,
-) -> HashMap<SymbolId, LocalState> {
-    if a_div {
-        return b.clone();
-    }
-    if b_div {
-        return a.clone();
-    }
-    let mut out = a.clone();
-    for (sym, state) in b {
-        match (out.get(sym).copied(), state) {
-            (Some(LocalState::Moved(s)), _) => {
-                out.insert(*sym, LocalState::Moved(s));
-            }
-            (_, LocalState::Moved(s)) => {
-                out.insert(*sym, LocalState::Moved(*s));
-            }
-            (Some(LocalState::Live), LocalState::Live) => {}
-            (None, LocalState::Live) => {
-                out.insert(*sym, LocalState::Live);
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_tracked_expr(condition, out);
+            collect_tracked(then_branch, out);
+            if let Some(b) = else_branch {
+                collect_tracked(b, out);
             }
         }
+        ExprKind::Block(b) => collect_tracked(b, out),
+        ExprKind::Match { scrutinee, arms } => {
+            collect_tracked_expr(scrutinee, out);
+            for arm in arms {
+                tracked_pattern(&arm.pattern, out);
+                collect_tracked_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_tracked_expr(left, out);
+            collect_tracked_expr(right, out);
+        }
+        ExprKind::Call { args, .. } => {
+            for a in args {
+                collect_tracked_expr(a, out);
+            }
+        }
+        ExprKind::DynCall { receiver, args, .. }
+        | ExprKind::TraitBoundCall { receiver, args, .. }
+        | ExprKind::MethodCall { receiver, args, .. } => {
+            collect_tracked_expr(receiver, out);
+            for a in args {
+                collect_tracked_expr(a, out);
+            }
+        }
+        ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
+            for (_, v) in fields {
+                collect_tracked_expr(v, out);
+            }
+        }
+        ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                collect_tracked_expr(e, out);
+            }
+        }
+        ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
+            collect_tracked_expr(base, out)
+        }
+        ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => collect_tracked_expr(e, out),
+        ExprKind::Coerce { value, .. } => collect_tracked_expr(value, out),
+        ExprKind::Dbg { inner, .. } => collect_tracked_expr(inner, out),
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Spawn { .. }
+        | ExprKind::Error => {}
     }
-    out
+}
+
+/// Add every non-`Copy` binding a pattern introduces to the tracked set.
+fn tracked_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
+    match pattern {
+        Pattern::Binding { symbol, ty, .. } => {
+            if !is_copy(ty) {
+                out.insert(*symbol);
+            }
+        }
+        Pattern::Tuple { elems, .. } => {
+            for e in elems {
+                tracked_pattern(e, out);
+            }
+        }
+        Pattern::Variant { fields, .. } => {
+            for f in fields {
+                tracked_pattern(&f.pattern, out);
+            }
+        }
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
+    }
 }

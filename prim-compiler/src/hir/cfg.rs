@@ -1,27 +1,24 @@
-//! A small control-flow graph over a function body's ownership-relevant events,
-//! plus the forward move dataflow that drives precise drop placement.
+//! A small control-flow graph over a function body's ownership-relevant events.
+//!
+//! This is the *single source of truth* for where values are moved: both the
+//! Stage-1 ownership checker (`ownership.rs`, pre-mono) and drop elaboration
+//! (`drop_elab.rs`, post-mono) lower a function body to this CFG via [`build`]
+//! and then run their own dataflow over it, so the two passes can never disagree
+//! about what counts as a move.
 //!
 //! The CFG is intentionally minimal: basic blocks hold a sequence of `Action`s
-//! (a local becomes owned, a local is moved out, or a candidate drop), and each
+//! (a local becomes owned, is read, is moved out, or a candidate drop), and each
 //! block ends in a `Terminator` that names its successors. Control-flow
 //! conditions are *not* modelled — only the edges — which is all the move
-//! analysis needs.
+//! analyses need. Loop back-edges are recorded separately so a consumer can tell
+//! a loop-carried move from a straight-line one.
 //!
-//! The analysis is a textbook forward dataflow over two lattices:
-//!   - **may-moved**: a local moved on *at least one* path to a point (∪ at
-//!     joins),
-//!   - **must-moved**: a local moved on *every* path to a point (∩ at joins).
-//!
-//! At each candidate drop of a local `L`:
-//!   - `L` must-moved  → the value is gone on all paths        → `Remove`,
-//!   - `L` may- but not must-moved → moved on some paths only  → `Conditional`,
-//!   - otherwise (moved on no path) → still owned              → `Keep`.
-//!
-//! `Conditional` is the case a single static drop can't express without a
-//! runtime flag; the caller reports it as an error (a droppable value must be
-//! moved on all paths or none).
+//! Two dataflows run over the graph:
+//!   - [`analyze`] decides drop placement (forward may/must-moved),
+//!   - [`may_in_sets`] gives the may-moved set entering each block, which the
+//!     ownership checker uses (with and without back-edges) for use-after-move.
 
-use super::SymbolId;
+use super::{Block as HirBlock, Expr, ExprKind, PassMode, Pattern, SpanId, Stmt, SymbolId, Type};
 use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
@@ -30,13 +27,32 @@ pub type DropId = usize;
 /// An ownership-relevant event within a basic block, in execution order.
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
-    /// `local` becomes owned: a `let` initializer or an assignment to it.
+    /// `local` becomes owned: a `let`/`match`-arm binding or an assignment.
     Init(SymbolId),
-    /// `local`'s value is moved out.
-    Move(SymbolId),
+    /// `local` is read in place (borrowed) at `span` — used for use-after-move.
+    Use { local: SymbolId, span: SpanId },
+    /// `local`'s value is moved out at `span`. `partial` is set when the move is
+    /// of a field/element projection (`x.f`) rather than the whole binding `x`.
+    Move {
+        local: SymbolId,
+        span: SpanId,
+        partial: bool,
+    },
     /// A candidate drop of `local` at a scope exit. `id` ties it to the HIR
     /// `Stmt::Drop` emitted in lockstep during lowering.
     Drop { id: DropId, local: SymbolId },
+}
+
+impl Action {
+    /// The local this action concerns (for collecting the dataflow universe).
+    fn local(&self) -> SymbolId {
+        match self {
+            Action::Init(l)
+            | Action::Use { local: l, .. }
+            | Action::Move { local: l, .. }
+            | Action::Drop { local: l, .. } => *l,
+        }
+    }
 }
 
 /// How a block hands control to its successors.
@@ -89,11 +105,15 @@ impl Default for Block {
 #[derive(Debug, Default)]
 pub struct Cfg {
     pub blocks: Vec<Block>,
+    /// Edges `(from, to)` that close a loop (a body's back-edge to its header).
+    /// Recorded so the move analysis can distinguish a loop-carried move from a
+    /// straight-line one without a separate dominator computation.
+    pub back_edges: HashSet<(BlockId, BlockId)>,
 }
 
 impl Cfg {
     pub fn new() -> Self {
-        Cfg { blocks: Vec::new() }
+        Cfg::default()
     }
 
     pub fn add_block(&mut self) -> BlockId {
@@ -118,6 +138,8 @@ pub enum DropDecision {
     Conditional,
 }
 
+// === Drop dataflow: decide every candidate drop ===
+
 /// Run the move dataflow and decide every candidate drop.
 pub fn analyze(cfg: &Cfg) -> HashMap<DropId, DropDecision> {
     let n = cfg.blocks.len();
@@ -126,22 +148,14 @@ pub fn analyze(cfg: &Cfg) -> HashMap<DropId, DropDecision> {
         return decisions;
     }
 
-    // Predecessors, inverted from each block's successors.
-    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
-    for (b, block) in cfg.blocks.iter().enumerate() {
-        for &s in block.term.successors() {
-            preds[s].push(b);
-        }
-    }
+    let preds = predecessors(cfg, true);
 
     // The universe of locals, for the must-moved (∩) lattice's top element.
     let universe: HashSet<SymbolId> = cfg
         .blocks
         .iter()
         .flat_map(|b| b.actions.iter())
-        .map(|a| match a {
-            Action::Init(l) | Action::Move(l) | Action::Drop { local: l, .. } => *l,
-        })
+        .map(Action::local)
         .collect();
 
     // Block-exit sets. `may` starts empty (⊥ for ∪); `must` starts as the full
@@ -157,8 +171,8 @@ pub fn analyze(cfg: &Cfg) -> HashMap<DropId, DropDecision> {
     loop {
         let mut changed = false;
         for b in 0..n {
-            let (may_in, must_in) = entry_state(&preds[b], &exit_may, &exit_must);
-            let (may_out, must_out) = transfer(&cfg.blocks[b], may_in, must_in, None);
+            let (may_in, must_in) = drop_entry(&preds[b], &exit_may, &exit_must);
+            let (may_out, must_out) = drop_transfer(&cfg.blocks[b], may_in, must_in, None);
             if may_out != exit_may[b] || must_out != exit_must[b] {
                 exit_may[b] = may_out;
                 exit_must[b] = must_out;
@@ -174,15 +188,15 @@ pub fn analyze(cfg: &Cfg) -> HashMap<DropId, DropDecision> {
     // decision at every `Drop`.
     #[allow(clippy::needless_range_loop)]
     for b in 0..n {
-        let (may_in, must_in) = entry_state(&preds[b], &exit_may, &exit_must);
-        transfer(&cfg.blocks[b], may_in, must_in, Some(&mut decisions));
+        let (may_in, must_in) = drop_entry(&preds[b], &exit_may, &exit_must);
+        drop_transfer(&cfg.blocks[b], may_in, must_in, Some(&mut decisions));
     }
     decisions
 }
 
 /// The dataflow state entering a block: ∪ of predecessors' may-moved, ∩ of
 /// their must-moved. A block with no predecessors starts with nothing moved.
-fn entry_state(
+fn drop_entry(
     preds: &[BlockId],
     exit_may: &[HashSet<SymbolId>],
     exit_must: &[HashSet<SymbolId>],
@@ -203,7 +217,7 @@ fn entry_state(
 
 /// Apply a block's actions to the incoming state, returning the outgoing state.
 /// When `decisions` is given, record a `DropDecision` at each `Drop`.
-fn transfer(
+fn drop_transfer(
     block: &Block,
     mut may: HashSet<SymbolId>,
     mut must: HashSet<SymbolId>,
@@ -216,9 +230,9 @@ fn transfer(
                 may.remove(&l);
                 must.remove(&l);
             }
-            Action::Move(l) => {
-                may.insert(l);
-                must.insert(l);
+            Action::Move { local, .. } => {
+                may.insert(local);
+                must.insert(local);
             }
             Action::Drop { id, local } => {
                 if let Some(decisions) = decisions.as_deref_mut() {
@@ -232,9 +246,429 @@ fn transfer(
                     decisions.insert(id, decision);
                 }
             }
+            Action::Use { .. } => {} // reads don't change move state
         }
     }
     (may, must)
+}
+
+// === May-moved dataflow: the set of locals moved entering each block ===
+
+/// For every block, the set of locals that are moved on at least one path
+/// reaching its entry (the ∪ may-moved lattice). When `include_back_edges` is
+/// false, loop back-edges are dropped from the graph first, so the result
+/// reflects only straight-line (within-iteration) flow — the difference between
+/// the two runs is exactly the loop-carried moves.
+pub fn may_in_sets(cfg: &Cfg, include_back_edges: bool) -> Vec<HashSet<SymbolId>> {
+    let n = cfg.blocks.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let preds = predecessors(cfg, include_back_edges);
+    let mut exit: Vec<HashSet<SymbolId>> = vec![HashSet::new(); n];
+
+    #[allow(clippy::needless_range_loop)]
+    loop {
+        let mut changed = false;
+        for b in 0..n {
+            let mut out = may_entry(&preds[b], &exit);
+            for action in &cfg.blocks[b].actions {
+                match *action {
+                    Action::Init(l) => {
+                        out.remove(&l);
+                    }
+                    Action::Move { local, .. } => {
+                        out.insert(local);
+                    }
+                    Action::Use { .. } | Action::Drop { .. } => {}
+                }
+            }
+            if out != exit[b] {
+                exit[b] = out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    (0..n).map(|b| may_entry(&preds[b], &exit)).collect()
+}
+
+fn may_entry(preds: &[BlockId], exit: &[HashSet<SymbolId>]) -> HashSet<SymbolId> {
+    let mut may = HashSet::new();
+    for &p in preds {
+        may.extend(exit[p].iter().copied());
+    }
+    may
+}
+
+/// Predecessor lists, inverted from successors. When `include_back_edges` is
+/// false, edges recorded in `cfg.back_edges` are skipped.
+fn predecessors(cfg: &Cfg, include_back_edges: bool) -> Vec<Vec<BlockId>> {
+    let n = cfg.blocks.len();
+    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+    for (b, block) in cfg.blocks.iter().enumerate() {
+        for &s in block.term.successors() {
+            if !include_back_edges && cfg.back_edges.contains(&(b, s)) {
+                continue;
+            }
+            preds[s].push(b);
+        }
+    }
+    preds
+}
+
+// === Lowering: HIR body → CFG ===
+
+/// Lower a function body to a CFG, recording moves/uses/inits/drops for the
+/// `tracked` locals (the ownership pass tracks every non-`Copy` local; drop
+/// elaboration tracks the droppable ones). `Stmt::Drop`s, if present, become
+/// `Drop` actions whose ids follow their DFS position.
+pub fn build(body: &HirBlock, tracked: &HashSet<SymbolId>) -> Cfg {
+    let mut b = Builder {
+        cfg: Cfg::new(),
+        current: 0,
+        loop_exits: Vec::new(),
+        tracked,
+        next_drop: 0,
+    };
+    b.cfg.add_block(); // entry = block 0
+    b.block(body);
+    // The body falls through to an implicit return.
+    if matches!(b.cfg.blocks[b.current].term, Terminator::Unreachable) {
+        b.cfg.blocks[b.current].term = Terminator::Return;
+    }
+    b.cfg
+}
+
+struct Builder<'a> {
+    cfg: Cfg,
+    current: BlockId,
+    /// Exit block of each enclosing loop (innermost last) — a `break` target.
+    loop_exits: Vec<BlockId>,
+    tracked: &'a HashSet<SymbolId>,
+    next_drop: DropId,
+}
+
+impl Builder<'_> {
+    fn act(&mut self, action: Action) {
+        self.cfg.blocks[self.current].actions.push(action);
+    }
+
+    fn set_term(&mut self, term: Terminator) {
+        self.cfg.blocks[self.current].term = term;
+    }
+
+    /// Set the current block's terminator to `Goto(target)` unless it already
+    /// diverged via an inner return/break.
+    fn goto(&mut self, target: BlockId) {
+        if matches!(self.cfg.blocks[self.current].term, Terminator::Unreachable) {
+            self.cfg.blocks[self.current].term = Terminator::Goto(target);
+        }
+    }
+
+    /// Like `goto`, but records the edge as a loop back-edge.
+    fn back_edge(&mut self, header: BlockId) {
+        if matches!(self.cfg.blocks[self.current].term, Terminator::Unreachable) {
+            self.cfg.blocks[self.current].term = Terminator::Goto(header);
+            self.cfg.back_edges.insert((self.current, header));
+        }
+    }
+
+    fn block(&mut self, block: &HirBlock) {
+        for stmt in &block.stmts {
+            self.stmt(stmt);
+        }
+        if let Some(e) = &block.expr {
+            self.read(e);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Let { pattern, value, .. } => {
+                self.moved(value);
+                self.init_pattern(pattern);
+            }
+            Stmt::Assign { target, value, .. } => {
+                self.moved(value);
+                if self.tracked.contains(target) {
+                    self.act(Action::Init(*target));
+                }
+            }
+            Stmt::DerefAssign { ptr, value, .. } => {
+                self.read(ptr);
+                self.moved(value);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                self.read(object);
+                self.moved(value);
+            }
+            Stmt::Expr(e) => self.read(e),
+            Stmt::Loop { body, .. } => {
+                let header = self.cfg.add_block();
+                let exit = self.cfg.add_block();
+                self.goto(header);
+                self.loop_exits.push(exit);
+                self.current = header;
+                self.block(body);
+                self.back_edge(header);
+                self.loop_exits.pop();
+                self.current = exit;
+            }
+            Stmt::While {
+                condition, body, ..
+            } => {
+                let header = self.cfg.add_block();
+                let body_b = self.cfg.add_block();
+                let exit = self.cfg.add_block();
+                self.goto(header);
+                self.current = header;
+                self.read(condition);
+                self.set_term(Terminator::Switch(vec![body_b, exit]));
+                self.loop_exits.push(exit);
+                self.current = body_b;
+                self.block(body);
+                self.back_edge(header);
+                self.loop_exits.pop();
+                self.current = exit;
+            }
+            Stmt::Break { .. } => {
+                let target = *self.loop_exits.last().expect("break outside loop");
+                self.set_term(Terminator::Goto(target));
+                self.current = self.cfg.add_block(); // dead code after break
+            }
+            Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    self.moved(v);
+                }
+                self.set_term(Terminator::Return);
+                self.current = self.cfg.add_block(); // dead code after return
+            }
+            Stmt::Drop { sym, .. } => {
+                let id = self.next_drop;
+                self.next_drop += 1;
+                self.act(Action::Drop { id, local: *sym });
+            }
+        }
+    }
+
+    /// Emit an `Init` for each tracked binding introduced by a pattern.
+    fn init_pattern(&mut self, pattern: &Pattern) {
+        let mut binds = Vec::new();
+        pattern_bindings(pattern, &mut binds);
+        for sym in binds {
+            if self.tracked.contains(&sym) {
+                self.act(Action::Init(sym));
+            }
+        }
+    }
+
+    /// An expression in move position: a tracked place is moved out; anything
+    /// else (a temporary, or a `Copy` value) is just read for its sub-effects.
+    fn moved(&mut self, expr: &Expr) {
+        if !is_copy(&expr.ty) {
+            if let Some(root) = root_symbol(expr) {
+                if self.tracked.contains(&root) {
+                    let partial = !matches!(expr.kind, ExprKind::Ident(_));
+                    self.act(Action::Move {
+                        local: root,
+                        span: expr.span,
+                        partial,
+                    });
+                }
+                return;
+            }
+        }
+        self.read(expr);
+    }
+
+    /// An expression in read/borrow position: recurse, emitting `Use` for tracked
+    /// place roots and moves from move-position children, and splitting the CFG
+    /// at `if`/`match`.
+    fn read(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Ident(sym) => {
+                if self.tracked.contains(sym) {
+                    self.act(Action::Use {
+                        local: *sym,
+                        span: expr.span,
+                    });
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                // A matched non-`Copy` scrutinee is consumed only when an arm
+                // binds a non-`Copy` payload out of it; otherwise it is borrowed.
+                if arms.iter().any(|a| pattern_binds_noncopy(&a.pattern)) {
+                    self.moved(scrutinee);
+                } else {
+                    self.read(scrutinee);
+                }
+                let join = self.cfg.add_block();
+                let mut arm_blocks = Vec::with_capacity(arms.len());
+                for _ in arms {
+                    arm_blocks.push(self.cfg.add_block());
+                }
+                self.set_term(Terminator::Switch(arm_blocks.clone()));
+                for (arm, &b) in arms.iter().zip(&arm_blocks) {
+                    self.current = b;
+                    self.init_pattern(&arm.pattern);
+                    self.read(&arm.body);
+                    self.goto(join);
+                }
+                self.current = join;
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.read(condition);
+                let then_b = self.cfg.add_block();
+                let else_b = self.cfg.add_block();
+                let join = self.cfg.add_block();
+                self.set_term(Terminator::Switch(vec![then_b, else_b]));
+                self.current = then_b;
+                self.block(then_branch);
+                self.goto(join);
+                self.current = else_b;
+                if let Some(b) = else_branch {
+                    self.block(b);
+                }
+                self.goto(join);
+                self.current = join;
+            }
+            ExprKind::Block(b) => self.block(b),
+            ExprKind::Binary { left, right, .. } => {
+                self.read(left);
+                self.read(right);
+            }
+            ExprKind::Call {
+                args, arg_modes, ..
+            } => self.read_args(args, arg_modes),
+            ExprKind::DynCall {
+                receiver,
+                args,
+                arg_modes,
+                ..
+            } => {
+                self.read(receiver);
+                self.read_args(args, arg_modes);
+            }
+            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
+                for (_, v) in fields {
+                    self.moved(v);
+                }
+            }
+            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+                for e in elems {
+                    self.moved(e);
+                }
+            }
+            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.read(base),
+            ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.read(e),
+            ExprKind::Coerce { value, .. } => self.read(value),
+            ExprKind::Dbg { inner, .. } => self.read(inner),
+            // Typecheck rewrites every `MethodCall` to `Call`/`DynCall`/
+            // `TraitBoundCall` before either consumer runs; handle the leftover
+            // arms defensively as plain reads so the match stays exhaustive.
+            ExprKind::MethodCall { receiver, args, .. }
+            | ExprKind::TraitBoundCall { receiver, args, .. } => {
+                self.read(receiver);
+                for a in args {
+                    self.read(a);
+                }
+            }
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Spawn { .. }
+            | ExprKind::Error => {}
+        }
+    }
+
+    /// Walk a call's arguments: `take` args move, `view`/`edit` args read.
+    fn read_args(&mut self, args: &[Expr], arg_modes: &[PassMode]) {
+        for (i, a) in args.iter().enumerate() {
+            if matches!(arg_modes.get(i), Some(PassMode::Take)) {
+                self.moved(a);
+            } else {
+                self.read(a);
+            }
+        }
+    }
+}
+
+// === Shared helpers (the single definition reused by both passes) ===
+
+/// Scalars and raw pointers are `Copy`; aggregates and (conservatively) type
+/// parameters are not.
+pub fn is_copy(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::U8
+            | Type::I8
+            | Type::U16
+            | Type::I16
+            | Type::U32
+            | Type::I32
+            | Type::U64
+            | Type::I64
+            | Type::Usize
+            | Type::Isize
+            | Type::F32
+            | Type::F64
+            | Type::Bool
+            | Type::Pointer { .. }
+            | Type::IntVar
+            | Type::FloatVar
+            | Type::Undetermined
+    )
+}
+
+/// The local a place expression is rooted at (`x`, `x.f`, `x.0`, `*x`); `None`
+/// for anything not rooted at a bare binding (a temporary, a call result).
+pub fn root_symbol(expr: &Expr) -> Option<SymbolId> {
+    match &expr.kind {
+        ExprKind::Ident(sym) => Some(*sym),
+        ExprKind::Field { base, .. }
+        | ExprKind::TupleIndex { base, .. }
+        | ExprKind::Deref(base) => root_symbol(base),
+        _ => None,
+    }
+}
+
+/// Whether a pattern binds at least one non-`Copy` value by name (which forces a
+/// move out of the matched scrutinee).
+pub fn pattern_binds_noncopy(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { ty, .. } => !is_copy(ty),
+        Pattern::Tuple { elems, .. } => elems.iter().any(pattern_binds_noncopy),
+        Pattern::Variant { fields, .. } => fields.iter().any(|f| pattern_binds_noncopy(&f.pattern)),
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
+    }
+}
+
+/// Collect every `SymbolId` a pattern binds (recursively through tuples and
+/// variant fields).
+pub fn pattern_bindings(pattern: &Pattern, out: &mut Vec<SymbolId>) {
+    match pattern {
+        Pattern::Binding { symbol, .. } => out.push(*symbol),
+        Pattern::Tuple { elems, .. } => {
+            for e in elems {
+                pattern_bindings(e, out);
+            }
+        }
+        Pattern::Variant { fields, .. } => {
+            for f in fields {
+                pattern_bindings(&f.pattern, out);
+            }
+        }
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +677,18 @@ mod tests {
 
     fn sym(n: u32) -> SymbolId {
         SymbolId(n)
+    }
+
+    fn span() -> SpanId {
+        SpanId(0)
+    }
+
+    fn mv(local: SymbolId) -> Action {
+        Action::Move {
+            local,
+            span: span(),
+            partial: false,
+        }
     }
 
     /// `let a; drop a` → the value is still owned, so keep the drop.
@@ -268,7 +714,7 @@ mod tests {
         let b = cfg.add_block();
         cfg.block(b).actions = vec![
             Action::Init(sym(1)),
-            Action::Move(sym(1)),
+            mv(sym(1)),
             Action::Drop {
                 id: 0,
                 local: sym(1),
@@ -285,7 +731,7 @@ mod tests {
         let b = cfg.add_block();
         cfg.block(b).actions = vec![
             Action::Init(sym(1)),
-            Action::Move(sym(1)),
+            mv(sym(1)),
             Action::Init(sym(1)),
             Action::Drop {
                 id: 0,
@@ -306,7 +752,7 @@ mod tests {
         let join = cfg.add_block();
         cfg.block(entry).actions = vec![Action::Init(sym(1))];
         cfg.block(entry).term = Terminator::Switch(vec![then_b, else_b]);
-        cfg.block(then_b).actions = vec![Action::Move(sym(1))];
+        cfg.block(then_b).actions = vec![mv(sym(1))];
         cfg.block(then_b).term = Terminator::Goto(join);
         cfg.block(else_b).term = Terminator::Goto(join);
         cfg.block(join).actions = vec![Action::Drop {
@@ -327,9 +773,9 @@ mod tests {
         let join = cfg.add_block();
         cfg.block(entry).actions = vec![Action::Init(sym(1))];
         cfg.block(entry).term = Terminator::Switch(vec![then_b, else_b]);
-        cfg.block(then_b).actions = vec![Action::Move(sym(1))];
+        cfg.block(then_b).actions = vec![mv(sym(1))];
         cfg.block(then_b).term = Terminator::Goto(join);
-        cfg.block(else_b).actions = vec![Action::Move(sym(1))];
+        cfg.block(else_b).actions = vec![mv(sym(1))];
         cfg.block(else_b).term = Terminator::Goto(join);
         cfg.block(join).actions = vec![Action::Drop {
             id: 0,
@@ -337,6 +783,31 @@ mod tests {
         }];
         cfg.block(join).term = Terminator::Return;
         assert_eq!(analyze(&cfg)[&0], DropDecision::Remove);
+    }
+
+    /// Several drops in one body are decided independently and keyed by id: a
+    /// moved local removes its drop while a live local beside it keeps its own.
+    #[test]
+    fn multiple_drops_decided_independently() {
+        let mut cfg = Cfg::new();
+        let b = cfg.add_block();
+        cfg.block(b).actions = vec![
+            Action::Init(sym(1)),
+            Action::Init(sym(2)),
+            mv(sym(1)),
+            Action::Drop {
+                id: 0,
+                local: sym(1),
+            },
+            Action::Drop {
+                id: 1,
+                local: sym(2),
+            },
+        ];
+        cfg.block(b).term = Terminator::Return;
+        let decisions = analyze(&cfg);
+        assert_eq!(decisions[&0], DropDecision::Remove);
+        assert_eq!(decisions[&1], DropDecision::Keep);
     }
 
     /// A loop that re-inits the local each iteration and drops it at the body
@@ -362,31 +833,6 @@ mod tests {
         assert_eq!(analyze(&cfg)[&0], DropDecision::Keep);
     }
 
-    /// Several drops in one body are decided independently and keyed by id: a
-    /// moved local removes its drop while a live local beside it keeps its own.
-    #[test]
-    fn multiple_drops_decided_independently() {
-        let mut cfg = Cfg::new();
-        let b = cfg.add_block();
-        cfg.block(b).actions = vec![
-            Action::Init(sym(1)),
-            Action::Init(sym(2)),
-            Action::Move(sym(1)),
-            Action::Drop {
-                id: 0,
-                local: sym(1),
-            },
-            Action::Drop {
-                id: 1,
-                local: sym(2),
-            },
-        ];
-        cfg.block(b).term = Terminator::Return;
-        let decisions = analyze(&cfg);
-        assert_eq!(decisions[&0], DropDecision::Remove);
-        assert_eq!(decisions[&1], DropDecision::Keep);
-    }
-
     /// A value moved in a loop body that every path to the exit passes through
     /// is must-moved at a drop after the loop → remove (the back-edge converges).
     #[test]
@@ -399,7 +845,7 @@ mod tests {
         cfg.block(entry).term = Terminator::Goto(body);
         // body may move `a` then loop back (so on the back-edge a is moved) or
         // exit; `a` is moved on some paths to the exit drop, not all.
-        cfg.block(body).actions = vec![Action::Move(sym(1))];
+        cfg.block(body).actions = vec![mv(sym(1))];
         cfg.block(body).term = Terminator::Switch(vec![body, exit]);
         cfg.block(exit).actions = vec![Action::Drop {
             id: 0,
@@ -409,5 +855,40 @@ mod tests {
         // a is moved on every path that reaches exit (it passes through body's
         // Move at least once), so it's must-moved → Remove.
         assert_eq!(analyze(&cfg)[&0], DropDecision::Remove);
+    }
+
+    /// `may_in_sets`: a straight-line move is visible to the following block on
+    /// both the back-edge-inclusive and -exclusive runs.
+    #[test]
+    fn may_in_sees_straight_line_move() {
+        let mut cfg = Cfg::new();
+        let a = cfg.add_block();
+        let b = cfg.add_block();
+        cfg.block(a).actions = vec![mv(sym(1))];
+        cfg.block(a).term = Terminator::Goto(b);
+        cfg.block(b).term = Terminator::Return;
+        assert!(may_in_sets(&cfg, true)[b].contains(&sym(1)));
+        assert!(may_in_sets(&cfg, false)[b].contains(&sym(1)));
+    }
+
+    /// `may_in_sets`: a move carried only by a loop back-edge appears at the
+    /// header with back-edges included, but not without — this is exactly how
+    /// the ownership pass tells `MoveInLoop` from a straight-line use-after-move.
+    #[test]
+    fn may_in_isolates_loop_carried_move() {
+        let mut cfg = Cfg::new();
+        let entry = cfg.add_block();
+        let header = cfg.add_block();
+        let exit = cfg.add_block();
+        cfg.block(entry).term = Terminator::Goto(header);
+        // header moves `a` then loops back to itself or exits.
+        cfg.block(header).actions = vec![mv(sym(1))];
+        cfg.block(header).term = Terminator::Switch(vec![header, exit]);
+        cfg.block(exit).term = Terminator::Return;
+        cfg.back_edges.insert((header, header));
+        // With back-edges, the self-loop carries the move into the header entry.
+        assert!(may_in_sets(&cfg, true)[header].contains(&sym(1)));
+        // Without back-edges, the header entry has nothing moved yet.
+        assert!(!may_in_sets(&cfg, false)[header].contains(&sym(1)));
     }
 }

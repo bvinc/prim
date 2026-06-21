@@ -1,0 +1,15 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+// `let b = a` moves the value: only `b` owns it, so it must be dropped
+// exactly once (not once per binding). A double drop would re-run `drop`
+// on a freed box and print garbage.
+fn main() {
+    let a = R { id = 1 }
+    let b = a
+    println(0i32)
+}
