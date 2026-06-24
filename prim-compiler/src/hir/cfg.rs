@@ -18,7 +18,9 @@
 //!   - [`may_in_sets`] gives the may-moved set entering each block, which the
 //!     ownership checker uses (with and without back-edges) for use-after-move.
 
-use super::{Block as HirBlock, Expr, ExprKind, PassMode, Pattern, SpanId, Stmt, SymbolId, Type};
+use super::{
+    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, SpanId, Stmt, SymbolId, Type,
+};
 use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
@@ -500,7 +502,7 @@ impl Builder<'_> {
             ExprKind::Match { scrutinee, arms } => {
                 // A matched non-`Copy` scrutinee is consumed only when an arm
                 // binds a non-`Copy` payload out of it; otherwise it is borrowed.
-                if arms.iter().any(|a| pattern_binds_noncopy(&a.pattern)) {
+                if match_consumes(arms) {
                     self.moved(scrutinee);
                 } else {
                     self.read(scrutinee);
@@ -638,6 +640,16 @@ pub fn root_symbol(expr: &Expr) -> Option<SymbolId> {
         | ExprKind::Deref(base) => root_symbol(base),
         _ => None,
     }
+}
+
+/// Whether a `match` over `arms` consumes (moves) its scrutinee. True when any
+/// arm binds a non-`Copy` value out of the payload — that move ends the
+/// scrutinee's ownership, so the match becomes responsible for freeing its box
+/// and dropping the parts no arm took. The single predicate both the move
+/// analysis and drop elaboration consult. (Stage A replaces this inference with
+/// an explicit `match take` mode.)
+pub fn match_consumes(arms: &[MatchArm]) -> bool {
+    arms.iter().any(|a| pattern_binds_noncopy(&a.pattern))
 }
 
 /// Whether a pattern binds at least one non-`Copy` value by name (which forces a

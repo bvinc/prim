@@ -1,0 +1,27 @@
+import std.io.println
+
+struct Res { id: i32 }
+impl Drop for Res {
+    fn drop(edit self) { println(self.id) }
+}
+
+enum Opt {
+    None,
+    Some { r: Res },
+}
+
+// Consume-match each iteration: the bound payload is dropped at the arm's end
+// and the enum box is freed, so repeated iterations stay balanced (no leak, no
+// double free) and reuse the freed boxes.
+fn main() {
+    let mut i = 0i32
+    while i < 3i32 {
+        let o = Opt.Some { r = Res { id = i } }
+        match o {
+            Opt.Some { r } => println(100i32),
+            Opt.None => println(200i32),
+        }
+        i = i + 1i32
+    }
+    println(0i32)
+}

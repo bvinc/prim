@@ -1,0 +1,23 @@
+import std.io.println
+
+struct Res { id: i32 }
+impl Drop for Res {
+    fn drop(edit self) { println(self.id) }
+}
+
+enum Opt {
+    None,
+    Some { r: Res },
+}
+
+// An arm that yields its bound payload moves it out: the payload must NOT be
+// dropped at the arm's end (that would double-free), only by whoever receives
+// the match value.
+fn main() {
+    let o = Opt.Some { r = Res { id = 9 } }
+    let got = match o {
+        Opt.Some { r } => r,
+        Opt.None => Res { id = 0 },
+    }
+    println(1i32)
+}

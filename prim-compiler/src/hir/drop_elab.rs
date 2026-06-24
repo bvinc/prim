@@ -140,10 +140,56 @@ impl Insert<'_> {
         for stmt in std::mem::take(&mut block.stmts) {
             self.stmt(stmt, &mut out);
         }
+        // Elaborate any blocks nested in the trailing value expression.
+        if let Some(e) = &mut block.expr {
+            self.expr(e);
+        }
         // Drop this scope's locals at its end, in reverse declaration order.
         let frame = self.scopes.pop().unwrap();
-        for (sym, ty, span) in frame.locals.into_iter().rev() {
-            out.push(self.drop_stmt(sym, ty, span));
+        let drops: Vec<Stmt> = frame
+            .locals
+            .into_iter()
+            .rev()
+            .map(|(sym, ty, span)| self.drop_stmt(sym, ty, span))
+            .collect();
+        match (drops.is_empty(), block.expr.take()) {
+            (true, tail) => {
+                block.expr = tail;
+            }
+            // No value: drops simply run at the block's end.
+            (false, None) => out.extend(drops),
+            // A value-less tail (e.g. a unit call) leaves nothing on the stack;
+            // run it as a statement, then the drops.
+            (false, Some(tail)) if !produces_value(&tail.ty) => {
+                out.push(Stmt::Expr(*tail));
+                out.extend(drops);
+            }
+            // The block yields a value *and* has scope drops. Bind the value to
+            // a fresh temp first (a `let`, which moves it — so a returned local
+            // is moved out and its drop removed), then run the drops, then yield
+            // the temp. This keeps the value alive across the drops.
+            (false, Some(tail)) => {
+                let span = tail.span;
+                let ty = tail.ty.clone();
+                let tmp = SymbolId(self.fresh);
+                self.fresh += 1;
+                out.push(Stmt::Let {
+                    pattern: Pattern::Binding {
+                        symbol: tmp,
+                        ty: ty.clone(),
+                        span,
+                    },
+                    ty: ty.clone(),
+                    value: *tail,
+                    span,
+                });
+                out.extend(drops);
+                block.expr = Some(Box::new(Expr {
+                    kind: ExprKind::Ident(tmp),
+                    ty,
+                    span,
+                }));
+            }
         }
         block.stmts = out;
     }
@@ -278,8 +324,9 @@ impl Insert<'_> {
             ExprKind::Block(b) => self.block(b, false, &[]),
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
+                let consuming = cfg::match_consumes(arms);
                 for arm in arms.iter_mut() {
-                    self.arm(arm);
+                    self.arm(arm, consuming);
                 }
             }
             ExprKind::Binary { left, right, .. } => {
@@ -323,8 +370,52 @@ impl Insert<'_> {
         }
     }
 
-    fn arm(&mut self, arm: &mut MatchArm) {
-        self.expr(&mut arm.body);
+    fn arm(&mut self, arm: &mut MatchArm, consuming: bool) {
+        // When the scrutinee is consumed, the arm's owned bindings live for the
+        // arm body and are dropped at its end. Hosting them in a block scope
+        // reuses the block machinery, including drops on early return/break.
+        let seed: Vec<(SymbolId, Type, SpanId)> = if consuming {
+            let mut binds = Vec::new();
+            pattern_binding_spans(&arm.pattern, &mut binds);
+            binds
+                .into_iter()
+                .filter(|(sym, _, _)| self.droppable.contains_key(sym))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if seed.is_empty() {
+            self.expr(&mut arm.body);
+            return;
+        }
+        if matches!(arm.body.kind, ExprKind::Block(_)) {
+            if let ExprKind::Block(b) = &mut arm.body.kind {
+                self.block(b, false, &seed);
+            }
+            return;
+        }
+        // Wrap a non-block body into a single-expression block so its bindings
+        // have a scope; the block yields the original body's value.
+        let span = arm.body.span;
+        let ty = arm.body.ty.clone();
+        let inner = std::mem::replace(
+            &mut arm.body,
+            Expr {
+                kind: ExprKind::Error,
+                ty: Type::Undetermined,
+                span,
+            },
+        );
+        let mut body_block = Block {
+            stmts: Vec::new(),
+            expr: Some(Box::new(inner)),
+        };
+        self.block(&mut body_block, false, &seed);
+        arm.body = Expr {
+            kind: ExprKind::Block(body_block),
+            ty,
+            span,
+        };
     }
 }
 
@@ -452,6 +543,13 @@ impl Filter<'_> {
     }
 }
 
+/// Whether an expression of this type leaves a value on the operand stack
+/// (mirrors `prim_wasm::types::produces_value`): everything except the
+/// value-less `Undetermined` (the type of unit-returning calls and statements).
+fn produces_value(ty: &Type) -> bool {
+    !matches!(ty, Type::Undetermined)
+}
+
 // === Shared helpers ===
 
 /// Record every `let`-bound local of a needs-drop type (including those in
@@ -508,7 +606,19 @@ fn collect_droppable_expr(expr: &Expr, info: &DropInfo, out: &mut HashMap<Symbol
         }
         ExprKind::Block(b) => collect_droppable_bindings(b, info, out),
         ExprKind::Match { arms, .. } => {
+            // A consumed scrutinee transfers ownership to the arm bindings, so
+            // any needs-drop binding is dropped at its arm's end.
+            let consuming = cfg::match_consumes(arms);
             for arm in arms {
+                if consuming {
+                    let mut binds = Vec::new();
+                    pattern_binding_spans(&arm.pattern, &mut binds);
+                    for (sym, ty, span) in binds {
+                        if info.needs_drop(&ty) {
+                            out.insert(sym, span);
+                        }
+                    }
+                }
                 collect_droppable_expr(&arm.body, info, out);
             }
         }
@@ -524,17 +634,14 @@ fn pattern_bindings(pattern: &Pattern, out: &mut Vec<(SymbolId, Type)>) {
                 pattern_bindings(e, out);
             }
         }
-        // Struct destructuring binds owned fields (like a tuple), so its
-        // bindings are tracked for dropping; `match`/variant bindings still leak.
-        Pattern::Struct { fields, .. } => {
+        // Struct destructuring and (when the scrutinee is consumed) variant
+        // arms bind owned fields, so their bindings are tracked for dropping.
+        Pattern::Struct { fields, .. } | Pattern::Variant { fields, .. } => {
             for f in fields {
                 pattern_bindings(&f.pattern, out);
             }
         }
-        Pattern::Wildcard { .. }
-        | Pattern::Int { .. }
-        | Pattern::Bool { .. }
-        | Pattern::Variant { .. } => {}
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
     }
 }
 
@@ -548,14 +655,11 @@ fn pattern_binding_spans(pattern: &Pattern, out: &mut Vec<(SymbolId, Type, SpanI
                 pattern_binding_spans(e, out);
             }
         }
-        Pattern::Struct { fields, .. } => {
+        Pattern::Struct { fields, .. } | Pattern::Variant { fields, .. } => {
             for f in fields {
                 pattern_binding_spans(&f.pattern, out);
             }
         }
-        Pattern::Wildcard { .. }
-        | Pattern::Int { .. }
-        | Pattern::Bool { .. }
-        | Pattern::Variant { .. } => {}
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
     }
 }

@@ -950,6 +950,9 @@ fn emit_match(
     }
     ctx.enter_ctrl();
 
+    // A consumed scrutinee transfers ownership into the arm; once its payload is
+    // bound, the match owns the box(es) the arm did not move out and frees them.
+    let consuming = hir::cfg::match_consumes(arms);
     for arm in arms {
         // `$fail`: a mismatch in this arm's test branches to its end, falling
         // through to the next arm.
@@ -962,6 +965,9 @@ fn emit_match(
             &arm.pattern,
             ctx,
         );
+        if consuming {
+            emit_consume_cleanup(f, scrutinee_local, &[], &scrutinee.ty, &arm.pattern, ctx);
+        }
         emit_expr(f, &arm.body, ctx)?;
         let done_br = ctx.ctrl_depth.get() - 1 - done_level;
         f.instruction(&Instruction::Br(done_br));
@@ -1136,6 +1142,103 @@ fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> 
             tmp
         }
     }
+}
+
+/// Free the heap box(es) of a consumed match value `base` (a local holding the
+/// box pointer), reached by `path` — a chain of field byte-offsets from `base`.
+/// Run after the arm bound the fields it took: any nested destructure recurses
+/// (freeing its own box first), and this value's box is freed last. Bound leaves
+/// are dropped by drop elaboration, so they are skipped here. Pointers are
+/// re-derived from `base` each time, so no scratch locals are needed.
+///
+/// Un-taken (wildcard/omitted) needs-drop fields, and the live payload behind a
+/// wildcard arm over an enum, are not dropped yet — the same recursive-drop gap
+/// documented for enum payloads, to be closed by the synthesized-drop follow-up.
+fn emit_consume_cleanup(
+    f: &mut Function,
+    base: u32,
+    path: &[u32],
+    ty: &hir::Type,
+    pattern: &hir::Pattern,
+    ctx: &EmitCtx,
+) {
+    // A whole-value binding moved ownership into the binding; its own drop frees
+    // the box. Nothing to free here.
+    if matches!(pattern, hir::Pattern::Binding { .. }) {
+        return;
+    }
+    match (ty, pattern) {
+        (
+            hir::Type::Enum(eid, _),
+            hir::Pattern::Variant {
+                variant_idx,
+                fields,
+                ..
+            },
+        ) => {
+            if let Some(variant) = ctx
+                .enum_layouts
+                .get(eid)
+                .and_then(|l| l.variants.get(*variant_idx as usize))
+            {
+                for fp in fields {
+                    if is_destructure(&fp.pattern) {
+                        if let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field) {
+                            let mut child = path.to_vec();
+                            child.push(8 + *payload_offset);
+                            emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
+                        }
+                    }
+                }
+            }
+        }
+        (hir::Type::Struct(sid, _), hir::Pattern::Struct { fields, .. }) => {
+            if let Some(layout) = ctx.struct_layouts.get(sid) {
+                for fp in fields {
+                    if is_destructure(&fp.pattern) {
+                        if let Some((offset, field_ty)) = layout.fields.get(&fp.field) {
+                            let mut child = path.to_vec();
+                            child.push(*offset);
+                            emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
+                        }
+                    }
+                }
+            }
+        }
+        (hir::Type::Tuple(ts), hir::Pattern::Tuple { elems, .. }) => {
+            let layout = compute_tuple_layout(ts);
+            for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
+                if is_destructure(elem) {
+                    let mut child = path.to_vec();
+                    child.push(*offset);
+                    emit_consume_cleanup(f, base, &child, elem_ty, elem, ctx);
+                }
+            }
+        }
+        _ => {}
+    }
+    // Free this value's own box, after its fields were read.
+    push_box_path(f, base, path);
+    f.instruction(&Instruction::Call(ctx.builtins.free));
+}
+
+/// Push the box pointer reached from local `base` by following `path` (a chain
+/// of field byte-offsets, each an i32 pointer load). An empty `path` pushes
+/// `base` itself.
+fn push_box_path(f: &mut Function, base: u32, path: &[u32]) {
+    f.instruction(&Instruction::LocalGet(base));
+    for &offset in path {
+        emit_field_load(f, &hir::Type::U32, offset);
+    }
+}
+
+/// Whether a pattern destructures an aggregate in place (vs. binding/ignoring
+/// the whole value) — the patterns whose own box must be freed on consume.
+fn is_destructure(pattern: &hir::Pattern) -> bool {
+    matches!(
+        pattern,
+        hir::Pattern::Variant { .. } | hir::Pattern::Struct { .. } | hir::Pattern::Tuple { .. }
+    )
 }
 
 /// Bind a value of type `ty`, already on the operand stack, against an

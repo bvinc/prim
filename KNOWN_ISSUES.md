@@ -83,12 +83,18 @@ later feature).
   dropped (sound, just leaky), because that needs discriminant dispatch — the
   next follow-up. Arrays don't codegen at all yet.
 
-- **Drop/RAII — `match` bindings leak.** Values bound by `match` arm payloads
-  (and enums consumed by a `match`) are not yet dropped — sound (no
-  double-free), just leaky. (Conditionally-moved resources are now a *compile
-  error*, not a leak: drop placement is decided by a control-flow dataflow over
-  a per-function CFG (`hir/cfg.rs`), and a value that implements `Drop` must be
-  moved on all paths or none.)
+- **Drop/RAII — consuming `match` now ends ownership; some payloads still leak.**
+  A `match` that binds a non-`Copy` payload consumes its scrutinee: the bound
+  values are dropped at their arm's end (drop elaboration hosts them in the arm's
+  block scope, `hir/drop_elab.rs`) and every box the arm did not move out is
+  freed (`emit::emit_consume_cleanup`), including nested destructured boxes. A
+  payload an arm *returns* is moved out and not double-freed. Remaining gaps,
+  sound but leaky: an **un-taken (wildcard/omitted) needs-drop field** in a
+  consuming arm, and the **live payload behind a wildcard arm over an enum** (its
+  box is freed but the variant's payload is not dropped — same discriminant-
+  dispatch gap as enum recursive drop above). Conditionally-moved resources are a
+  *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
+  all paths or none).
 
 - **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** Plain aggregates
   and the stdlib's `Vec`/`String` (whose backing buffers are raw `*mut`) don't

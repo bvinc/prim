@@ -1,0 +1,24 @@
+import std.io.println
+
+struct Res { id: i32 }
+impl Drop for Res {
+    fn drop(edit self) { println(self.id) }
+}
+struct Wrap { r: Res }
+
+enum Opt {
+    None,
+    Some { w: Wrap },
+}
+
+// A nested destructure in a consuming arm: binding `r` moves the inner Res out,
+// the intermediate Wrap box and the enum box are both freed, and `r` is dropped
+// at the arm's end.
+fn main() {
+    let o = Opt.Some { w = Wrap { r = Res { id = 5 } } }
+    match o {
+        Opt.Some { w: Wrap { r } } => println(1i32),
+        Opt.None => println(2i32),
+    }
+    println(0i32)
+}

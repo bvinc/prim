@@ -1,0 +1,23 @@
+import std.io.println
+
+struct Res { id: i32 }
+impl Drop for Res {
+    fn drop(edit self) { println(self.id) }
+}
+
+enum Opt {
+    None,
+    Some { r: Res },
+}
+
+// Matching an owned enum and binding its non-Copy payload consumes the
+// scrutinee. The bound `r` owns the Res and must be dropped at the arm's end
+// (its Drop runs), and the enum box itself must be freed. Previously leaked.
+fn main() {
+    let o = Opt.Some { r = Res { id = 7 } }
+    match o {
+        Opt.Some { r } => println(1i32),
+        Opt.None => println(2i32),
+    }
+    println(0i32)
+}
