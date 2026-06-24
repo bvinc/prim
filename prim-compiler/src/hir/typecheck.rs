@@ -677,6 +677,60 @@ impl<'a> Checker<'a> {
                 }
                 Ok(arm_bindings)
             }
+            crate::hir::Pattern::Struct {
+                struct_id: pattern_struct,
+                fields,
+                span,
+            } => {
+                let (struct_id, struct_args) = match expected {
+                    Type::Struct(id, args) => (*id, args.clone()),
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: self.type_name(other),
+                                found: "a struct pattern".to_string(),
+                            },
+                        ));
+                    }
+                };
+                if *pattern_struct != struct_id {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "pattern's struct does not match the value's struct".to_string(),
+                        ),
+                    ));
+                }
+                let field_map = self.struct_fields.get(&struct_id).cloned().ok_or_else(|| {
+                    self.error(
+                        *span,
+                        TypeCheckKind::Legacy("struct fields not found".to_string()),
+                    )
+                })?;
+                let span = *span;
+                let mut bindings = Vec::new();
+                for fp in fields.iter_mut() {
+                    let declared = field_map.get(&fp.field).cloned().ok_or_else(|| {
+                        self.error(
+                            span,
+                            TypeCheckKind::Legacy(format!(
+                                "no field '{}' on struct",
+                                self.program.interner.resolve(&fp.field)
+                            )),
+                        )
+                    })?;
+                    let resolved = Self::substitute_params_with_slice(&declared, &struct_args);
+                    fp.ty = resolved.clone();
+                    bindings.extend(self.type_pattern(
+                        &mut fp.pattern,
+                        &resolved,
+                        locals,
+                        refutable,
+                    )?);
+                }
+                Ok(bindings)
+            }
         }
     }
 
@@ -2181,7 +2235,10 @@ impl<'a> Checker<'a> {
     /// and tuples. (Floats are excluded — equality matching on floats is a
     /// footgun.)
     fn is_matchable(&self, t: &Type) -> bool {
-        matches!(t, Type::Enum(..) | Type::Bool | Type::Tuple(_)) || self.is_integer(t)
+        matches!(
+            t,
+            Type::Enum(..) | Type::Bool | Type::Tuple(_) | Type::Struct(..)
+        ) || self.is_integer(t)
     }
 
     /// Run reachability + exhaustiveness analysis over a `match`'s arms.
@@ -2380,7 +2437,8 @@ impl<'a> Checker<'a> {
                     self.finalize_pattern(elem);
                 }
             }
-            crate::hir::Pattern::Variant { fields, .. } => {
+            crate::hir::Pattern::Variant { fields, .. }
+            | crate::hir::Pattern::Struct { fields, .. } => {
                 for fp in fields {
                     fp.ty = self.finalize_type(&fp.ty);
                     self.finalize_pattern(&mut fp.pattern);

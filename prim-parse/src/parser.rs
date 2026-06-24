@@ -1954,6 +1954,17 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Wildcard { span: first_span });
         }
 
+        // A bare name followed by `{` is a struct destructuring pattern.
+        if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
+            let name = self.ident(first_span);
+            let (fields, close) = self.parse_pattern_fields()?;
+            return Ok(crate::Pattern::Struct {
+                name,
+                fields,
+                span: first_span.cover(close),
+            });
+        }
+
         // A bare identifier (no `.`) is a binding; a dotted path is an
         // enum-variant pattern.
         if !matches!(self.peek_kind(), Some(TokenKind::Dot)) {
@@ -1976,20 +1987,7 @@ impl<'a> Parser<'a> {
         let variant_name = segments.pop().expect("variant segment");
         let enum_path = NamePath { segments };
         let (fields, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
-            self.advance(); // consume '{'
-            let mut fields = Vec::new();
-            if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
-                fields.push(self.parse_field_pattern()?);
-                while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                    self.advance();
-                    if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
-                        break;
-                    }
-                    fields.push(self.parse_field_pattern()?);
-                }
-            }
-            let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
-            (fields, close.span)
+            self.parse_pattern_fields()?
         } else if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
             // Tuple variant: `Some(p0, p1, ...)`, desugared to fields `0`, `1`, …
             self.advance(); // consume '('
@@ -2029,7 +2027,44 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a `{ field, field: subpat, ... }` field list (the leading `{` is
+    /// the current token). Returns the fields and the closing brace's span.
+    fn parse_pattern_fields(
+        &mut self,
+    ) -> Result<(Vec<crate::FieldPattern>, prim_tok::Span), ParseError> {
+        self.advance(); // consume '{'
+        let mut fields = Vec::new();
+        if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+            fields.push(self.parse_field_pattern()?);
+            while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                    break;
+                }
+                fields.push(self.parse_field_pattern()?);
+            }
+        }
+        let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
+        Ok((fields, close.span))
+    }
+
     fn parse_field_pattern(&mut self) -> Result<crate::FieldPattern, ParseError> {
+        // `mut name` shorthand binds the field mutably to its own name.
+        if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
+            let mut_span = self.advance().span;
+            let field_span = self
+                .consume(TokenKind::Identifier, "Expected field name after 'mut'")?
+                .span;
+            let field = self.ident(field_span);
+            return Ok(crate::FieldPattern {
+                field,
+                pattern: crate::Pattern::Binding {
+                    name: field,
+                    mutable: true,
+                    span: mut_span.cover(field_span),
+                },
+            });
+        }
         let field_span = self
             .consume(TokenKind::Identifier, "Expected field name in pattern")?
             .span;

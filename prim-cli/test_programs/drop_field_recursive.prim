@@ -1,0 +1,15 @@
+import std.io.println
+
+struct Inner { id: i32 }
+impl Drop for Inner {
+    fn drop(edit self) { println(self.id) }
+}
+
+// Outer does NOT implement Drop, but owns a field that does. Dropping Outer
+// must recurse into the field and run Inner's drop (previously leaked).
+struct Outer { inner: Inner }
+
+fn main() {
+    let o = Outer { inner = Inner { id = 5 } }
+    println(0i32)
+}

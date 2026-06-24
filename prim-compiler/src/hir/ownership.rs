@@ -372,7 +372,7 @@ fn tracked_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
                 tracked_pattern(e, out);
             }
         }
-        Pattern::Variant { fields, .. } => {
+        Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
                 tracked_pattern(&f.pattern, out);
             }

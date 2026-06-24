@@ -11,7 +11,7 @@
 //!   useful w.r.t. the matrix of all arms. When it is useful, the returned
 //!   witness is a value the match fails to cover.
 
-use super::{Enum, Pattern, Program, Type};
+use super::{Enum, Pattern, Program, StructId, Type};
 
 /// A constructor: the "head" of a value's shape.
 #[derive(Clone, PartialEq)]
@@ -20,6 +20,9 @@ enum Ctor {
     Bool(bool),
     Int(i64),
     Tuple,
+    /// A struct — a single-constructor type, like `Tuple` but with named fields
+    /// resolved to declared order.
+    Struct(StructId),
 }
 
 /// A pattern normalized for the algorithm: either a wildcard (covers
@@ -63,6 +66,24 @@ fn normalize(pat: &Pattern, program: &Program) -> Pat {
                 .collect();
             Pat::Ctor(Ctor::Variant(*variant_idx), args)
         }
+        Pattern::Struct {
+            struct_id, fields, ..
+        } => {
+            // Reorder named fields into the struct's declared order, filling
+            // omitted fields with wildcards, so sub-patterns are positional.
+            let declared = &program.structs[struct_id.0 as usize].fields;
+            let args = declared
+                .iter()
+                .map(|f| {
+                    fields
+                        .iter()
+                        .find(|fp| fp.field == f.name)
+                        .map(|fp| normalize(&fp.pattern, program))
+                        .unwrap_or(Pat::Wild)
+                })
+                .collect();
+            Pat::Ctor(Ctor::Struct(*struct_id), args)
+        }
     }
 }
 
@@ -78,6 +99,11 @@ fn enum_def<'a>(ty: &'a Type, program: &'a Program) -> Option<(&'a Enum, &'a [Ty
 fn ctor_sub_types(ty: &Type, ctor: &Ctor, program: &Program) -> Vec<Type> {
     match (ctor, ty) {
         (Ctor::Tuple, Type::Tuple(elems)) => elems.clone(),
+        (Ctor::Struct(_), Type::Struct(sid, args)) => program.structs[sid.0 as usize]
+            .fields
+            .iter()
+            .map(|f| subst_params(&f.ty, args))
+            .collect(),
         (Ctor::Variant(idx), _) => {
             let Some((e, args)) = enum_def(ty, program) else {
                 return Vec::new();
@@ -121,6 +147,7 @@ fn full_signature(ty: &Type, program: &Program) -> Option<Vec<Ctor>> {
     match ty {
         Type::Bool => Some(vec![Ctor::Bool(false), Ctor::Bool(true)]),
         Type::Tuple(_) => Some(vec![Ctor::Tuple]),
+        Type::Struct(sid, _) => Some(vec![Ctor::Struct(*sid)]),
         Type::Enum(eid, _) => {
             let n = program.enums[eid.0 as usize].variants.len() as u32;
             Some((0..n).map(Ctor::Variant).collect())
@@ -292,6 +319,15 @@ fn render(pat: &Pat, ty: &Type, program: &Program) -> String {
             } else {
                 format!("{} {{ .. }}", name)
             }
+        }
+        Pat::Ctor(Ctor::Struct(sid), _) => {
+            let name_sym = program.structs[sid.0 as usize].name;
+            let name = program
+                .symbols
+                .get(name_sym.0 as usize)
+                .map(|s| program.interner.resolve(&s.name))
+                .unwrap_or("_");
+            format!("{} {{ .. }}", name)
         }
     }
 }

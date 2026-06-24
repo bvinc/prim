@@ -4,14 +4,14 @@
 use crate::WasmError;
 use crate::builtins::Builtins;
 use crate::layout::{
-    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, compute_tuple_layout, emit_field_load,
-    emit_field_store,
+    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, compute_struct_layout,
+    compute_tuple_layout, emit_field_load, emit_field_store,
 };
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_block};
 use prim_compiler::hir;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use wasm_encoder::{BlockType, Function, Instruction, MemArg, ValType};
 
 /// Static-memory location of an `@dbg` site's prefix bytes.
@@ -44,6 +44,9 @@ pub(crate) struct EmitCtx<'a> {
     pub program: &'a hir::Program,
     pub locals: HashMap<hir::SymbolId, u32>,
     pub funcs: &'a HashMap<hir::FuncId, u32>,
+    /// Concrete needs-drop type → wasm index of its synthesized `drop_T`
+    /// function. A `Stmt::Drop` of type `T` lowers to a call of `drop_fns[T]`.
+    pub drop_fns: &'a HashMap<hir::Type, u32>,
     pub runtime: &'a HashMap<hir::FuncId, hir::RuntimeAbi>,
     pub builtins: &'a Builtins,
     pub struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
@@ -81,6 +84,7 @@ pub(crate) fn build_emit_ctx<'a>(
     program: &'a hir::Program,
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
+    drop_fns: &'a HashMap<hir::Type, u32>,
     runtime_map: &'a HashMap<hir::FuncId, hir::RuntimeAbi>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
@@ -106,6 +110,7 @@ pub(crate) fn build_emit_ctx<'a>(
         program,
         locals,
         funcs: func_map,
+        drop_fns,
         runtime: runtime_map,
         builtins,
         struct_layouts,
@@ -223,7 +228,7 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             // Evaluate the initializer, leaving it on the stack, then bind it
             // by walking the (irrefutable) pattern.
             emit_expr(f, value, ctx)?;
-            emit_bind(f, pattern, ctx);
+            emit_bind(f, pattern, &value.ty, ctx);
         }
         hir::Stmt::Assign { target, value, .. } => {
             emit_expr(f, value, ctx)?;
@@ -1089,6 +1094,30 @@ fn emit_test_bind(
                 );
             }
         }
+        hir::Pattern::Struct { fields, .. } => {
+            // Irrefutable: no discriminant test, just bind each named field from
+            // its offset. The struct id comes from the value's (monomorphized)
+            // type, not the pattern's.
+            let sid = match ty {
+                hir::Type::Struct(id, _) => *id,
+                _ => {
+                    f.instruction(&Instruction::Unreachable);
+                    return;
+                }
+            };
+            let base = aggregate_base(f, src, ty, ctx);
+            let Some(layout) = ctx.struct_layouts.get(&sid).cloned() else {
+                f.instruction(&Instruction::Unreachable);
+                return;
+            };
+            for fp in fields {
+                let Some((offset, field_ty)) = layout.fields.get(&fp.field).cloned() else {
+                    f.instruction(&Instruction::Unreachable);
+                    continue;
+                };
+                emit_test_bind(f, Src::Field { base, offset }, &field_ty, &fp.pattern, ctx);
+            }
+        }
     }
 }
 
@@ -1109,11 +1138,11 @@ fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> 
     }
 }
 
-/// Bind a value already on the operand stack against an irrefutable pattern,
-/// consuming it.
-fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
+/// Bind a value of type `ty`, already on the operand stack, against an
+/// irrefutable pattern, consuming it.
+fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ty: &hir::Type, ctx: &EmitCtx) {
     match pattern {
-        hir::Pattern::Wildcard { ty, .. } => {
+        hir::Pattern::Wildcard { .. } => {
             if produces_value(ty) {
                 f.instruction(&Instruction::Drop);
             }
@@ -1125,7 +1154,7 @@ fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
                 f.instruction(&Instruction::Drop);
             }
         }
-        hir::Pattern::Tuple { elems, ty, .. } => {
+        hir::Pattern::Tuple { elems, .. } => {
             // Stash the tuple pointer in a scratch local, then load and bind
             // each element. Scratch is reserved here (after the value was
             // produced) to match the pre-walk order.
@@ -1141,7 +1170,32 @@ fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
             for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
                 f.instruction(&Instruction::LocalGet(ptr_local));
                 emit_field_load(f, elem_ty, *offset);
-                emit_bind(f, elem, ctx);
+                emit_bind(f, elem, elem_ty, ctx);
+            }
+        }
+        hir::Pattern::Struct { fields, .. } => {
+            // Stash the struct pointer, then load and bind each named field from
+            // its offset. The struct id comes from the value's type.
+            let counter = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(counter + 1);
+            let ptr_local = ctx.scratch_base + counter;
+            f.instruction(&Instruction::LocalSet(ptr_local));
+            let layout = match ty {
+                hir::Type::Struct(sid, _) => ctx.struct_layouts.get(sid).cloned(),
+                _ => None,
+            };
+            let Some(layout) = layout else {
+                f.instruction(&Instruction::Unreachable);
+                return;
+            };
+            for fp in fields {
+                let Some((offset, field_ty)) = layout.fields.get(&fp.field).cloned() else {
+                    f.instruction(&Instruction::Unreachable);
+                    continue;
+                };
+                f.instruction(&Instruction::LocalGet(ptr_local));
+                emit_field_load(f, &field_ty, offset);
+                emit_bind(f, &fp.pattern, &field_ty, ctx);
             }
         }
         hir::Pattern::Int { .. } | hir::Pattern::Bool { .. } | hir::Pattern::Variant { .. } => {
@@ -1151,25 +1205,151 @@ fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ctx: &EmitCtx) {
     }
 }
 
-/// Emit RAII drop of owned local `sym` of type `ty`: run its `Drop::drop`
-/// method (if it implements `Drop`), then free its heap box. Recursive
-/// field-drop glue is a follow-up; here a composite's fields' own `Drop`
-/// methods are not yet invoked, but its box is reclaimed.
+/// Emit RAII drop of owned local `sym` of type `ty`: a call to the type's
+/// synthesized `drop_T` function, which runs the value's own `Drop::drop`,
+/// recursively drops its owned fields, and frees its box.
 fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx) {
     let Some(&local) = ctx.locals.get(&sym) else {
         return;
     };
-    let info = hir::DropInfo::new(ctx.program);
-    if let Some(drop_fn) = info.drop_method(ty) {
-        if let Some(&widx) = ctx.funcs.get(&drop_fn) {
-            f.instruction(&Instruction::LocalGet(local));
+    if let Some(&drop_fn) = ctx.drop_fns.get(ty) {
+        f.instruction(&Instruction::LocalGet(local));
+        f.instruction(&Instruction::Call(drop_fn));
+    }
+}
+
+/// Collect every concrete type that needs a synthesized drop function: the
+/// types dropped at `Stmt::Drop` sites, transitively closed over the owned
+/// fields a drop recurses into. Returned in a deterministic order so the
+/// assigned wasm indices are stable.
+pub(crate) fn collect_drop_types(program: &hir::Program, info: &hir::DropInfo) -> Vec<hir::Type> {
+    let mut work: Vec<hir::Type> = Vec::new();
+    for func in &program.functions {
+        collect_drop_sites(&func.body, &mut work);
+    }
+    work.reverse(); // process in source order despite the LIFO worklist
+    let mut seen: HashSet<hir::Type> = HashSet::new();
+    let mut order: Vec<hir::Type> = Vec::new();
+    while let Some(ty) = work.pop() {
+        if !info.needs_drop(&ty) || !seen.insert(ty.clone()) {
+            continue;
+        }
+        order.push(ty.clone());
+        // Enqueue the owned field types this drop will recurse into.
+        for (_, fty) in recursable_fields(&ty, program) {
+            work.push(fty);
+        }
+    }
+    order
+}
+
+/// Synthesize the body of `drop_T(ptr: i32)`: run `T`'s own `Drop::drop` (if
+/// any) while its fields are still valid, then recursively drop each owned
+/// field, then free `T`'s box. Each box is freed exactly once, by its own
+/// `drop_T`.
+pub(crate) fn emit_drop_fn(
+    ty: &hir::Type,
+    drop_fns: &HashMap<hir::Type, u32>,
+    func_map: &HashMap<hir::FuncId, u32>,
+    program: &hir::Program,
+    info: &hir::DropInfo,
+    free_idx: u32,
+) -> Function {
+    let mut f = Function::new(vec![]); // param 0 is the box pointer
+    if let Some(drop_method) = info.drop_method(ty) {
+        if let Some(&widx) = func_map.get(&drop_method) {
+            f.instruction(&Instruction::LocalGet(0));
             f.instruction(&Instruction::Call(widx));
         }
     }
-    // Free the heap box. `free` is linked whenever anything is dropped.
-    if ctx.builtins.free != u32::MAX {
-        f.instruction(&Instruction::LocalGet(local));
-        f.instruction(&Instruction::Call(ctx.builtins.free));
+    for (offset, fty) in recursable_fields(ty, program) {
+        // Present only for needs-drop field types; scalars are skipped.
+        if let Some(&didx) = drop_fns.get(&fty) {
+            f.instruction(&Instruction::LocalGet(0));
+            emit_field_load(&mut f, &fty, offset); // load the field's box pointer
+            f.instruction(&Instruction::Call(didx));
+        }
+    }
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::Call(free_idx));
+    f.instruction(&Instruction::End);
+    f
+}
+
+/// The owned fields a `drop_T` recurses into, as `(byte offset, type)` in
+/// declaration order. Structs and tuples have a static field list; enums and
+/// arrays are not yet recursed (their payloads/elements are left to a
+/// follow-up), so they contribute none.
+fn recursable_fields(ty: &hir::Type, program: &hir::Program) -> Vec<(u32, hir::Type)> {
+    match ty {
+        hir::Type::Struct(sid, _) => match program.structs.get(sid.0 as usize) {
+            Some(s) => {
+                let layout = compute_struct_layout(s);
+                s.fields
+                    .iter()
+                    .filter_map(|field| {
+                        layout
+                            .fields
+                            .get(&field.name)
+                            .map(|(off, fty)| (*off, fty.clone()))
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        },
+        hir::Type::Tuple(elems) => compute_tuple_layout(elems).elems,
+        _ => Vec::new(),
+    }
+}
+
+/// Walk a body collecting the type of every `Stmt::Drop` it contains.
+fn collect_drop_sites(block: &hir::Block, out: &mut Vec<hir::Type>) {
+    for stmt in &block.stmts {
+        match stmt {
+            hir::Stmt::Drop { ty, .. } => out.push(ty.clone()),
+            hir::Stmt::Loop { body, .. } | hir::Stmt::While { body, .. } => {
+                collect_drop_sites(body, out)
+            }
+            hir::Stmt::Let { value, .. }
+            | hir::Stmt::Assign { value, .. }
+            | hir::Stmt::Return {
+                value: Some(value), ..
+            }
+            | hir::Stmt::Expr(value) => collect_drop_sites_expr(value, out),
+            hir::Stmt::DerefAssign { ptr, value, .. } => {
+                collect_drop_sites_expr(ptr, out);
+                collect_drop_sites_expr(value, out);
+            }
+            hir::Stmt::FieldAssign { object, value, .. } => {
+                collect_drop_sites_expr(object, out);
+                collect_drop_sites_expr(value, out);
+            }
+            hir::Stmt::Return { value: None, .. } | hir::Stmt::Break { .. } => {}
+        }
+    }
+}
+
+/// Recurse into the blocks an expression can contain (`if`/`match`/block) to
+/// reach nested `Stmt::Drop`s.
+fn collect_drop_sites_expr(expr: &hir::Expr, out: &mut Vec<hir::Type>) {
+    match &expr.kind {
+        hir::ExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_drop_sites(then_branch, out);
+            if let Some(b) = else_branch {
+                collect_drop_sites(b, out);
+            }
+        }
+        hir::ExprKind::Block(b) => collect_drop_sites(b, out),
+        hir::ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                collect_drop_sites_expr(&arm.body, out);
+            }
+        }
+        _ => {}
     }
 }
 

@@ -461,7 +461,7 @@ impl Mono<'_> {
                     self.substitute_pattern(elem, subst);
                 }
             }
-            super::Pattern::Variant { fields, .. } => {
+            super::Pattern::Variant { fields, .. } | super::Pattern::Struct { fields, .. } => {
                 for fp in fields {
                     fp.ty = self.substitute_type(&fp.ty, subst);
                     self.substitute_pattern(&mut fp.pattern, subst);

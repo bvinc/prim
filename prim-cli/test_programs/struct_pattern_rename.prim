@@ -1,0 +1,9 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x = 7, y = 9 }
+    let Point { x: a } = p
+    println(a)
+}

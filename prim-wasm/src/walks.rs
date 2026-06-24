@@ -74,7 +74,7 @@ fn collect_locals_pattern(pattern: &hir::Pattern, locals: &mut Vec<(hir::SymbolI
                 collect_locals_pattern(elem, locals);
             }
         }
-        hir::Pattern::Variant { fields, .. } => {
+        hir::Pattern::Variant { fields, .. } | hir::Pattern::Struct { fields, .. } => {
             for fp in fields {
                 collect_locals_pattern(&fp.pattern, locals);
             }
@@ -231,6 +231,13 @@ fn collect_scratch_types_pattern(pattern: &hir::Pattern, out: &mut Vec<ValType>)
                 collect_scratch_types_pattern(elem, out);
             }
         }
+        // A struct destructure stashes its base pointer (one i32), like a tuple.
+        hir::Pattern::Struct { fields, .. } => {
+            out.push(ValType::I32);
+            for fp in fields {
+                collect_scratch_types_pattern(&fp.pattern, out);
+            }
+        }
         hir::Pattern::Variant { fields, .. } => {
             for fp in fields {
                 collect_scratch_types_pattern(&fp.pattern, out);
@@ -252,7 +259,7 @@ fn collect_match_arm_temps(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
                     child(elem, out);
                 }
             }
-            hir::Pattern::Variant { fields, .. } => {
+            hir::Pattern::Variant { fields, .. } | hir::Pattern::Struct { fields, .. } => {
                 out.push(ValType::I32);
                 for fp in fields {
                     child(&fp.pattern, out);
@@ -267,7 +274,7 @@ fn collect_match_arm_temps(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
                 child(elem, out);
             }
         }
-        hir::Pattern::Variant { fields, .. } => {
+        hir::Pattern::Variant { fields, .. } | hir::Pattern::Struct { fields, .. } => {
             for fp in fields {
                 child(&fp.pattern, out);
             }

@@ -1452,6 +1452,11 @@ impl<'a> LoweringContext<'a> {
                     self.check_irrefutable(elem, file_id);
                 }
             }
+            prim_parse::Pattern::Struct { fields, .. } => {
+                for fp in fields {
+                    self.check_irrefutable(&fp.pattern, file_id);
+                }
+            }
             prim_parse::Pattern::Int { span, .. }
             | prim_parse::Pattern::Bool { span, .. }
             | prim_parse::Pattern::Variant { span, .. } => {
@@ -1566,6 +1571,36 @@ impl<'a> LoweringContext<'a> {
                 hir::Pattern::Variant {
                     enum_id,
                     variant_idx,
+                    fields,
+                    span: self.span_id(*span, file_id),
+                }
+            }
+            prim_parse::Pattern::Struct { name, fields, span } => {
+                let struct_name = self.interner.resolve(&name.sym);
+                let struct_id = module_scope
+                    .get(struct_name)
+                    .and_then(|res_id| self.struct_ids.get(res_id).copied());
+                let struct_id = match struct_id {
+                    Some(id) => id,
+                    None => {
+                        self.errors.push(LoweringError::UnknownStruct {
+                            name: struct_name.to_string(),
+                            file: file_id,
+                            span: name.span,
+                        });
+                        hir::StructId(0)
+                    }
+                };
+                let fields = fields
+                    .iter()
+                    .map(|fp| hir::FieldPattern {
+                        field: fp.field.sym,
+                        ty: hir::Type::Undetermined,
+                        pattern: self.lower_pattern(&fp.pattern, module, file_id, module_scope),
+                    })
+                    .collect();
+                hir::Pattern::Struct {
+                    struct_id,
                     fields,
                     span: self.span_id(*span, file_id),
                 }

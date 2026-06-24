@@ -22,7 +22,10 @@ use crate::builtins::{
     Builtins, emit_println_bool, emit_println_f64, emit_println_i64, emit_println_u64,
     emit_rt_resume, emit_write_bytes,
 };
-use crate::emit::{DbgSite, StrSite, StringLayout, build_emit_ctx, emit_user_function};
+use crate::emit::{
+    DbgSite, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
+    emit_user_function,
+};
 use crate::layout::{
     DOT_OFFSET, EnumLayout, FALSE_OFFSET, NEWLINE_OFFSET, STATIC_DATA_START, StructLayout,
     TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
@@ -273,6 +276,18 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     builtins.cont_type = main_cont_type;
     let yield_tag_idx: u32 = 0;
 
+    // Synthesized per-type drop functions, emitted after `__rt_resume`. Every
+    // concrete needs-drop type T gets a `drop_T(ptr)`; a `Stmt::Drop` of type T
+    // lowers to a call of it. Indices are assigned up front (before any body is
+    // emitted) so mutually-referencing types resolve.
+    let drop_info = hir::DropInfo::new(program);
+    let drop_types = collect_drop_types(program, &drop_info);
+    let drop_fn_type = types.register(vec![ValType::I32], vec![]);
+    let mut drop_fns: HashMap<hir::Type, u32> = HashMap::new();
+    for (i, ty) in drop_types.iter().enumerate() {
+        drop_fns.insert(ty.clone(), rt_resume_idx + 1 + i as u32);
+    }
+
     // First pass: walk every user function in the same order they'll be
     // emitted, collect dbg prefix strings AND string literal bytes, lay them
     // out in static memory starting at STATIC_DATA_START. Record per-function
@@ -444,6 +459,9 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         functions.function(type_idx);
     }
     functions.function(rt_resume_type); // __rt_resume
+    for _ in &drop_types {
+        functions.function(drop_fn_type); // drop_T(ptr) for each needs-drop type
+    }
     module.section(&functions);
 
     // Table section: a funcref table holding every impl method that may
@@ -569,6 +587,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 program,
                 func,
                 &func_map,
+                &drop_fns,
                 &runtime_map,
                 &builtins,
                 &struct_layouts,
@@ -594,6 +613,18 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         yield_tag_idx,
         main_func.ret.is_some(),
     ));
+    // Bodies of the synthesized drop functions, in the same order their indices
+    // were assigned (so they line up with the function-section entries above).
+    for ty in &drop_types {
+        codes.function(&emit_drop_fn(
+            ty,
+            &drop_fns,
+            &func_map,
+            program,
+            &drop_info,
+            builtins.free,
+        ));
+    }
     module.section(&codes);
 
     // Data section

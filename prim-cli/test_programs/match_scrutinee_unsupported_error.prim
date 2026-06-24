@@ -1,14 +1,11 @@
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-fn f(p: Point) -> i32 {
-    return match p {
+// Matching is only supported on enums, bools, integers, tuples, and structs.
+// A float scrutinee has no structural cases, so it is rejected.
+fn f(v: f64) -> i32 {
+    return match v {
         _ => 0i32,
     }
 }
 
 fn main() {
-    f(Point { x = 1i32, y = 2i32 })
+    f(1.0f64)
 }

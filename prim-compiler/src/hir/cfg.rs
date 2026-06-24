@@ -646,7 +646,9 @@ pub fn pattern_binds_noncopy(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Binding { ty, .. } => !is_copy(ty),
         Pattern::Tuple { elems, .. } => elems.iter().any(pattern_binds_noncopy),
-        Pattern::Variant { fields, .. } => fields.iter().any(|f| pattern_binds_noncopy(&f.pattern)),
+        Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
+            fields.iter().any(|f| pattern_binds_noncopy(&f.pattern))
+        }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
     }
 }
@@ -661,7 +663,7 @@ pub fn pattern_bindings(pattern: &Pattern, out: &mut Vec<SymbolId>) {
                 pattern_bindings(e, out);
             }
         }
-        Pattern::Variant { fields, .. } => {
+        Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
                 pattern_bindings(&f.pattern, out);
             }

@@ -1,0 +1,11 @@
+import std.io.println
+
+struct R { id: i32 }
+impl Drop for R {
+    fn drop(edit self) { println(self.id) }
+}
+
+fn main() {
+    let t = (R { id = 3 }, 7i32)
+    println(0i32)
+}

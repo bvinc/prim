@@ -710,6 +710,13 @@ pub enum Pattern {
         fields: Vec<FieldPattern>,
         span: SpanId,
     },
+    /// A struct destructuring pattern, e.g. `Point { x, y }`. Irrefutable; may
+    /// bind a subset of the struct's fields.
+    Struct {
+        struct_id: StructId,
+        fields: Vec<FieldPattern>,
+        span: SpanId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -730,7 +737,8 @@ impl Pattern {
             | Pattern::Tuple { span, .. }
             | Pattern::Int { span, .. }
             | Pattern::Bool { span, .. }
-            | Pattern::Variant { span, .. } => *span,
+            | Pattern::Variant { span, .. }
+            | Pattern::Struct { span, .. } => *span,
         }
     }
 }

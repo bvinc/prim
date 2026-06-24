@@ -73,13 +73,15 @@ later feature).
 - **Arrays don't codegen.** Array literals are parsed but ignored in codegen
   (`case_byte_array_literal`). No array support end to end yet.
 
-- **Drop/RAII (Stage 2) first cut — no recursive field drops.** A value is
-  RAII-dropped (its `Drop::drop` runs, then its box is freed) when it implements
-  `Drop` or transitively contains a field that does. But the drop glue does *not*
-  yet recurse into fields: a composite that holds a `Drop`-implementing field but
-  doesn't itself implement `Drop` has its own box freed, while the field's
-  `Drop::drop` is **not** called and the field leaks. Compose by implementing
-  `Drop` on the outer type for now; auto-recursion is the immediate follow-up.
+- **Drop/RAII — recursive field drops cover structs and tuples, not yet enums.**
+  Each concrete needs-drop type gets a synthesized `drop_T(ptr)` function
+  (`prim-wasm`): it runs `T`'s own `Drop::drop`, recursively calls `drop_F` on
+  each owned struct field / tuple element that needs dropping, then frees `T`'s
+  box. So a composite holding a `Drop` field (even without its own `Drop` impl)
+  now drops that field correctly. **Enums and arrays are not yet recursed:** a
+  needs-drop enum has its own box freed but its active variant's payload is *not*
+  dropped (sound, just leaky), because that needs discriminant dispatch — the
+  next follow-up. Arrays don't codegen at all yet.
 
 - **Drop/RAII — `match` bindings leak.** Values bound by `match` arm payloads
   (and enums consumed by a `match`) are not yet dropped — sound (no

@@ -1,0 +1,11 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+struct Line { a: Point, b: Point }
+
+fn main() {
+    let l = Line { a = Point { x = 1, y = 2 }, b = Point { x = 3, y = 4 } }
+    let Line { a: Point { x }, b: Point { y } } = l
+    println(x)
+    println(y)
+}

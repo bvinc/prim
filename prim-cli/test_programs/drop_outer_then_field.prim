@@ -1,0 +1,15 @@
+import std.io.println
+
+struct Inner { id: i32 }
+impl Drop for Inner {
+    fn drop(edit self) { println(self.id) }
+}
+struct Outer { inner: Inner }
+impl Drop for Outer {
+    fn drop(edit self) { println(self.inner.id + 100i32) }
+}
+
+fn main() {
+    let o = Outer { inner = Inner { id = 5 } }
+    println(0i32)
+}

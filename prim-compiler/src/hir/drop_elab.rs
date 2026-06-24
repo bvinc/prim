@@ -524,6 +524,13 @@ fn pattern_bindings(pattern: &Pattern, out: &mut Vec<(SymbolId, Type)>) {
                 pattern_bindings(e, out);
             }
         }
+        // Struct destructuring binds owned fields (like a tuple), so its
+        // bindings are tracked for dropping; `match`/variant bindings still leak.
+        Pattern::Struct { fields, .. } => {
+            for f in fields {
+                pattern_bindings(&f.pattern, out);
+            }
+        }
         Pattern::Wildcard { .. }
         | Pattern::Int { .. }
         | Pattern::Bool { .. }
@@ -539,6 +546,11 @@ fn pattern_binding_spans(pattern: &Pattern, out: &mut Vec<(SymbolId, Type, SpanI
         Pattern::Tuple { elems, .. } => {
             for e in elems {
                 pattern_binding_spans(e, out);
+            }
+        }
+        Pattern::Struct { fields, .. } => {
+            for f in fields {
+                pattern_binding_spans(&f.pattern, out);
             }
         }
         Pattern::Wildcard { .. }

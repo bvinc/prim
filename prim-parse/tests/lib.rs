@@ -124,6 +124,43 @@ fn test_parse_let_statement() {
 }
 
 #[test]
+fn test_parse_struct_pattern() {
+    // Shorthand binding, `mut` shorthand, and renamed `field: subpat`.
+    let source = "fn main() { let Point { x, mut y, z: w } = p }";
+    let (program, interner) = parse_ok(source);
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let {
+            pattern: Pattern::Struct { name, fields, .. },
+            ..
+        } => {
+            assert_eq!(interner.resolve(&name.sym), "Point");
+            assert_eq!(fields.len(), 3);
+            assert_eq!(interner.resolve(&fields[0].field.sym), "x");
+            match &fields[0].pattern {
+                Pattern::Binding { name, mutable, .. } => {
+                    assert_eq!(interner.resolve(&name.sym), "x");
+                    assert!(!mutable);
+                }
+                other => panic!("expected binding, got {:?}", other),
+            }
+            // `mut y` shorthand binds y mutably.
+            assert_eq!(interner.resolve(&fields[1].field.sym), "y");
+            match &fields[1].pattern {
+                Pattern::Binding { mutable, .. } => assert!(mutable),
+                other => panic!("expected mut binding, got {:?}", other),
+            }
+            // `z: w` renames the field z to w.
+            assert_eq!(interner.resolve(&fields[2].field.sym), "z");
+            match &fields[2].pattern {
+                Pattern::Binding { name, .. } => assert_eq!(interner.resolve(&name.sym), "w"),
+                other => panic!("expected renamed binding, got {:?}", other),
+            }
+        }
+        other => panic!("expected struct pattern let, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_loop_with_break() {
     let source = "fn main() { loop { break } }";
     let (program, _) = parse_ok(source);
