@@ -1,0 +1,15 @@
+import std.io.println
+
+struct Inner { id: i32 }
+impl Drop for Inner {
+    fn drop(edit self) { println(self.id) }
+}
+struct Outer { inner: Inner }
+
+// `let take` moves a non-Copy field out of an owned place; the extracted value
+// is then owned by the new binding and dropped at scope end.
+fn main() {
+    let o = Outer { inner = Inner { id = 3 } }
+    let take got = o.inner
+    println(0i32)
+}

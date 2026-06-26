@@ -5,11 +5,11 @@ enum Box { Full { s: S }, Empty }
 fn main() {
     let b = Box.Full { s = S { n = 1 } }
     let first = match b {
-        Box.Full { s } => s.n,
+        Box.Full { take s } => s.n,
         Box.Empty => 0i32,
     }
     let second = match b {
-        Box.Full { s } => s.n,
+        Box.Full { take s } => s.n,
         Box.Empty => 0i32,
     }
 }

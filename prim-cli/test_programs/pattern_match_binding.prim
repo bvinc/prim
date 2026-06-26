@@ -20,7 +20,7 @@ fn describe(m: MaybeI32) -> i32 {
 fn unwrap_or_zero(take m: MaybeI32) -> i32 {
     return match m {
         MaybeI32.Some { value } => value,
-        rest => describe(rest),
+        take rest => describe(rest),
     }
 }
 

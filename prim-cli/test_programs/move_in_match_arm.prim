@@ -11,5 +11,5 @@ fn main() {
         0 => sink(take a),
         _ => 0i32,
     }
-    let b = a
+    let take b = a
 }

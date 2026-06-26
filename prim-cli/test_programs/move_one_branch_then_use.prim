@@ -8,5 +8,5 @@ fn main() {
     if cond {
         let x = sink(take a)
     }
-    let again = a
+    let take again = a
 }

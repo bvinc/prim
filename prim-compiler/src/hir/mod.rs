@@ -679,10 +679,13 @@ pub enum Pattern {
         ty: Type,
         span: SpanId,
     },
-    /// A name binding — matches anything and binds it to `symbol`.
+    /// A name binding — matches anything and binds it to `symbol`. `mode` is
+    /// `Take` when the binding moves the value out of a `match` scrutinee
+    /// (consuming it); `View` otherwise (`let` bindings and borrows).
     Binding {
         symbol: SymbolId,
         ty: Type,
+        mode: PassMode,
         span: SpanId,
     },
     /// `(a, b, ...)` — matched element-wise against a tuple value. `ty` is the

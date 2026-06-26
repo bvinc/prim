@@ -83,15 +83,18 @@ later feature).
   dropped (sound, just leaky), because that needs discriminant dispatch — the
   next follow-up. Arrays don't codegen at all yet.
 
-- **Drop/RAII — consuming `match` now ends ownership; some payloads still leak.**
-  A `match` that binds a non-`Copy` payload consumes its scrutinee: the bound
-  values are dropped at their arm's end (drop elaboration hosts them in the arm's
-  block scope, `hir/drop_elab.rs`) and every box the arm did not move out is
-  freed (`emit::emit_consume_cleanup`), including nested destructured boxes. A
-  payload an arm *returns* is moved out and not double-freed. Remaining gaps,
-  sound but leaky: an **un-taken (wildcard/omitted) needs-drop field** in a
-  consuming arm, and the **live payload behind a wildcard arm over an enum** (its
-  box is freed but the variant's payload is not dropped — same discriminant-
+- **Drop/RAII — `take` in a `match` ends ownership; some payloads still leak.**
+  Binding a non-`Copy` value in a `match` arm requires `take` (`Some { take r }`,
+  positional `Some(take v)`, or whole-value `take rest`); a plain binding of a
+  non-`Copy` value is a compile error (borrowing one out awaits lifetimes — use
+  `take` to move it, or `_` to ignore it). A `take` binding consumes the
+  scrutinee: the moved-out values are dropped at their arm's end (drop
+  elaboration hosts them in the arm's block scope, `hir/drop_elab.rs`) and every
+  box the arm did not move out is freed (`emit::emit_consume_cleanup`), including
+  nested destructured boxes. A payload an arm *returns* is moved out and not
+  double-freed. Remaining gaps, sound but leaky: an **un-taken needs-drop field**
+  in a consuming arm, and the **live payload behind a wildcard arm over an enum**
+  (its box is freed but the variant's payload is not dropped — same discriminant-
   dispatch gap as enum recursive drop above). Conditionally-moved resources are a
   *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
   all paths or none).

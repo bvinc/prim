@@ -177,6 +177,7 @@ impl Insert<'_> {
                     pattern: Pattern::Binding {
                         symbol: tmp,
                         ty: ty.clone(),
+                        mode: PassMode::View,
                         span,
                     },
                     ty: ty.clone(),
@@ -251,6 +252,7 @@ impl Insert<'_> {
                     pattern: Pattern::Binding {
                         symbol: tmp,
                         ty: ty.clone(),
+                        mode: PassMode::View,
                         span,
                     },
                     ty: ty.clone(),

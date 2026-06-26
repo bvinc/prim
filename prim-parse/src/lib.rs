@@ -216,10 +216,13 @@ pub enum Pattern {
     /// `_` — matches anything, binds nothing.
     Wildcard { span: Span },
     /// A bare identifier — matches anything and binds it to a name. The
-    /// `mutable` flag carries `let mut` through to the binding.
+    /// `mutable` flag carries `let mut` through to the binding. `mode` carries a
+    /// `take` prefix in a `match` arm (moving the value out of the scrutinee);
+    /// `let` bindings are always owning and leave it `View`.
     Binding {
         name: Ident,
         mutable: bool,
+        mode: PassMode,
         span: Span,
     },
     /// `(a, b, ...)` — matches a tuple element-wise.

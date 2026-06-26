@@ -3,5 +3,5 @@ struct S { n: i32 }
 fn main() {
     let a = S { n = 1 }
     let t = (a, 5i32)
-    let again = a
+    let take again = a
 }

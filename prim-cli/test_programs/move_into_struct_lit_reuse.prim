@@ -4,5 +4,5 @@ struct Wrap { inner: S }
 fn main() {
     let a = S { n = 1 }
     let w = Wrap { inner = a }
-    let again = a
+    let take again = a
 }

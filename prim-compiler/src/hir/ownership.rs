@@ -23,7 +23,7 @@
 //!
 //! Modes are erased after this pass; mono/codegen ignore them.
 
-use super::cfg::{self, Action, is_copy, root_symbol};
+use super::cfg::{self, Action, Effect, effect, is_copy, root_symbol};
 use super::{Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId};
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
@@ -54,6 +54,11 @@ pub enum MoveErrorKind {
     /// A value that implements `Drop` is moved on some paths but not others, so
     /// the compiler can't statically decide whether to drop it at scope exit.
     ConditionalDrop,
+    /// A `let` or `match` binds a non-`Copy` value out of a named place without
+    /// `take`. Moving an owned value out of something that still holds it must be
+    /// explicit (`take`); borrowing it out (`view`/`edit`) awaits lifetimes.
+    /// Ignore it with `_` to neither.
+    BindWithoutTake,
 }
 
 impl std::fmt::Display for MoveError {
@@ -71,6 +76,11 @@ impl std::fmt::Display for MoveError {
                 "value may be moved on only some paths; a value that implements \
                  Drop must be moved on all paths or none"
             ),
+            MoveErrorKind::BindWithoutTake => write!(
+                f,
+                "cannot bind a non-Copy value out of a place without `take`; \
+                 use `take` to move it out, or `_` to ignore it"
+            ),
         }
     }
 }
@@ -86,6 +96,7 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
         };
         checker.check_moves(func);
         checker.check_borrows(func);
+        checker.check_take_modes(func);
         errors.append(&mut checker.errors);
     }
     // Report deterministically: earliest span first.
@@ -132,12 +143,17 @@ impl Checker<'_> {
         let mut tracked: HashSet<SymbolId> = HashSet::new();
         let mut borrow_params: HashSet<SymbolId> = HashSet::new();
         for p in &func.params {
-            if is_copy(&p.ty) {
-                continue;
-            }
-            tracked.insert(p.name);
-            if matches!(p.mode, PassMode::View | PassMode::Edit) {
-                borrow_params.insert(p.name);
+            match effect(p.mode, &p.ty) {
+                // Copy params aren't tracked; `take` params are owned (movable);
+                // `view`/`edit` params are borrows that may not be moved out.
+                Effect::Copy => {}
+                Effect::Move => {
+                    tracked.insert(p.name);
+                }
+                Effect::Borrow => {
+                    tracked.insert(p.name);
+                    borrow_params.insert(p.name);
+                }
             }
         }
         collect_tracked(&func.body, &mut tracked);
@@ -229,6 +245,70 @@ impl Checker<'_> {
             .get(func.0 as usize)
             .map(|f| f.params.iter().map(|p| (p.mode, is_copy(&p.ty))).collect())
             .unwrap_or_default()
+    }
+
+    /// Binding a non-`Copy` value out of a named place must use `take`: every
+    /// `match` arm (the scrutinee is the place), and every `let` whose RHS is a
+    /// place. `let`s of a fresh value originate ownership and are not checked.
+    fn check_take_modes(&mut self, func: &super::Function) {
+        TakeModeWalk { chk: self }.visit_block(&func.body);
+    }
+}
+
+/// Checks `take` modes on the binding sites that move a value out of a place:
+/// `match` arm patterns, and `let` patterns over a place RHS. The default
+/// `visit_pattern` no-op skips `let`s of a fresh value (handled in `visit_stmt`).
+struct TakeModeWalk<'a, 'p> {
+    chk: &'a mut Checker<'p>,
+}
+
+impl Visitor for TakeModeWalk<'_, '_> {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        // `let` binding a non-`Copy` value *out of a named place* (a variable or
+        // field the source still owns) must use `take`. Binding a fresh value (an
+        // rvalue with no named root) originates ownership and needs no mode.
+        if let Stmt::Let { pattern, value, .. } = stmt {
+            if root_symbol(value).is_some() {
+                check_binding_modes(self.chk, pattern);
+            }
+        }
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        if let ExprKind::Match { arms, .. } = &expr.kind {
+            for arm in arms {
+                check_binding_modes(self.chk, &arm.pattern);
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Recurse a pattern, emitting `BindWithoutTake` for each non-`Copy` binding
+/// that lacks `take`. Destructure nodes are walked through; only their leaf
+/// bindings carry a mode.
+fn check_binding_modes(chk: &mut Checker, pattern: &Pattern) {
+    match pattern {
+        Pattern::Binding { ty, mode, span, .. } => {
+            // A non-`Copy` binding that would borrow (`view`/`edit`, or an
+            // unwritten mode) instead of move is rejected: borrows out of a
+            // place await lifetimes, so the only legal mode here is `take`.
+            if effect(*mode, ty) == Effect::Borrow {
+                chk.emit(*span, MoveErrorKind::BindWithoutTake);
+            }
+        }
+        Pattern::Tuple { elems, .. } => {
+            for e in elems {
+                check_binding_modes(chk, e);
+            }
+        }
+        Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
+            for f in fields {
+                check_binding_modes(chk, &f.pattern);
+            }
+        }
+        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
     }
 }
 

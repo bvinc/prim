@@ -1881,6 +1881,25 @@ impl<'a> Parser<'a> {
     /// - `(...)` → tuple
     /// - `A.B { ... }` (a dotted path) → enum variant
     fn parse_pattern(&mut self) -> Result<crate::Pattern, ParseError> {
+        // `take [mut] x` — a binding that moves the value out of the scrutinee.
+        if matches!(self.peek_kind(), Some(TokenKind::Take)) {
+            let take_span = self.advance().span;
+            let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+            if mutable {
+                self.advance();
+            }
+            let name_span = self
+                .consume(TokenKind::Identifier, "Expected binding name after 'take'")?
+                .span;
+            let name = self.ident(name_span);
+            return Ok(crate::Pattern::Binding {
+                name,
+                mutable,
+                mode: crate::PassMode::Take,
+                span: take_span.cover(name_span),
+            });
+        }
+
         // `mut x` — a mutable binding.
         if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
             let mut_span = self.advance().span;
@@ -1891,6 +1910,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable: true,
+                mode: crate::PassMode::View,
                 span: mut_span.cover(name_span),
             });
         }
@@ -1972,6 +1992,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable: false,
+                mode: crate::PassMode::View,
                 span: first_span,
             });
         }
@@ -2049,19 +2070,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_field_pattern(&mut self) -> Result<crate::FieldPattern, ParseError> {
-        // `mut name` shorthand binds the field mutably to its own name.
-        if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
-            let mut_span = self.advance().span;
+        // `take [mut] name` / `mut name` shorthands bind the field to its own
+        // name; `take` additionally moves it out of the scrutinee.
+        let lead = self.peek().map(|t| t.span);
+        let take = matches!(self.peek_kind(), Some(TokenKind::Take));
+        if take {
+            self.advance();
+        }
+        let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+        if mutable {
+            self.advance();
+        }
+        if take || mutable {
             let field_span = self
-                .consume(TokenKind::Identifier, "Expected field name after 'mut'")?
+                .consume(TokenKind::Identifier, "Expected field name in pattern")?
                 .span;
             let field = self.ident(field_span);
+            let span = lead.unwrap_or(field_span).cover(field_span);
             return Ok(crate::FieldPattern {
                 field,
                 pattern: crate::Pattern::Binding {
                     name: field,
-                    mutable: true,
-                    span: mut_span.cover(field_span),
+                    mutable,
+                    mode: if take {
+                        crate::PassMode::Take
+                    } else {
+                        crate::PassMode::View
+                    },
+                    span,
                 },
             });
         }
@@ -2079,6 +2115,7 @@ impl<'a> Parser<'a> {
             crate::Pattern::Binding {
                 name: field,
                 mutable: false,
+                mode: crate::PassMode::View,
                 span: field_span,
             }
         };

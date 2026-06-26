@@ -1291,6 +1291,7 @@ impl<'a> LoweringContext<'a> {
                     pattern: hir::Pattern::Binding {
                         symbol: loop_sym,
                         ty: hir::Type::Undetermined,
+                        mode: hir::PassMode::View,
                         span: span_id,
                     },
                     ty: hir::Type::Undetermined,
@@ -1301,6 +1302,7 @@ impl<'a> LoweringContext<'a> {
                     pattern: hir::Pattern::Binding {
                         symbol: end_sym,
                         ty: hir::Type::Undetermined,
+                        mode: hir::PassMode::View,
                         span: span_id,
                     },
                     ty: hir::Type::Undetermined,
@@ -1483,6 +1485,7 @@ impl<'a> LoweringContext<'a> {
             prim_parse::Pattern::Binding {
                 name,
                 mutable,
+                mode,
                 span,
             } => {
                 let sym = self.insert_symbol(module, name.sym, SymbolKind::Local);
@@ -1496,6 +1499,7 @@ impl<'a> LoweringContext<'a> {
                 hir::Pattern::Binding {
                     symbol: sym,
                     ty: hir::Type::Undetermined,
+                    mode: *mode,
                     span: self.span_id(*span, file_id),
                 }
             }

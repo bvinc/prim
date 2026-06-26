@@ -1,5 +1,5 @@
 use prim_parse::{
-    BinaryOp, ExprKind, ImportSelector, Interner, ParseError, Pattern, Stmt, Type, parse,
+    BinaryOp, ExprKind, ImportSelector, Interner, ParseError, PassMode, Pattern, Stmt, Type, parse,
 };
 use prim_tok::TokenKind;
 use std::sync::Arc;
@@ -157,6 +157,41 @@ fn test_parse_struct_pattern() {
             }
         }
         other => panic!("expected struct pattern let, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_take_pattern() {
+    // `take` on a field shorthand and on a whole-value binding sets the binding
+    // mode to Take; a plain field binding stays View.
+    let source = "fn f() { let r = match v { E.V { take x, y } => x, take rest => rest } }";
+    let (program, interner) = parse_ok(source);
+    let Stmt::Let { value, .. } = &program.functions[0].body.stmts[0] else {
+        panic!("expected let");
+    };
+    let ExprKind::Match { arms, .. } = &value.kind else {
+        panic!("expected match");
+    };
+    // Arm 0: variant with a `take x` field and a plain `y` field.
+    let Pattern::Variant { fields, .. } = &arms[0].pattern else {
+        panic!("expected variant pattern");
+    };
+    assert_eq!(interner.resolve(&fields[0].field.sym), "x");
+    match &fields[0].pattern {
+        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::Take),
+        other => panic!("expected take binding, got {:?}", other),
+    }
+    match &fields[1].pattern {
+        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::View),
+        other => panic!("expected view binding, got {:?}", other),
+    }
+    // Arm 1: `take rest` binds the whole scrutinee by move.
+    match &arms[1].pattern {
+        Pattern::Binding { name, mode, .. } => {
+            assert_eq!(interner.resolve(&name.sym), "rest");
+            assert_eq!(*mode, PassMode::Take);
+        }
+        other => panic!("expected take binding, got {:?}", other),
     }
 }
 

@@ -16,7 +16,7 @@ enum Opt {
 fn main() {
     let o = Opt.Some { r = Res { id = 9 } }
     let got = match o {
-        Opt.Some { r } => r,
+        Opt.Some { take r } => r,
         Opt.None => Res { id = 0 },
     }
     println(1i32)

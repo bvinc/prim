@@ -591,10 +591,12 @@ impl Builder<'_> {
         }
     }
 
-    /// Walk a call's arguments: `take` args move, `view`/`edit` args read.
+    /// Walk a call's arguments: a `take` of a non-`Copy` value moves; everything
+    /// else (borrows, copies) is a read.
     fn read_args(&mut self, args: &[Expr], arg_modes: &[PassMode]) {
         for (i, a) in args.iter().enumerate() {
-            if matches!(arg_modes.get(i), Some(PassMode::Take)) {
+            let mode = arg_modes.get(i).copied().unwrap_or(PassMode::View);
+            if effect(mode, &a.ty) == Effect::Move {
                 self.moved(a);
             } else {
                 self.read(a);
@@ -630,6 +632,32 @@ pub fn is_copy(ty: &Type) -> bool {
     )
 }
 
+/// What a binding (parameter, `let`, or `match` arm) or call argument does to
+/// its source, given its passing mode and type. The single definition of mode
+/// meaning shared across the move analysis, the ownership checker, and drop
+/// elaboration — so the three binding sites can't drift in how they read a mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// A `Copy` value: duplicated, mode is a no-op, the source is unaffected.
+    Copy,
+    /// A `take` of a non-`Copy` value: ownership moves out, the source dies.
+    Move,
+    /// A `view`/`edit` of a non-`Copy` value: the source is borrowed and kept.
+    Borrow,
+}
+
+/// Classify a moded binding/argument by its effect on the source. `Copy` types
+/// ignore the mode; otherwise `take` moves and `view`/`edit` borrow.
+pub fn effect(mode: PassMode, ty: &Type) -> Effect {
+    if is_copy(ty) {
+        Effect::Copy
+    } else if matches!(mode, PassMode::Take) {
+        Effect::Move
+    } else {
+        Effect::Borrow
+    }
+}
+
 /// The local a place expression is rooted at (`x`, `x.f`, `x.0`, `*x`); `None`
 /// for anything not rooted at a bare binding (a temporary, a call result).
 pub fn root_symbol(expr: &Expr) -> Option<SymbolId> {
@@ -643,23 +671,22 @@ pub fn root_symbol(expr: &Expr) -> Option<SymbolId> {
 }
 
 /// Whether a `match` over `arms` consumes (moves) its scrutinee. True when any
-/// arm binds a non-`Copy` value out of the payload — that move ends the
+/// arm `take`s a non-`Copy` value out of the payload — that move ends the
 /// scrutinee's ownership, so the match becomes responsible for freeing its box
-/// and dropping the parts no arm took. The single predicate both the move
-/// analysis and drop elaboration consult. (Stage A replaces this inference with
-/// an explicit `match take` mode.)
+/// and dropping the parts no arm took. The single predicate the move analysis,
+/// drop elaboration, and codegen consult.
 pub fn match_consumes(arms: &[MatchArm]) -> bool {
-    arms.iter().any(|a| pattern_binds_noncopy(&a.pattern))
+    arms.iter().any(|a| pattern_moves(&a.pattern))
 }
 
-/// Whether a pattern binds at least one non-`Copy` value by name (which forces a
-/// move out of the matched scrutinee).
-pub fn pattern_binds_noncopy(pattern: &Pattern) -> bool {
+/// Whether a pattern moves at least one value out of the matched value — i.e.
+/// has a binding whose [`effect`] is [`Effect::Move`].
+pub fn pattern_moves(pattern: &Pattern) -> bool {
     match pattern {
-        Pattern::Binding { ty, .. } => !is_copy(ty),
-        Pattern::Tuple { elems, .. } => elems.iter().any(pattern_binds_noncopy),
+        Pattern::Binding { ty, mode, .. } => effect(*mode, ty) == Effect::Move,
+        Pattern::Tuple { elems, .. } => elems.iter().any(pattern_moves),
         Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
-            fields.iter().any(|f| pattern_binds_noncopy(&f.pattern))
+            fields.iter().any(|f| pattern_moves(&f.pattern))
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
     }
