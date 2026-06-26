@@ -225,10 +225,11 @@ fn emit_block(f: &mut Function, block: &hir::Block, ctx: &EmitCtx) -> Result<(),
 fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), WasmError> {
     match stmt {
         hir::Stmt::Let { pattern, value, .. } => {
-            // Evaluate the initializer, leaving it on the stack, then bind it
-            // by walking the (irrefutable) pattern.
+            // Evaluate the initializer, leaving it on the stack, then bind it by
+            // walking the (irrefutable) pattern — the same binder `match` uses,
+            // fed from the stack and never hitting a refutable (testing) arm.
             emit_expr(f, value, ctx)?;
-            emit_bind(f, pattern, &value.ty, ctx);
+            emit_test_bind(f, Src::Stack, &value.ty, pattern, ctx);
         }
         hir::Stmt::Assign { target, value, .. } => {
             emit_expr(f, value, ctx)?;
@@ -919,6 +920,10 @@ enum Src {
     Local(u32),
     /// At `base + offset` in linear memory (a tuple element or variant field).
     Field { base: u32, offset: u32 },
+    /// On top of the operand stack (a `let` initializer just evaluated). Unlike
+    /// a local or field it can be read only once, so any pattern that needs the
+    /// value more than once stashes it to a scratch local first (`aggregate_base`).
+    Stack,
 }
 
 /// Compile a `match` as a chain of fail-blocks wrapped in a result-carrying
@@ -993,6 +998,10 @@ fn push_src(f: &mut Function, src: Src, ty: &hir::Type) {
             f.instruction(&Instruction::LocalGet(base));
             emit_field_load(f, ty, offset);
         }
+        // Already on the operand stack — nothing to push. Valid only for a
+        // single consuming use (a leaf binding); callers needing it repeatedly
+        // route through `aggregate_base`.
+        Src::Stack => {}
     }
 }
 
@@ -1007,11 +1016,20 @@ fn emit_test_bind(
     ctx: &EmitCtx,
 ) {
     match pattern {
-        hir::Pattern::Wildcard { .. } => {}
+        hir::Pattern::Wildcard { .. } => {
+            // A value left on the stack (a `let _ = expr`) must be dropped to
+            // keep the stack balanced; one in a local/field is just ignored.
+            if matches!(src, Src::Stack) && produces_value(ty) {
+                f.instruction(&Instruction::Drop);
+            }
+        }
         hir::Pattern::Binding { symbol, .. } => {
             if let Some(&local) = ctx.locals.get(symbol) {
                 push_src(f, src, ty);
                 f.instruction(&Instruction::LocalSet(local));
+            } else if matches!(src, Src::Stack) && produces_value(ty) {
+                // Unbound name fed from the stack: discard to stay balanced.
+                f.instruction(&Instruction::Drop);
             }
         }
         hir::Pattern::Int { value, ty: pty, .. } => {
@@ -1133,7 +1151,10 @@ fn emit_test_bind(
 fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> u32 {
     match src {
         Src::Local(idx) => idx,
-        Src::Field { .. } => {
+        // A field load or the stack-top value: stash it in a scratch local so the
+        // pointer can be reread for each sub-field. (`push_src` is a no-op for
+        // `Stack`, so this just `LocalSet`s the value already on the stack.)
+        Src::Field { .. } | Src::Stack => {
             let counter = ctx.scratch_counter.get();
             ctx.scratch_counter.set(counter + 1);
             let tmp = ctx.scratch_base + counter;
@@ -1239,73 +1260,6 @@ fn is_destructure(pattern: &hir::Pattern) -> bool {
         pattern,
         hir::Pattern::Variant { .. } | hir::Pattern::Struct { .. } | hir::Pattern::Tuple { .. }
     )
-}
-
-/// Bind a value of type `ty`, already on the operand stack, against an
-/// irrefutable pattern, consuming it.
-fn emit_bind(f: &mut Function, pattern: &hir::Pattern, ty: &hir::Type, ctx: &EmitCtx) {
-    match pattern {
-        hir::Pattern::Wildcard { .. } => {
-            if produces_value(ty) {
-                f.instruction(&Instruction::Drop);
-            }
-        }
-        hir::Pattern::Binding { symbol, .. } => {
-            if let Some(&idx) = ctx.locals.get(symbol) {
-                f.instruction(&Instruction::LocalSet(idx));
-            } else {
-                f.instruction(&Instruction::Drop);
-            }
-        }
-        hir::Pattern::Tuple { elems, .. } => {
-            // Stash the tuple pointer in a scratch local, then load and bind
-            // each element. Scratch is reserved here (after the value was
-            // produced) to match the pre-walk order.
-            let counter = ctx.scratch_counter.get();
-            ctx.scratch_counter.set(counter + 1);
-            let ptr_local = ctx.scratch_base + counter;
-            f.instruction(&Instruction::LocalSet(ptr_local));
-            let elem_types: Vec<hir::Type> = match ty {
-                hir::Type::Tuple(ts) => ts.clone(),
-                _ => Vec::new(),
-            };
-            let layout = compute_tuple_layout(&elem_types);
-            for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
-                f.instruction(&Instruction::LocalGet(ptr_local));
-                emit_field_load(f, elem_ty, *offset);
-                emit_bind(f, elem, elem_ty, ctx);
-            }
-        }
-        hir::Pattern::Struct { fields, .. } => {
-            // Stash the struct pointer, then load and bind each named field from
-            // its offset. The struct id comes from the value's type.
-            let counter = ctx.scratch_counter.get();
-            ctx.scratch_counter.set(counter + 1);
-            let ptr_local = ctx.scratch_base + counter;
-            f.instruction(&Instruction::LocalSet(ptr_local));
-            let layout = match ty {
-                hir::Type::Struct(sid, _) => ctx.struct_layouts.get(sid).cloned(),
-                _ => None,
-            };
-            let Some(layout) = layout else {
-                f.instruction(&Instruction::Unreachable);
-                return;
-            };
-            for fp in fields {
-                let Some((offset, field_ty)) = layout.fields.get(&fp.field).cloned() else {
-                    f.instruction(&Instruction::Unreachable);
-                    continue;
-                };
-                f.instruction(&Instruction::LocalGet(ptr_local));
-                emit_field_load(f, &field_ty, offset);
-                emit_bind(f, &fp.pattern, &field_ty, ctx);
-            }
-        }
-        hir::Pattern::Int { .. } | hir::Pattern::Bool { .. } | hir::Pattern::Variant { .. } => {
-            // Refutable; never reached in an irrefutable position.
-            f.instruction(&Instruction::Unreachable);
-        }
-    }
 }
 
 /// Emit RAII drop of owned local `sym` of type `ty`: a call to the type's

@@ -217,8 +217,9 @@ fn collect_scratch_types_stmt(
 }
 
 /// Reserve scratch slots an irrefutable (`let`) pattern's binding needs: one
-/// i32 pointer per tuple level (to stash the tuple base while elements are
-/// extracted). Mirrors `emit::emit_bind`.
+/// i32 pointer per tuple/struct level (to stash the base while elements are
+/// extracted). Mirrors `emit::emit_test_bind` fed from `Src::Stack`, where the
+/// root aggregate is stashed via `aggregate_base` just like a nested one.
 fn collect_scratch_types_pattern(pattern: &hir::Pattern, out: &mut Vec<ValType>) {
     match pattern {
         hir::Pattern::Wildcard { .. }
