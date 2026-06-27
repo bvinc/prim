@@ -54,10 +54,16 @@ later feature).
   into a use-after-move error — at the cost of leaking the value's `Drop` until
   `dyn` values are themselves drop-elaborated.
 
-- **Traps exit 0.** `panic`, divide-by-zero, and out-of-bounds access all trap
-  the wasm module, but the process still exits 0. The `_start` stack-switching
-  scheduler doesn't propagate wasm traps to the exit code. A halting program and
-  a trapping program are indistinguishable from the outside.
+- **Hardware traps exit 0.** wasmtime's stack-switching `resume` swallows a wasm
+  trap raised inside the scheduler's continuation (and `proc_exit`/a main-stack
+  trap after continuations have run hits a wasmtime assertion), so the engine
+  cannot set a nonzero exit code from program code. `panic` works around this by
+  writing an abort sentinel to stderr that the runner (`compile_and_run`) turns
+  into a nonzero exit — so panics, and everything built on them (`Vec` bounds,
+  `unwrap`), now exit nonzero. But **divide-by-zero and out-of-bounds memory
+  access trap directly, bypassing `panic`, and still exit 0.** Guarding the
+  arithmetic/memory ops to route through `panic` is the fix. Note the sentinel
+  only takes effect through `prim run`; a raw `wasmtime` invocation still exits 0.
 
 ## Deferred design
 
