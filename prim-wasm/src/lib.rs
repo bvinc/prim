@@ -27,8 +27,8 @@ use crate::emit::{
     emit_user_function,
 };
 use crate::layout::{
-    DOT_OFFSET, EnumLayout, FALSE_OFFSET, NEWLINE_OFFSET, STATIC_DATA_START, StructLayout,
-    TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
+    DOT_OFFSET, EnumLayout, FALSE_OFFSET, InlinePolicy, NEWLINE_OFFSET, STATIC_DATA_START,
+    StructLayout, TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
 };
 use crate::types::{TypeRegistry, hir_type_to_valtype};
 use crate::walks::{collect_dbg_prefixes_block, collect_str_literals_block};
@@ -69,14 +69,20 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         return Err(WasmError::MissingMain);
     }
 
+    // Which aggregates are stored inline vs. boxed. Needs drop info (a
+    // needs-drop type must own its box, so it is never inlined), so compute that
+    // first; the same `DropInfo` backs the synthesized drop functions below.
+    let drop_info = hir::DropInfo::new(program);
+    let inline_policy = InlinePolicy::new(program, &drop_info);
+
     // Compute memory layout for every struct.
     let mut struct_layouts: HashMap<hir::StructId, StructLayout> = HashMap::new();
     for s in &program.structs {
-        struct_layouts.insert(s.id, compute_struct_layout(s));
+        struct_layouts.insert(s.id, compute_struct_layout(s, &inline_policy));
     }
     let mut enum_layouts: HashMap<hir::EnumId, EnumLayout> = HashMap::new();
     for e in &program.enums {
-        enum_layouts.insert(e.id, compute_enum_layout(e));
+        enum_layouts.insert(e.id, compute_enum_layout(e, &inline_policy));
     }
     let mut string_layout = None;
     for s in &program.structs {
@@ -287,8 +293,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // concrete needs-drop type T gets a `drop_T(ptr)`; a `Stmt::Drop` of type T
     // lowers to a call of it. Indices are assigned up front (before any body is
     // emitted) so mutually-referencing types resolve.
-    let drop_info = hir::DropInfo::new(program);
-    let drop_types = collect_drop_types(program, &drop_info);
+    let drop_types = collect_drop_types(program, &drop_info, &inline_policy);
     let drop_fn_type = types.register(vec![ValType::I32], vec![]);
     let mut drop_fns: HashMap<hir::Type, u32> = HashMap::new();
     for (i, ty) in drop_types.iter().enumerate() {
@@ -592,6 +597,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             let str_slice = &str_sites[str_range];
             let ctx = build_emit_ctx(
                 program,
+                &inline_policy,
                 func,
                 &func_map,
                 &drop_fns,
@@ -629,6 +635,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             &func_map,
             program,
             &drop_info,
+            &inline_policy,
             builtins.free,
         ));
     }

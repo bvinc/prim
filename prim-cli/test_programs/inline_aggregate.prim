@@ -1,0 +1,20 @@
+import std.io.println
+
+// Small POD structs/tuples are stored inline in their container (no sub-box).
+// Exercises deep field reads, inline field reassignment, and a non-literal
+// inline field initializer (the byte-copy path).
+struct Inner { a: i32, b: i32 }
+struct Outer { inner: Inner, n: i32 }
+
+fn main() {
+    let mut o = Outer { inner = Inner { a = 1, b = 2 }, n = 3 }
+    println(o.inner.a)
+    println(o.inner.b)
+    println(o.n)
+    o.inner = Inner { a = 10, b = 20 }
+    println(o.inner.a)
+    let p = Inner { a = 7, b = 8 }
+    let o2 = Outer { inner = p, n = 0 }
+    println(o2.inner.a)
+    println(o2.inner.b)
+}

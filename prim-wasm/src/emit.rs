@@ -4,7 +4,7 @@
 use crate::WasmError;
 use crate::builtins::Builtins;
 use crate::layout::{
-    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, compute_struct_layout,
+    CLOCK_SCRATCH, EnumLayout, InlinePolicy, POLL_NEVENTS, StructLayout, compute_struct_layout,
     compute_tuple_layout, emit_field_load, emit_field_store,
 };
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
@@ -42,6 +42,8 @@ pub(crate) struct StringLayout {
 /// this function's own local scope and pre-allocated scratch slots.
 pub(crate) struct EmitCtx<'a> {
     pub program: &'a hir::Program,
+    /// Which aggregate types are stored inline vs. boxed. Shared with layout.
+    pub policy: &'a InlinePolicy<'a>,
     pub locals: HashMap<hir::SymbolId, u32>,
     pub funcs: &'a HashMap<hir::FuncId, u32>,
     /// Concrete needs-drop type → wasm index of its synthesized `drop_T`
@@ -87,6 +89,7 @@ pub(crate) struct EmitCtx<'a> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_emit_ctx<'a>(
     program: &'a hir::Program,
+    policy: &'a InlinePolicy<'a>,
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
     drop_fns: &'a HashMap<hir::Type, u32>,
@@ -113,6 +116,7 @@ pub(crate) fn build_emit_ctx<'a>(
     let scratch_base = param_count + body_locals.len() as u32;
     EmitCtx {
         program,
+        policy,
         locals,
         funcs: func_map,
         drop_fns,
@@ -311,6 +315,20 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             };
             emit_expr(f, object, ctx)?;
             match field_layout {
+                Some((offset, ty)) if ctx.policy.is_inline(&ty) => {
+                    // Inline field: object pointer is on the stack; copy the
+                    // value's bytes into `object + offset` (dest, src, len).
+                    if offset != 0 {
+                        f.instruction(&Instruction::I32Const(offset as i32));
+                        f.instruction(&Instruction::I32Add);
+                    }
+                    emit_expr(f, value, ctx)?;
+                    f.instruction(&Instruction::I32Const(ctx.policy.inline_size(&ty) as i32));
+                    f.instruction(&Instruction::MemoryCopy {
+                        src_mem: 0,
+                        dst_mem: 0,
+                    });
+                }
                 Some((offset, ty)) => {
                     emit_expr(f, value, ctx)?;
                     emit_field_store(f, &ty, offset);
@@ -467,7 +485,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                     ));
                 }
             };
-            emit_field_load(f, &ty, offset);
+            emit_field_value(f, &ty, offset, ctx);
         }
         hir::ExprKind::TupleLit(elems) => {
             emit_tuple_lit(f, &expr.ty, elems, ctx)?;
@@ -480,9 +498,9 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                     return Err(WasmError::Internal("tuple index on non-tuple type".into()));
                 }
             };
-            let layout = compute_tuple_layout(elem_types);
+            let layout = compute_tuple_layout(elem_types, ctx.policy);
             match layout.elems.get(*index as usize) {
-                Some((offset, ty)) => emit_field_load(f, ty, *offset),
+                Some((offset, ty)) => emit_field_value(f, ty, *offset, ctx),
                 None => {
                     return Err(WasmError::Internal("tuple index out of range".into()));
                 }
@@ -829,6 +847,92 @@ fn emit_println_for_ty(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     }
 }
 
+/// Initialize a field at `base_local + offset` from `value`. An inline
+/// aggregate field is built or copied in place (no sub-allocation); a scalar or
+/// boxed-aggregate field stores its value/pointer as before. `base_local` holds
+/// the containing box's pointer.
+fn emit_field_init(
+    f: &mut Function,
+    base_local: u32,
+    offset: u32,
+    value: &hir::Expr,
+    field_ty: &hir::Type,
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    if ctx.policy.is_inline(field_ty) {
+        emit_aggregate_into(f, base_local, offset, value, field_ty, ctx)
+    } else {
+        f.instruction(&Instruction::LocalGet(base_local));
+        emit_expr(f, value, ctx)?;
+        emit_field_store(f, field_ty, offset);
+        Ok(())
+    }
+}
+
+/// Write an inline aggregate `value` of type `ty` into `base_local + dest`. A
+/// literal is built field-by-field directly into place (no allocation); any
+/// other value is an address, whose `inline_size` bytes are copied in.
+fn emit_aggregate_into(
+    f: &mut Function,
+    base_local: u32,
+    dest: u32,
+    value: &hir::Expr,
+    ty: &hir::Type,
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    match &value.kind {
+        hir::ExprKind::StructLit {
+            struct_id, fields, ..
+        } => {
+            let layout = match ctx.struct_layouts.get(struct_id) {
+                Some(l) => l.clone(),
+                None => {
+                    bail(f, ctx, "missing struct layout");
+                    return Ok(());
+                }
+            };
+            for (fsym, fval) in fields {
+                let Some((foff, fty)) = layout.fields.get(fsym).cloned() else {
+                    bail(f, ctx, "field not found in struct layout");
+                    continue;
+                };
+                emit_field_init(f, base_local, dest + foff, fval, &fty, ctx)?;
+            }
+            Ok(())
+        }
+        hir::ExprKind::TupleLit(elems) => {
+            let elem_types = match &value.ty {
+                hir::Type::Tuple(ts) => ts.clone(),
+                _ => {
+                    bail(f, ctx, "tuple literal with non-tuple type");
+                    return Ok(());
+                }
+            };
+            let layout = compute_tuple_layout(&elem_types, ctx.policy);
+            for (elem, (eoff, ety)) in elems.iter().zip(layout.elems.iter()) {
+                emit_field_init(f, base_local, dest + *eoff, elem, ety, ctx)?;
+            }
+            Ok(())
+        }
+        // A non-literal inline value evaluates to an address; copy its bytes
+        // into the destination. Stack order for `memory.copy` is dest, src, len.
+        _ => {
+            f.instruction(&Instruction::LocalGet(base_local));
+            if dest != 0 {
+                f.instruction(&Instruction::I32Const(dest as i32));
+                f.instruction(&Instruction::I32Add);
+            }
+            emit_expr(f, value, ctx)?;
+            f.instruction(&Instruction::I32Const(ctx.policy.inline_size(ty) as i32));
+            f.instruction(&Instruction::MemoryCopy {
+                src_mem: 0,
+                dst_mem: 0,
+            });
+            Ok(())
+        }
+    }
+}
+
 fn emit_struct_lit(
     f: &mut Function,
     struct_id: hir::StructId,
@@ -861,9 +965,7 @@ fn emit_struct_lit(
                 continue;
             }
         };
-        f.instruction(&Instruction::LocalGet(ptr_local));
-        emit_expr(f, value, ctx)?;
-        emit_field_store(f, &field_ty, offset);
+        emit_field_init(f, ptr_local, offset, value, &field_ty, ctx)?;
     }
 
     // Push ptr as the struct value
@@ -891,16 +993,14 @@ fn emit_tuple_lit(
             return Ok(());
         }
     };
-    let layout = compute_tuple_layout(elem_types);
+    let layout = compute_tuple_layout(elem_types, ctx.policy);
 
     f.instruction(&Instruction::I32Const(layout.size as i32));
     f.instruction(&Instruction::Call(ctx.builtins.alloc));
     f.instruction(&Instruction::LocalSet(ptr_local));
 
     for (value, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
-        f.instruction(&Instruction::LocalGet(ptr_local));
-        emit_expr(f, value, ctx)?;
-        emit_field_store(f, elem_ty, *offset);
+        emit_field_init(f, ptr_local, *offset, value, elem_ty, ctx)?;
     }
 
     f.instruction(&Instruction::LocalGet(ptr_local));
@@ -949,9 +1049,7 @@ fn emit_variant_lit(
                 continue;
             }
         };
-        f.instruction(&Instruction::LocalGet(ptr_local));
-        emit_expr(f, value, ctx)?;
-        emit_field_store(f, &field_ty, 8 + payload_offset);
+        emit_field_init(f, ptr_local, 8 + payload_offset, value, &field_ty, ctx)?;
     }
 
     f.instruction(&Instruction::LocalGet(ptr_local));
@@ -1034,14 +1132,28 @@ fn emit_match(
 }
 
 /// Push the value identified by `src` (of type `ty`) onto the stack.
-fn push_src(f: &mut Function, src: Src, ty: &hir::Type) {
+/// Given an aggregate's base pointer already on the stack, push a field's value
+/// at `offset`. An inline aggregate field's "value" is its address (`base +
+/// offset`); a scalar or boxed-aggregate field is loaded.
+fn emit_field_value(f: &mut Function, ty: &hir::Type, offset: u32, ctx: &EmitCtx) {
+    if ctx.policy.is_inline(ty) {
+        if offset != 0 {
+            f.instruction(&Instruction::I32Const(offset as i32));
+            f.instruction(&Instruction::I32Add);
+        }
+    } else {
+        emit_field_load(f, ty, offset);
+    }
+}
+
+fn push_src(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) {
     match src {
         Src::Local(idx) => {
             f.instruction(&Instruction::LocalGet(idx));
         }
         Src::Field { base, offset } => {
             f.instruction(&Instruction::LocalGet(base));
-            emit_field_load(f, ty, offset);
+            emit_field_value(f, ty, offset, ctx);
         }
         // Already on the operand stack — nothing to push. Valid only for a
         // single consuming use (a leaf binding); callers needing it repeatedly
@@ -1070,7 +1182,7 @@ fn emit_test_bind(
         }
         hir::Pattern::Binding { symbol, .. } => {
             if let Some(&local) = ctx.locals.get(symbol) {
-                push_src(f, src, ty);
+                push_src(f, src, ty, ctx);
                 f.instruction(&Instruction::LocalSet(local));
             } else if matches!(src, Src::Stack) && produces_value(ty) {
                 // Unbound name fed from the stack: discard to stay balanced.
@@ -1078,7 +1190,7 @@ fn emit_test_bind(
             }
         }
         hir::Pattern::Int { value, ty: pty, .. } => {
-            push_src(f, src, ty);
+            push_src(f, src, ty, ctx);
             if matches!(hir_type_to_valtype(pty), ValType::I64) {
                 f.instruction(&Instruction::I64Const(*value));
                 f.instruction(&Instruction::I64Ne);
@@ -1089,7 +1201,7 @@ fn emit_test_bind(
             f.instruction(&Instruction::BrIf(0));
         }
         hir::Pattern::Bool { value, .. } => {
-            push_src(f, src, ty);
+            push_src(f, src, ty, ctx);
             f.instruction(&Instruction::I32Const(*value as i32));
             f.instruction(&Instruction::I32Ne);
             f.instruction(&Instruction::BrIf(0));
@@ -1100,7 +1212,7 @@ fn emit_test_bind(
                 hir::Type::Tuple(ts) => ts.clone(),
                 _ => Vec::new(),
             };
-            let layout = compute_tuple_layout(&elem_types);
+            let layout = compute_tuple_layout(&elem_types, ctx.policy);
             for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
                 emit_test_bind(
                     f,
@@ -1203,7 +1315,7 @@ fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> 
             let counter = ctx.scratch_counter.get();
             ctx.scratch_counter.set(counter + 1);
             let tmp = ctx.scratch_base + counter;
-            push_src(f, src, ty);
+            push_src(f, src, ty, ctx);
             f.instruction(&Instruction::LocalSet(tmp));
             tmp
         }
@@ -1272,7 +1384,7 @@ fn emit_consume_cleanup(
             }
         }
         (hir::Type::Tuple(ts), hir::Pattern::Tuple { elems, .. }) => {
-            let layout = compute_tuple_layout(ts);
+            let layout = compute_tuple_layout(ts, ctx.policy);
             for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
                 if is_destructure(elem) {
                     let mut child = path.to_vec();
@@ -1324,7 +1436,11 @@ fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx
 /// types dropped at `Stmt::Drop` sites, transitively closed over the owned
 /// fields a drop recurses into. Returned in a deterministic order so the
 /// assigned wasm indices are stable.
-pub(crate) fn collect_drop_types(program: &hir::Program, info: &hir::DropInfo) -> Vec<hir::Type> {
+pub(crate) fn collect_drop_types(
+    program: &hir::Program,
+    info: &hir::DropInfo,
+    policy: &InlinePolicy,
+) -> Vec<hir::Type> {
     let mut work: Vec<hir::Type> = Vec::new();
     for func in &program.functions {
         collect_drop_sites(&func.body, &mut work);
@@ -1338,7 +1454,7 @@ pub(crate) fn collect_drop_types(program: &hir::Program, info: &hir::DropInfo) -
         }
         order.push(ty.clone());
         // Enqueue the owned field types this drop will recurse into.
-        for (_, fty) in recursable_fields(&ty, program) {
+        for (_, fty) in recursable_fields(&ty, program, policy) {
             work.push(fty);
         }
     }
@@ -1355,6 +1471,7 @@ pub(crate) fn emit_drop_fn(
     func_map: &HashMap<hir::FuncId, u32>,
     program: &hir::Program,
     info: &hir::DropInfo,
+    policy: &InlinePolicy,
     free_idx: u32,
 ) -> Function {
     let mut f = Function::new(vec![]); // param 0 is the box pointer
@@ -1364,7 +1481,7 @@ pub(crate) fn emit_drop_fn(
             f.instruction(&Instruction::Call(widx));
         }
     }
-    for (offset, fty) in recursable_fields(ty, program) {
+    for (offset, fty) in recursable_fields(ty, program, policy) {
         // Present only for needs-drop field types; scalars are skipped.
         if let Some(&didx) = drop_fns.get(&fty) {
             f.instruction(&Instruction::LocalGet(0));
@@ -1382,11 +1499,15 @@ pub(crate) fn emit_drop_fn(
 /// declaration order. Structs and tuples have a static field list; enums and
 /// arrays are not yet recursed (their payloads/elements are left to a
 /// follow-up), so they contribute none.
-fn recursable_fields(ty: &hir::Type, program: &hir::Program) -> Vec<(u32, hir::Type)> {
+fn recursable_fields(
+    ty: &hir::Type,
+    program: &hir::Program,
+    policy: &InlinePolicy,
+) -> Vec<(u32, hir::Type)> {
     match ty {
         hir::Type::Struct(sid, _) => match program.structs.get(sid.0 as usize) {
             Some(s) => {
-                let layout = compute_struct_layout(s);
+                let layout = compute_struct_layout(s, policy);
                 s.fields
                     .iter()
                     .filter_map(|field| {
@@ -1399,7 +1520,7 @@ fn recursable_fields(ty: &hir::Type, program: &hir::Program) -> Vec<(u32, hir::T
             }
             None => Vec::new(),
         },
-        hir::Type::Tuple(elems) => compute_tuple_layout(elems).elems,
+        hir::Type::Tuple(elems) => compute_tuple_layout(elems, policy).elems,
         _ => Vec::new(),
     }
 }
