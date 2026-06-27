@@ -44,6 +44,9 @@ pub(crate) struct EmitCtx<'a> {
     pub program: &'a hir::Program,
     /// Which aggregate types are stored inline vs. boxed. Shared with layout.
     pub policy: &'a InlinePolicy<'a>,
+    /// Per-function: which parameters use the by-value scalar ABI (phase 3).
+    /// Consulted when emitting call arguments.
+    scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
     pub locals: HashMap<hir::SymbolId, u32>,
     /// Locals (phase 2a) held in wasm locals instead of a heap box: their leaf
     /// fields occupy consecutive local slots. The whole value is never
@@ -98,6 +101,7 @@ pub(crate) struct EmitCtx<'a> {
 pub(crate) fn build_emit_ctx<'a>(
     program: &'a hir::Program,
     policy: &'a InlinePolicy<'a>,
+    scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
     drop_fns: &'a HashMap<hir::Type, u32>,
@@ -113,18 +117,31 @@ pub(crate) fn build_emit_ctx<'a>(
     str_sites: &'a [StrSite],
 ) -> EmitCtx<'a> {
     let mut locals = HashMap::new();
-    for (i, param) in func.params.iter().enumerate() {
-        locals.insert(param.name, i as u32);
-    }
-    let param_count = func.params.len() as u32;
+    let mut scalarized: HashMap<hir::SymbolId, ScalarLocals> = HashMap::new();
 
-    // Assign local slots in declaration order. A scalarized aggregate expands to
+    // Parameters first. A by-value scalar-ABI parameter (phase 3) occupies one
+    // wasm-param slot per leaf field and is recorded as scalarized; every other
+    // parameter takes a single slot.
+    let abi = scalar_abi.get(&func.id);
+    let mut next = 0u32;
+    for (i, param) in func.params.iter().enumerate() {
+        if abi.is_some_and(|v| v[i]) {
+            let fields = flat_scalar_fields(&param.ty, program, policy)
+                .expect("scalar-ABI param must be a flat scalar aggregate");
+            let base = next;
+            next += fields.len() as u32;
+            scalarized.insert(param.name, ScalarLocals { base, fields });
+        } else {
+            locals.insert(param.name, next);
+            next += 1;
+        }
+    }
+
+    // Assign body-local slots after the params. A scalarized aggregate expands to
     // one slot per leaf field (recorded in `scalarized`, absent from `locals`);
     // every other local takes a single slot.
-    let scalar_fields = scalarizable_locals(func, program, policy);
-    let mut scalarized: HashMap<hir::SymbolId, ScalarLocals> = HashMap::new();
+    let scalar_fields = scalarizable_locals(func, program, policy, scalar_abi);
     let mut body_local_valtypes: Vec<ValType> = Vec::new();
-    let mut next = param_count;
     for (sym, vt) in collect_locals(&func.body) {
         if let Some(fields) = scalar_fields.get(&sym) {
             let base = next;
@@ -149,6 +166,7 @@ pub(crate) fn build_emit_ctx<'a>(
     EmitCtx {
         program,
         policy,
+        scalar_abi,
         locals,
         scalarized,
         body_local_valtypes,
@@ -179,9 +197,9 @@ pub(crate) fn build_emit_ctx<'a>(
 /// One leaf field of a scalarized aggregate local: which field, and its scalar
 /// wasm type. Structs key by field symbol, tuples by position.
 #[derive(Clone)]
-struct ScalarField {
+pub(crate) struct ScalarField {
     key: ScalarKey,
-    valtype: ValType,
+    pub(crate) valtype: ValType,
 }
 
 #[derive(Clone, PartialEq)]
@@ -210,7 +228,7 @@ impl ScalarLocals {
 /// If `ty` is a small, non-`Drop` struct/tuple whose every field is a scalar, it
 /// can live in wasm locals (one per field): return those leaf fields. A field
 /// that is itself an aggregate disqualifies it (a later phase flattens those).
-fn flat_scalar_fields(
+pub(crate) fn flat_scalar_fields(
     ty: &hir::Type,
     program: &hir::Program,
     policy: &InlinePolicy,
@@ -273,6 +291,7 @@ fn scalarizable_locals(
     func: &hir::Function,
     program: &hir::Program,
     policy: &InlinePolicy,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
 ) -> HashMap<hir::SymbolId, Vec<ScalarField>> {
     let mut candidates: HashMap<hir::SymbolId, Vec<ScalarField>> = HashMap::new();
     scalar_candidates_block(&func.body, program, policy, &mut candidates);
@@ -280,9 +299,36 @@ fn scalarizable_locals(
         return candidates;
     }
     let mut disq: HashSet<hir::SymbolId> = HashSet::new();
-    scalar_disqualify_block(&func.body, &mut disq);
+    scalar_disqualify_block(&func.body, scalar_abi, &mut disq);
     candidates.retain(|sym, _| !disq.contains(sym));
     candidates
+}
+
+/// Which of a function's parameters use the by-value scalar ABI (phase 3): each
+/// is passed as one wasm value per leaf field rather than a heap pointer. A
+/// parameter qualifies when it is a flat scalar aggregate, *not* `edit` (an
+/// edit borrow needs a pointer to write through), and used only by field reads
+/// in the body (so it can stay scalarized — never materialized). This is the
+/// single source of truth shared by signature registration and call sites.
+pub(crate) fn scalar_abi_params(
+    func: &hir::Function,
+    program: &hir::Program,
+    policy: &InlinePolicy,
+) -> Vec<bool> {
+    // No scalar-ABI map yet (this computes it); use the unrelaxed walk, where
+    // any whole-value argument disqualifies. A parameter therefore qualifies
+    // only if used purely by field reads.
+    let empty: HashMap<hir::FuncId, Vec<bool>> = HashMap::new();
+    let mut disq: HashSet<hir::SymbolId> = HashSet::new();
+    scalar_disqualify_block(&func.body, &empty, &mut disq);
+    func.params
+        .iter()
+        .map(|p| {
+            p.mode != hir::PassMode::Edit
+                && !disq.contains(&p.name)
+                && flat_scalar_fields(&p.ty, program, policy).is_some()
+        })
+        .collect()
 }
 
 /// Collect `let L = <literal>` bindings of flat-scalar aggregate type, at every
@@ -383,19 +429,23 @@ fn scalar_candidates_expr(
 /// `TupleIndex` rooted at a name is a read of that name (recorded by *not*
 /// recursing into the chain); a bare `Ident` reached anywhere else is a
 /// whole-value use.
-fn scalar_disqualify_block(block: &hir::Block, disq: &mut HashSet<hir::SymbolId>) {
+fn scalar_disqualify_block(
+    block: &hir::Block,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    disq: &mut HashSet<hir::SymbolId>,
+) {
     for stmt in &block.stmts {
         match stmt {
             hir::Stmt::Let { value, .. } | hir::Stmt::Expr(value) => {
-                scalar_disqualify_expr(value, disq)
+                scalar_disqualify_expr(value, scalar_abi, disq)
             }
             hir::Stmt::Assign { target, value, .. } => {
                 disq.insert(*target);
-                scalar_disqualify_expr(value, disq);
+                scalar_disqualify_expr(value, scalar_abi, disq);
             }
             hir::Stmt::DerefAssign { ptr, value, .. } => {
-                scalar_disqualify_expr(ptr, disq);
-                scalar_disqualify_expr(value, disq);
+                scalar_disqualify_expr(ptr, scalar_abi, disq);
+                scalar_disqualify_expr(value, scalar_abi, disq);
             }
             hir::Stmt::FieldAssign { object, value, .. } => {
                 // A write through `L.f` is not supported by 2a; if `L` is the
@@ -403,19 +453,19 @@ fn scalar_disqualify_block(block: &hir::Block, disq: &mut HashSet<hir::SymbolId>
                 if let Some(root) = ident_root(object) {
                     disq.insert(root);
                 } else {
-                    scalar_disqualify_expr(object, disq);
+                    scalar_disqualify_expr(object, scalar_abi, disq);
                 }
-                scalar_disqualify_expr(value, disq);
+                scalar_disqualify_expr(value, scalar_abi, disq);
             }
             hir::Stmt::Return {
                 value: Some(value), ..
-            } => scalar_disqualify_expr(value, disq),
-            hir::Stmt::Loop { body, .. } => scalar_disqualify_block(body, disq),
+            } => scalar_disqualify_expr(value, scalar_abi, disq),
+            hir::Stmt::Loop { body, .. } => scalar_disqualify_block(body, scalar_abi, disq),
             hir::Stmt::While {
                 condition, body, ..
             } => {
-                scalar_disqualify_expr(condition, disq);
-                scalar_disqualify_block(body, disq);
+                scalar_disqualify_expr(condition, scalar_abi, disq);
+                scalar_disqualify_block(body, scalar_abi, disq);
             }
             hir::Stmt::Return { value: None, .. }
             | hir::Stmt::Break { .. }
@@ -423,17 +473,21 @@ fn scalar_disqualify_block(block: &hir::Block, disq: &mut HashSet<hir::SymbolId>
         }
     }
     if let Some(e) = &block.expr {
-        scalar_disqualify_expr(e, disq);
+        scalar_disqualify_expr(e, scalar_abi, disq);
     }
 }
 
-fn scalar_disqualify_expr(expr: &hir::Expr, disq: &mut HashSet<hir::SymbolId>) {
+fn scalar_disqualify_expr(
+    expr: &hir::Expr,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    disq: &mut HashSet<hir::SymbolId>,
+) {
     match &expr.kind {
         // A field-access chain rooted at a name is a read of that name; do not
         // recurse into the chain (its only content is the field path).
         hir::ExprKind::Field { base, .. } | hir::ExprKind::TupleIndex { base, .. } => {
             if ident_root(base).is_none() {
-                scalar_disqualify_expr(base, disq);
+                scalar_disqualify_expr(base, scalar_abi, disq);
             }
         }
         // A bare name reached here (not shortcut by a parent field access) is a
@@ -442,53 +496,61 @@ fn scalar_disqualify_expr(expr: &hir::Expr, disq: &mut HashSet<hir::SymbolId>) {
             disq.insert(*s);
         }
         hir::ExprKind::Binary { left, right, .. } => {
-            scalar_disqualify_expr(left, disq);
-            scalar_disqualify_expr(right, disq);
+            scalar_disqualify_expr(left, scalar_abi, disq);
+            scalar_disqualify_expr(right, scalar_abi, disq);
         }
-        hir::ExprKind::Call { args, .. } => {
-            for a in args {
-                scalar_disqualify_expr(a, disq);
+        hir::ExprKind::Call { func, args, .. } => {
+            // A whole local passed by value at a by-value scalar-ABI position
+            // does not force a box: `emit_scalar_arg` pushes its field locals.
+            // Any other argument is a normal (boxing) use.
+            let abi = scalar_abi.get(func);
+            for (i, a) in args.iter().enumerate() {
+                let by_value = abi.is_some_and(|v| v.get(i).copied().unwrap_or(false))
+                    && matches!(&a.kind, hir::ExprKind::Ident(_));
+                if !by_value {
+                    scalar_disqualify_expr(a, scalar_abi, disq);
+                }
             }
         }
         hir::ExprKind::DynCall { receiver, args, .. }
         | hir::ExprKind::MethodCall { receiver, args, .. }
         | hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
-            scalar_disqualify_expr(receiver, disq);
+            scalar_disqualify_expr(receiver, scalar_abi, disq);
             for a in args {
-                scalar_disqualify_expr(a, disq);
+                scalar_disqualify_expr(a, scalar_abi, disq);
             }
         }
         hir::ExprKind::StructLit { fields, .. } | hir::ExprKind::VariantLit { fields, .. } => {
             for (_, v) in fields {
-                scalar_disqualify_expr(v, disq);
+                scalar_disqualify_expr(v, scalar_abi, disq);
             }
         }
         hir::ExprKind::TupleLit(elems) | hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
-                scalar_disqualify_expr(e, disq);
+                scalar_disqualify_expr(e, scalar_abi, disq);
             }
         }
         hir::ExprKind::Deref(e) | hir::ExprKind::BitNot(e) | hir::ExprKind::Neg(e) => {
-            scalar_disqualify_expr(e, disq)
+            scalar_disqualify_expr(e, scalar_abi, disq)
         }
-        hir::ExprKind::Coerce { value, .. } => scalar_disqualify_expr(value, disq),
-        hir::ExprKind::Dbg { inner, .. } => scalar_disqualify_expr(inner, disq),
+        hir::ExprKind::Coerce { value, .. } => scalar_disqualify_expr(value, scalar_abi, disq),
+        hir::ExprKind::Dbg { inner, .. } => scalar_disqualify_expr(inner, scalar_abi, disq),
         hir::ExprKind::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            scalar_disqualify_expr(condition, disq);
-            scalar_disqualify_block(then_branch, disq);
+            scalar_disqualify_expr(condition, scalar_abi, disq);
+            scalar_disqualify_block(then_branch, scalar_abi, disq);
             if let Some(b) = else_branch {
-                scalar_disqualify_block(b, disq);
+                scalar_disqualify_block(b, scalar_abi, disq);
             }
         }
-        hir::ExprKind::Block(b) => scalar_disqualify_block(b, disq),
+        hir::ExprKind::Block(b) => scalar_disqualify_block(b, scalar_abi, disq),
         hir::ExprKind::Match { scrutinee, arms } => {
-            scalar_disqualify_expr(scrutinee, disq);
+            scalar_disqualify_expr(scrutinee, scalar_abi, disq);
             for arm in arms {
-                scalar_disqualify_expr(&arm.body, disq);
+                scalar_disqualify_expr(&arm.body, scalar_abi, disq);
             }
         }
         hir::ExprKind::Int(_)
@@ -566,7 +628,7 @@ pub(crate) fn emit_user_function(
     ctx: &EmitCtx,
 ) -> Result<Function, WasmError> {
     let mut scratch_types: Vec<ValType> = Vec::new();
-    collect_scratch_types_block(&func.body, ctx.runtime, &mut scratch_types);
+    collect_scratch_types_block(&func.body, ctx.runtime, ctx.scalar_abi, &mut scratch_types);
     // Body locals (scalarized aggregates already expanded to one slot per leaf
     // field by `build_emit_ctx`), then scratch slots.
     let mut wasm_locals: Vec<(u32, ValType)> =
@@ -798,8 +860,13 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             if let Some(&runtime) = ctx.runtime.get(func) {
                 emit_runtime_call(f, runtime, args, ctx)?;
             } else if let Some(&idx) = ctx.funcs.get(func) {
-                for arg in args {
-                    emit_expr(f, arg, ctx)?;
+                let abi = ctx.scalar_abi.get(func);
+                for (i, arg) in args.iter().enumerate() {
+                    if abi.is_some_and(|v| v[i]) {
+                        emit_scalar_arg(f, arg, ctx)?;
+                    } else {
+                        emit_expr(f, arg, ctx)?;
+                    }
                 }
                 f.instruction(&Instruction::Call(idx));
             } else {
@@ -1228,6 +1295,89 @@ fn emit_println_for_ty(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     }
 }
 
+/// Emit a by-value scalar-ABI argument (phase 3): push one wasm value per leaf
+/// field, in declaration order. A scalarized local/param pushes its field
+/// locals directly; any other value is realized as a box (an existing local, or
+/// a freshly built literal whose box pointer is re-read from its scratch local)
+/// and its fields are loaded. Mirrors the parameter expansion in
+/// `scalar_abi_params`/`build_emit_ctx`.
+fn emit_scalar_arg(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
+    let fields = flat_scalar_fields(&arg.ty, ctx.program, ctx.policy).ok_or_else(|| {
+        WasmError::Internal("scalar-ABI argument is not a flat scalar aggregate".into())
+    })?;
+    // A scalarized local/param: push its leaf-field locals directly (no box).
+    if let hir::ExprKind::Ident(sym) = &arg.kind {
+        if let Some(scalar) = ctx.scalarized.get(sym) {
+            for sf in &scalar.fields {
+                let local = scalar
+                    .local_of(&sf.key)
+                    .ok_or_else(|| WasmError::Internal("scalar field local missing".into()))?;
+                f.instruction(&Instruction::LocalGet(local));
+            }
+            return Ok(());
+        }
+    }
+    // Otherwise the value lives in a box; find a local holding its pointer.
+    let box_local = match &arg.kind {
+        hir::ExprKind::Ident(sym) => *ctx
+            .locals
+            .get(sym)
+            .ok_or_else(|| WasmError::Internal("scalar-ABI argument local missing".into()))?,
+        hir::ExprKind::StructLit {
+            struct_id,
+            fields: lit,
+            ..
+        } => {
+            let ptr = emit_struct_lit(f, *struct_id, lit, ctx)?;
+            f.instruction(&Instruction::Drop); // the pushed pointer; re-read via `ptr`
+            ptr
+        }
+        hir::ExprKind::TupleLit(elems) => {
+            let ptr = emit_tuple_lit(f, &arg.ty, elems, ctx)?;
+            f.instruction(&Instruction::Drop);
+            ptr
+        }
+        // General case: evaluate to a box pointer and stash it in a scratch
+        // local (reserved for this argument in `collect_scratch_types`).
+        _ => {
+            emit_expr(f, arg, ctx)?;
+            let counter = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(counter + 1);
+            let stash = ctx.scratch_base + counter;
+            f.instruction(&Instruction::LocalSet(stash));
+            stash
+        }
+    };
+    for sf in &fields {
+        let (offset, fty) = scalar_field_offset(&arg.ty, &sf.key, ctx)?;
+        f.instruction(&Instruction::LocalGet(box_local));
+        emit_field_load(f, &fty, offset);
+    }
+    Ok(())
+}
+
+/// The `(byte offset, type)` of a leaf field within its aggregate's box layout.
+fn scalar_field_offset(
+    ty: &hir::Type,
+    key: &ScalarKey,
+    ctx: &EmitCtx,
+) -> Result<(u32, hir::Type), WasmError> {
+    match (ty, key) {
+        (hir::Type::Struct(sid, _), ScalarKey::Field(sym)) => ctx
+            .struct_layouts
+            .get(sid)
+            .and_then(|l| l.fields.get(sym))
+            .cloned()
+            .ok_or_else(|| WasmError::Internal("scalar field offset missing".into())),
+        (hir::Type::Tuple(elems), ScalarKey::Index(i)) => compute_tuple_layout(elems, ctx.policy)
+            .elems
+            .get(*i)
+            .cloned()
+            .ok_or_else(|| WasmError::Internal("scalar tuple offset missing".into())),
+        _ => Err(WasmError::Internal("scalar field key/type mismatch".into())),
+    }
+}
+
 /// If `base` is a scalarized aggregate local (`Ident`), the wasm local holding
 /// the addressed leaf field; `Ok(None)` if `base` is not scalarized (the caller
 /// falls back to address-based access).
@@ -1375,12 +1525,15 @@ fn emit_aggregate_into(
     }
 }
 
+/// Build a struct literal box, leave its pointer on the stack, and return the
+/// scratch local that also holds it (so callers like `emit_scalar_arg` can
+/// re-read the box without an extra temporary).
 fn emit_struct_lit(
     f: &mut Function,
     struct_id: hir::StructId,
     fields: &[(hir::InternSymbol, hir::Expr)],
     ctx: &EmitCtx,
-) -> Result<(), WasmError> {
+) -> Result<u32, WasmError> {
     let counter = ctx.scratch_counter.get();
     ctx.scratch_counter.set(counter + 1);
     let ptr_local = ctx.scratch_base + counter;
@@ -1389,7 +1542,7 @@ fn emit_struct_lit(
         Some(l) => l.clone(),
         None => {
             bail(f, ctx, "missing struct layout");
-            return Ok(());
+            return Ok(ptr_local);
         }
     };
 
@@ -1412,7 +1565,7 @@ fn emit_struct_lit(
 
     // Push ptr as the struct value
     f.instruction(&Instruction::LocalGet(ptr_local));
-    Ok(())
+    Ok(ptr_local)
 }
 
 /// Emit a tuple literal: heap-allocate the positional layout, store each
@@ -1423,7 +1576,7 @@ fn emit_tuple_lit(
     tuple_ty: &hir::Type,
     elems: &[hir::Expr],
     ctx: &EmitCtx,
-) -> Result<(), WasmError> {
+) -> Result<u32, WasmError> {
     let counter = ctx.scratch_counter.get();
     ctx.scratch_counter.set(counter + 1);
     let ptr_local = ctx.scratch_base + counter;
@@ -1432,7 +1585,7 @@ fn emit_tuple_lit(
         hir::Type::Tuple(ts) => ts,
         _ => {
             bail(f, ctx, "tuple literal with non-tuple type");
-            return Ok(());
+            return Ok(ptr_local);
         }
     };
     let layout = compute_tuple_layout(elem_types, ctx.policy);
@@ -1446,7 +1599,7 @@ fn emit_tuple_lit(
     }
 
     f.instruction(&Instruction::LocalGet(ptr_local));
-    Ok(())
+    Ok(ptr_local)
 }
 
 fn emit_variant_lit(

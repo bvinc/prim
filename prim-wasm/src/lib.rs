@@ -24,7 +24,7 @@ use crate::builtins::{
 };
 use crate::emit::{
     DbgSite, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
-    emit_user_function,
+    emit_user_function, flat_scalar_fields, scalar_abi_params,
 };
 use crate::layout::{
     DOT_OFFSET, EnumLayout, FALSE_OFFSET, InlinePolicy, NEWLINE_OFFSET, STATIC_DATA_START,
@@ -33,7 +33,7 @@ use crate::layout::{
 use crate::types::{TypeRegistry, hir_type_to_valtype};
 use crate::walks::{collect_dbg_prefixes_block, collect_str_literals_block};
 use prim_compiler::hir;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use wasm_encoder::{
     CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind, ExportSection,
@@ -203,6 +203,21 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
+    // Per-function: which parameters use the by-value scalar ABI (phase 3).
+    // Shared by signature registration here and call-site argument emission.
+    // Methods are excluded: they may be dispatched virtually through a vtable
+    // whose entries use a fixed pointer ABI, so their signatures can't expand.
+    let method_fns: HashSet<hir::FuncId> = program.impls.values().flatten().copied().collect();
+    let mut scalar_abi: HashMap<hir::FuncId, Vec<bool>> = HashMap::new();
+    for func in &program.functions {
+        if func.type_params.is_empty() && func.runtime.is_none() && !method_fns.contains(&func.id) {
+            let flags = scalar_abi_params(func, program, &inline_policy);
+            if flags.iter().any(|&s| s) {
+                scalar_abi.insert(func.id, flags);
+            }
+        }
+    }
+
     for func in &program.functions {
         // Uninstantiated generic templates are never called (only their
         // monomorphized clones are); they get no wasm function.
@@ -213,11 +228,18 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             runtime_map.insert(func.id, runtime);
         } else {
             func_map.insert(func.id, next_idx);
-            let params: Vec<ValType> = func
-                .params
-                .iter()
-                .map(|p| hir_type_to_valtype(&p.ty))
-                .collect();
+            // A scalar-ABI parameter expands to one wasm value per leaf field.
+            let abi = scalar_abi.get(&func.id);
+            let mut params: Vec<ValType> = Vec::with_capacity(func.params.len());
+            for (i, p) in func.params.iter().enumerate() {
+                if abi.is_some_and(|v| v[i]) {
+                    let fields = flat_scalar_fields(&p.ty, program, &inline_policy)
+                        .expect("scalar-ABI param must be a flat scalar aggregate");
+                    params.extend(fields.iter().map(|sf| sf.valtype));
+                } else {
+                    params.push(hir_type_to_valtype(&p.ty));
+                }
+            }
             let results: Vec<ValType> = func
                 .ret
                 .as_ref()
@@ -598,6 +620,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             let ctx = build_emit_ctx(
                 program,
                 &inline_policy,
+                &scalar_abi,
                 func,
                 &func_map,
                 &drop_fns,
