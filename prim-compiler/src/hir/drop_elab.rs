@@ -547,9 +547,9 @@ impl Filter<'_> {
 
 /// Whether an expression of this type leaves a value on the operand stack
 /// (mirrors `prim_wasm::types::produces_value`): everything except the
-/// value-less `Undetermined` (the type of unit-returning calls and statements).
+/// value-less `Unit` (the type of unit-returning calls and statements).
 fn produces_value(ty: &Type) -> bool {
-    !matches!(ty, Type::Undetermined)
+    !matches!(ty, Type::Unit)
 }
 
 // === Shared helpers ===

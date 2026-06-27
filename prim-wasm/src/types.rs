@@ -38,9 +38,10 @@ pub(crate) fn is_signed_int(ty: &hir::Type) -> bool {
 }
 
 /// Whether an HIR expression of this type leaves a value on the wasm stack.
-/// `Undetermined` expressions (failed lowering, error placeholders) don't.
+/// `Unit` (a statement, an empty block, a void call) leaves nothing. By codegen
+/// time the type checker has rejected any `Undetermined`, so it cannot appear.
 pub(crate) fn produces_value(ty: &hir::Type) -> bool {
-    !matches!(ty, hir::Type::Undetermined)
+    !matches!(ty, hir::Type::Unit)
 }
 
 /// Registry of wasm types: function signatures (deduplicated) and

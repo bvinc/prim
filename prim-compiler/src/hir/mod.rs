@@ -805,6 +805,12 @@ pub enum Type {
     /// the same element types are the same type. Boxed on the heap like a
     /// struct, with positional fields.
     Tuple(Vec<Type>),
+    /// The unit type — an expression that yields no value (a statement, an
+    /// empty block, a call to a function with no declared return). Distinct
+    /// from `Undetermined`: unit is a fully-determined "no value", whereas
+    /// `Undetermined` means the type checker could not determine a type (an
+    /// error). `produces_value` is false only for `Unit`.
+    Unit,
     /// Undetermined integer type (will default to i32).
     IntVar,
     /// Undetermined float type (will default to f64).
@@ -898,6 +904,7 @@ impl fmt::Display for Type {
                     write!(f, "*const {pointee}")
                 }
             }
+            Type::Unit => write!(f, "()"),
             Type::IntVar => write!(f, "{{integer}}"),
             Type::FloatVar => write!(f, "{{float}}"),
             Type::Undetermined => write!(f, "unknown"),

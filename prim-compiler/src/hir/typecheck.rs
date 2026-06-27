@@ -1394,7 +1394,7 @@ impl<'a> Checker<'a> {
                         let ret_ty = trait_def.methods[method_idx as usize]
                             .ret
                             .clone()
-                            .unwrap_or(Type::Undetermined);
+                            .unwrap_or(Type::Unit);
                         // Take args/receiver out and rewrite.
                         let receiver_owned = std::mem::replace(
                             receiver.as_mut(),
@@ -1515,7 +1515,7 @@ impl<'a> Checker<'a> {
                         } else {
                             sig.params[1..].iter().map(subst).collect()
                         };
-                        let ret_ty = sig.ret.as_ref().map(subst).unwrap_or(Type::Undetermined);
+                        let ret_ty = sig.ret.as_ref().map(subst).unwrap_or(Type::Unit);
 
                         // Rewrite in place to `TraitBoundCall` so the
                         // monomorphization pass can find it.
@@ -1687,7 +1687,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                let ret_ty = ret.unwrap_or(Type::Undetermined);
+                let ret_ty = ret.unwrap_or(Type::Unit);
                 *ty = ret_ty.clone();
                 Ok(ret_ty)
             }
@@ -1770,7 +1770,7 @@ impl<'a> Checker<'a> {
                     let ret_ty = ret
                         .as_ref()
                         .map(|r| Self::substitute_params(r, &pins))
-                        .unwrap_or(Type::Undetermined);
+                        .unwrap_or(Type::Unit);
                     *type_args = inferred;
                     *ty = ret_ty.clone();
                     return Ok(ret_ty);
@@ -1799,7 +1799,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                let ret_ty = ret.clone().unwrap_or(Type::Undetermined);
+                let ret_ty = ret.clone().unwrap_or(Type::Unit);
                 *ty = ret_ty.clone();
                 Ok(ret_ty)
             }
@@ -2077,14 +2077,14 @@ impl<'a> Checker<'a> {
                     },
                     (Some(t), None) => t,
                     (None, Some(e)) => e,
-                    (None, None) => Type::Undetermined,
+                    (None, None) => Type::Unit,
                 };
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
             ExprKind::Block(block) => {
                 let block_ty = self.check_block(block, locals)?;
-                let result_ty = block_ty.unwrap_or(Type::Undetermined);
+                let result_ty = block_ty.unwrap_or(Type::Unit);
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
@@ -2230,7 +2230,7 @@ impl<'a> Checker<'a> {
                 // Reachability + exhaustiveness via the Maranget usefulness
                 // algorithm.
                 self.check_match_usefulness(arms, &scrut_ty, *span)?;
-                let final_ty = result_ty.unwrap_or(Type::Undetermined);
+                let final_ty = result_ty.unwrap_or(Type::Unit);
                 *ty = final_ty.clone();
                 Ok(final_ty)
             }
@@ -2644,6 +2644,18 @@ impl<'a> Checker<'a> {
                 }
             }
             _ => {}
+        }
+        // Every expression must now carry a concrete type (`Unit` for no value).
+        // A surviving `Undetermined` is a type the checker failed to determine —
+        // reject it here rather than let it reach codegen as a silent trap. (An
+        // `Error` node is already a reported lowering failure.)
+        if matches!(ty, Type::Undetermined) && !matches!(kind, ExprKind::Error) {
+            return Err(self.error(
+                *span,
+                TypeCheckKind::Legacy(
+                    "could not determine the type of this expression".to_string(),
+                ),
+            ));
         }
         Ok(())
     }
