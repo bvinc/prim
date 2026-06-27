@@ -44,12 +44,19 @@ use wasm_encoder::{
 #[derive(Debug)]
 pub enum WasmError {
     MissingMain,
+    /// Codegen reached an HIR shape it cannot lower — a struct field on a
+    /// non-struct, an unresolved name, a missing layout, a type that should
+    /// have been ruled out by an earlier pass. Rather than emit a wasm `trap`
+    /// (which the scheduler swallows, so the program would exit 0), fail the
+    /// build loudly. The string names the specific situation.
+    Internal(String),
 }
 
 impl fmt::Display for WasmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WasmError::MissingMain => write!(f, "main function not found"),
+            WasmError::Internal(msg) => write!(f, "internal codegen error: {msg}"),
         }
     }
 }

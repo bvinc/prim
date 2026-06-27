@@ -77,6 +77,11 @@ pub(crate) struct EmitCtx<'a> {
     pub dbg_counter: Cell<u32>,
     pub str_sites: &'a [StrSite],
     pub str_counter: Cell<u32>,
+    /// First codegen invariant violation hit while emitting this function. The
+    /// `()`-returning emit helpers record it here (and still emit a placeholder
+    /// `unreachable` to keep the partial function well-formed); `emit_user_function`
+    /// turns it into a hard build failure instead of shipping a trap.
+    pub codegen_error: RefCell<Option<crate::WasmError>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -127,10 +132,26 @@ pub(crate) fn build_emit_ctx<'a>(
         dbg_counter: Cell::new(0),
         str_sites,
         str_counter: Cell::new(0),
+        codegen_error: RefCell::new(None),
     }
 }
 
 impl EmitCtx<'_> {
+    /// Record a codegen invariant violation (keeping the first one). Used by the
+    /// `()`-returning emit helpers, which can't return a `Result`; the function
+    /// emitter checks `take_error` afterwards and fails the build.
+    fn fail(&self, msg: impl Into<String>) {
+        let mut slot = self.codegen_error.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(crate::WasmError::Internal(msg.into()));
+        }
+    }
+
+    /// Take the recorded codegen error, if any.
+    fn take_error(&self) -> Option<crate::WasmError> {
+        self.codegen_error.borrow_mut().take()
+    }
+
     /// Record that a wasm structured block has just been opened.
     fn enter_ctrl(&self) {
         self.ctrl_depth.set(self.ctrl_depth.get() + 1);
@@ -199,7 +220,21 @@ pub(crate) fn emit_user_function(
         }
     }
     f.instruction(&Instruction::End);
+    // A `()`-returning helper may have recorded an unlowerable shape; surface it
+    // as a build failure rather than shipping the placeholder trap.
+    if let Some(err) = ctx.take_error() {
+        return Err(err);
+    }
     Ok(f)
+}
+
+/// Record a codegen invariant violation and emit a placeholder `unreachable` so
+/// the partial function stays well-formed. The recorded error is turned into a
+/// build failure by `emit_user_function`. For use in `()`-returning emit helpers
+/// that cannot return a `Result`.
+fn bail(f: &mut Function, ctx: &EmitCtx, msg: impl Into<String>) {
+    ctx.fail(msg);
+    f.instruction(&Instruction::Unreachable);
 }
 
 fn emit_default_value(f: &mut Function, ty: &hir::Type) {
@@ -238,7 +273,7 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             } else if let Some(g_idx) = global_wasm_index(ctx, *target) {
                 f.instruction(&Instruction::GlobalSet(g_idx));
             } else {
-                f.instruction(&Instruction::Unreachable);
+                return Err(WasmError::Internal("assignment to unresolved name".into()));
             }
         }
         hir::Stmt::Return { value, .. } => {
@@ -281,7 +316,9 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
                     emit_field_store(f, &ty, offset);
                 }
                 None => {
-                    f.instruction(&Instruction::Unreachable);
+                    return Err(WasmError::Internal(
+                        "field not found in struct layout".into(),
+                    ));
                 }
             }
         }
@@ -358,7 +395,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             } else if let Some(g_idx) = global_wasm_index(ctx, *sym) {
                 f.instruction(&Instruction::GlobalGet(g_idx));
             } else {
-                f.instruction(&Instruction::Unreachable);
+                return Err(WasmError::Internal("unresolved name in expression".into()));
             }
         }
         hir::ExprKind::Binary { op, left, right } => {
@@ -375,7 +412,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 }
                 f.instruction(&Instruction::Call(idx));
             } else {
-                f.instruction(&Instruction::Unreachable);
+                return Err(WasmError::Internal("call to unresolved function".into()));
             }
         }
         // spawn(f): make a task continuation from `f` and append it to the
@@ -411,22 +448,23 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             let struct_id = match &base.ty {
                 hir::Type::Struct(id, _) => *id,
                 _ => {
-                    f.instruction(&Instruction::Unreachable);
-                    return Ok(());
+                    return Err(WasmError::Internal(
+                        "field access on non-struct type".into(),
+                    ));
                 }
             };
             let layout = match ctx.struct_layouts.get(&struct_id) {
                 Some(l) => l,
                 None => {
-                    f.instruction(&Instruction::Unreachable);
-                    return Ok(());
+                    return Err(WasmError::Internal("missing struct layout".into()));
                 }
             };
             let (offset, ty) = match layout.fields.get(field) {
                 Some(t) => t.clone(),
                 None => {
-                    f.instruction(&Instruction::Unreachable);
-                    return Ok(());
+                    return Err(WasmError::Internal(
+                        "field not found in struct layout".into(),
+                    ));
                 }
             };
             emit_field_load(f, &ty, offset);
@@ -439,15 +477,14 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             let elem_types = match &base.ty {
                 hir::Type::Tuple(elems) => elems,
                 _ => {
-                    f.instruction(&Instruction::Unreachable);
-                    return Ok(());
+                    return Err(WasmError::Internal("tuple index on non-tuple type".into()));
                 }
             };
             let layout = compute_tuple_layout(elem_types);
             match layout.elems.get(*index as usize) {
                 Some((offset, ty)) => emit_field_load(f, ty, *offset),
                 None => {
-                    f.instruction(&Instruction::Unreachable);
+                    return Err(WasmError::Internal("tuple index out of range".into()));
                 }
             }
         }
@@ -604,7 +641,9 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                     f.instruction(&Instruction::I64Xor);
                 }
                 _ => {
-                    f.instruction(&Instruction::Unreachable);
+                    return Err(WasmError::Internal(
+                        "bitwise-not on unsupported operand type".into(),
+                    ));
                 }
             }
         }
@@ -633,7 +672,9 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             }
         }
         _ => {
-            f.instruction(&Instruction::Unreachable);
+            return Err(WasmError::Internal(
+                "unsupported expression kind in codegen".into(),
+            ));
         }
     }
     Ok(())
@@ -653,7 +694,11 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     let site = match ctx.str_sites.get(str_idx as usize) {
         Some(s) => *s,
         None => {
-            f.instruction(&Instruction::Unreachable);
+            bail(
+                f,
+                ctx,
+                "string-literal site index out of sync with pre-walk",
+            );
             return;
         }
     };
@@ -661,7 +706,7 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     let struct_id = match ty {
         hir::Type::Struct(id, _) => *id,
         _ => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "string literal with non-struct type");
             return;
         }
     };
@@ -669,11 +714,11 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     let string_layout = match ctx.string_layout {
         Some(layout) if layout.struct_id == struct_id => layout,
         None => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "missing string layout");
             return;
         }
         Some(_) => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "string layout struct id mismatch");
             return;
         }
     };
@@ -725,9 +770,9 @@ fn emit_dbg(f: &mut Function, inner: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
     let site = match ctx.dbg_sites.get(dbg_idx as usize) {
         Some(s) => *s,
         None => {
-            // Indices out of sync with pre-walk — shouldn't happen, but trap.
-            f.instruction(&Instruction::Unreachable);
-            return Ok(());
+            return Err(WasmError::Internal(
+                "dbg site index out of sync with pre-walk".into(),
+            ));
         }
     };
 
@@ -779,7 +824,7 @@ fn emit_println_for_ty(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
             f.instruction(&Instruction::Call(ctx.builtins.println_f64));
         }
         _ => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "no println for this type");
         }
     }
 }
@@ -797,7 +842,7 @@ fn emit_struct_lit(
     let layout = match ctx.struct_layouts.get(&struct_id) {
         Some(l) => l.clone(),
         None => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "missing struct layout");
             return Ok(());
         }
     };
@@ -812,7 +857,7 @@ fn emit_struct_lit(
         let (offset, field_ty) = match layout.fields.get(field_sym) {
             Some(t) => t.clone(),
             None => {
-                f.instruction(&Instruction::Unreachable);
+                bail(f, ctx, "field not found in struct layout");
                 continue;
             }
         };
@@ -842,7 +887,7 @@ fn emit_tuple_lit(
     let elem_types = match tuple_ty {
         hir::Type::Tuple(ts) => ts,
         _ => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "tuple literal with non-tuple type");
             return Ok(());
         }
     };
@@ -876,14 +921,14 @@ fn emit_variant_lit(
     let layout = match ctx.enum_layouts.get(&enum_id) {
         Some(l) => l,
         None => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "missing enum layout");
             return Ok(());
         }
     };
     let variant = match layout.variants.get(variant_idx as usize) {
         Some(v) => v,
         None => {
-            f.instruction(&Instruction::Unreachable);
+            bail(f, ctx, "missing enum variant layout");
             return Ok(());
         }
     };
@@ -900,7 +945,7 @@ fn emit_variant_lit(
         let (payload_offset, field_ty) = match variant.fields.get(field_sym) {
             Some(t) => t.clone(),
             None => {
-                f.instruction(&Instruction::Unreachable);
+                bail(f, ctx, "variant field not found in layout");
                 continue;
             }
         };
@@ -1079,7 +1124,7 @@ fn emit_test_bind(
             let enum_id = match ty {
                 hir::Type::Enum(id, _) => *id,
                 _ => {
-                    f.instruction(&Instruction::Unreachable);
+                    bail(f, ctx, "variant pattern on non-enum type");
                     return;
                 }
             };
@@ -1097,13 +1142,13 @@ fn emit_test_bind(
                 .and_then(|layout| layout.variants.get(*variant_idx as usize))
                 .cloned();
             let Some(variant) = variant else {
-                f.instruction(&Instruction::Unreachable);
+                bail(f, ctx, "missing enum variant layout");
                 return;
             };
             for fp in fields {
                 let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field).cloned()
                 else {
-                    f.instruction(&Instruction::Unreachable);
+                    bail(f, ctx, "variant field not found in layout");
                     continue;
                 };
                 emit_test_bind(
@@ -1125,18 +1170,18 @@ fn emit_test_bind(
             let sid = match ty {
                 hir::Type::Struct(id, _) => *id,
                 _ => {
-                    f.instruction(&Instruction::Unreachable);
+                    bail(f, ctx, "struct pattern on non-struct type");
                     return;
                 }
             };
             let base = aggregate_base(f, src, ty, ctx);
             let Some(layout) = ctx.struct_layouts.get(&sid).cloned() else {
-                f.instruction(&Instruction::Unreachable);
+                bail(f, ctx, "missing struct layout");
                 return;
             };
             for fp in fields {
                 let Some((offset, field_ty)) = layout.fields.get(&fp.field).cloned() else {
-                    f.instruction(&Instruction::Unreachable);
+                    bail(f, ctx, "field not found in struct layout");
                     continue;
                 };
                 emit_test_bind(f, Src::Field { base, offset }, &field_ty, &fp.pattern, ctx);
@@ -1729,8 +1774,9 @@ fn emit_runtime_call(
 
 fn emit_write(f: &mut Function, args: &[hir::Expr], ctx: &EmitCtx) -> Result<(), WasmError> {
     if args.len() < 3 {
-        f.instruction(&Instruction::Unreachable);
-        return Ok(());
+        return Err(WasmError::Internal(
+            "write_raw expects three arguments".into(),
+        ));
     }
 
     // write_raw(fd, ptr, len) -> nwritten: evaluate the three args in order
@@ -1753,21 +1799,21 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             ValType::I64 => f.instruction(&Instruction::I64Add),
             ValType::F32 => f.instruction(&Instruction::F32Add),
             ValType::F64 => f.instruction(&Instruction::F64Add),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("add on unsupported operand type"),
         },
         hir::BinaryOp::Subtract => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Sub),
             ValType::I64 => f.instruction(&Instruction::I64Sub),
             ValType::F32 => f.instruction(&Instruction::F32Sub),
             ValType::F64 => f.instruction(&Instruction::F64Sub),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("subtract on unsupported operand type"),
         },
         hir::BinaryOp::Multiply => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Mul),
             ValType::I64 => f.instruction(&Instruction::I64Mul),
             ValType::F32 => f.instruction(&Instruction::F32Mul),
             ValType::F64 => f.instruction(&Instruction::F64Mul),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("multiply on unsupported operand type"),
         },
         hir::BinaryOp::Divide => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32DivS),
@@ -1776,28 +1822,28 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64DivU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Div),
             (ValType::F64, _) => f.instruction(&Instruction::F64Div),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("divide on unsupported operand type"),
         },
         hir::BinaryOp::Modulo => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32RemS),
             (ValType::I32, false) => f.instruction(&Instruction::I32RemU),
             (ValType::I64, true) => f.instruction(&Instruction::I64RemS),
             (ValType::I64, false) => f.instruction(&Instruction::I64RemU),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("modulo on unsupported operand type"),
         },
         hir::BinaryOp::Equals => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Eq),
             ValType::I64 => f.instruction(&Instruction::I64Eq),
             ValType::F32 => f.instruction(&Instruction::F32Eq),
             ValType::F64 => f.instruction(&Instruction::F64Eq),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("equals on unsupported operand type"),
         },
         hir::BinaryOp::NotEquals => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Ne),
             ValType::I64 => f.instruction(&Instruction::I64Ne),
             ValType::F32 => f.instruction(&Instruction::F32Ne),
             ValType::F64 => f.instruction(&Instruction::F64Ne),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("notequals on unsupported operand type"),
         },
         hir::BinaryOp::Greater => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32GtS),
@@ -1806,7 +1852,7 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64GtU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Gt),
             (ValType::F64, _) => f.instruction(&Instruction::F64Gt),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("greater on unsupported operand type"),
         },
         hir::BinaryOp::GreaterEquals => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32GeS),
@@ -1815,7 +1861,7 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64GeU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Ge),
             (ValType::F64, _) => f.instruction(&Instruction::F64Ge),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("greaterequals on unsupported operand type"),
         },
         hir::BinaryOp::Less => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32LtS),
@@ -1824,7 +1870,7 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64LtU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Lt),
             (ValType::F64, _) => f.instruction(&Instruction::F64Lt),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("less on unsupported operand type"),
         },
         hir::BinaryOp::LessEquals => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32LeS),
@@ -1833,34 +1879,34 @@ fn emit_binary_op(f: &mut Function, op: hir::BinaryOp, operand_ty: &hir::Type) {
             (ValType::I64, false) => f.instruction(&Instruction::I64LeU),
             (ValType::F32, _) => f.instruction(&Instruction::F32Le),
             (ValType::F64, _) => f.instruction(&Instruction::F64Le),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("lessequals on unsupported operand type"),
         },
         hir::BinaryOp::BitAnd => match vt {
             ValType::I32 => f.instruction(&Instruction::I32And),
             ValType::I64 => f.instruction(&Instruction::I64And),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("bitand on unsupported operand type"),
         },
         hir::BinaryOp::BitOr => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Or),
             ValType::I64 => f.instruction(&Instruction::I64Or),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("bitor on unsupported operand type"),
         },
         hir::BinaryOp::BitXor => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Xor),
             ValType::I64 => f.instruction(&Instruction::I64Xor),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("bitxor on unsupported operand type"),
         },
         hir::BinaryOp::ShiftLeft => match vt {
             ValType::I32 => f.instruction(&Instruction::I32Shl),
             ValType::I64 => f.instruction(&Instruction::I64Shl),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("shiftleft on unsupported operand type"),
         },
         hir::BinaryOp::ShiftRight => match (vt, signed) {
             (ValType::I32, true) => f.instruction(&Instruction::I32ShrS),
             (ValType::I32, false) => f.instruction(&Instruction::I32ShrU),
             (ValType::I64, true) => f.instruction(&Instruction::I64ShrS),
             (ValType::I64, false) => f.instruction(&Instruction::I64ShrU),
-            _ => f.instruction(&Instruction::Unreachable),
+            _ => unreachable!("shiftright on unsupported operand type"),
         },
     };
 }
