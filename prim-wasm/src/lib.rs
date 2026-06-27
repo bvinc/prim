@@ -23,7 +23,7 @@ use crate::builtins::{
     emit_rt_resume, emit_write_bytes,
 };
 use crate::emit::{
-    DbgSite, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
+    DbgSite, ScalarField, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
     emit_user_function, flat_scalar_fields, scalar_abi_params,
 };
 use crate::layout::{
@@ -209,11 +209,20 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // whose entries use a fixed pointer ABI, so their signatures can't expand.
     let method_fns: HashSet<hir::FuncId> = program.impls.values().flatten().copied().collect();
     let mut scalar_abi: HashMap<hir::FuncId, Vec<bool>> = HashMap::new();
+    // Per-function: the leaf fields of a by-value scalar-ABI return (phase 3).
+    // A flat-POD return is returned as one wasm result per field. Methods are
+    // excluded for the same vtable reason as parameters.
+    let mut scalar_ret: HashMap<hir::FuncId, Vec<ScalarField>> = HashMap::new();
     for func in &program.functions {
         if func.type_params.is_empty() && func.runtime.is_none() && !method_fns.contains(&func.id) {
             let flags = scalar_abi_params(func, program, &inline_policy);
             if flags.iter().any(|&s| s) {
                 scalar_abi.insert(func.id, flags);
+            }
+            if let Some(ret) = &func.ret {
+                if let Some(fields) = flat_scalar_fields(ret, program, &inline_policy) {
+                    scalar_ret.insert(func.id, fields);
+                }
             }
         }
     }
@@ -240,11 +249,15 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                     params.push(hir_type_to_valtype(&p.ty));
                 }
             }
-            let results: Vec<ValType> = func
-                .ret
-                .as_ref()
-                .map(|t| vec![hir_type_to_valtype(t)])
-                .unwrap_or_default();
+            // A scalar-ABI return expands to one wasm result per leaf field.
+            let results: Vec<ValType> = if let Some(fields) = scalar_ret.get(&func.id) {
+                fields.iter().map(|sf| sf.valtype).collect()
+            } else {
+                func.ret
+                    .as_ref()
+                    .map(|t| vec![hir_type_to_valtype(t)])
+                    .unwrap_or_default()
+            };
             let type_idx = types.register(params, results);
             user_func_types.push(type_idx);
             if program.main == Some(func.name) {
@@ -621,6 +634,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 program,
                 &inline_policy,
                 &scalar_abi,
+                &scalar_ret,
                 func,
                 &func_map,
                 &drop_fns,

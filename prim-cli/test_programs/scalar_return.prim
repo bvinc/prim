@@ -1,0 +1,21 @@
+import std.io.println
+
+// Multi-value returns (phase 3): a flat POD return value crosses as one wasm
+// value per leaf field. Covers consuming a result into a scalarized local,
+// forwarding a result (return passthrough), and a result as a by-value
+// argument (argument passthrough) — none allocate a box.
+struct Point { x: i32, y: i32 }
+
+fn make(a: i32, b: i32) -> Point { return Point { x = a, y = b } }
+fn forward() -> Point { return make(10, 20) }
+fn sum(p: Point) -> i32 { return p.x + p.y }
+
+fn main() {
+    let p = make(3, 4)
+    println(p.x)
+    println(p.y)
+    let q = forward()
+    println(q.x)
+    println(q.y)
+    println(sum(make(7, 8)))
+}

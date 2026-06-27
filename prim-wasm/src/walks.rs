@@ -5,6 +5,7 @@
 //! and visit the same nodes in the same sequence as `emit::emit_expr`, so
 //! per-node counters in `EmitCtx` line up with the collected lists.
 
+use crate::emit::ScalarField;
 use crate::types::hir_type_to_valtype;
 use prim_compiler::hir;
 use std::collections::HashMap;
@@ -162,17 +163,94 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
 // returns one `ValType` per such site, in the same pre-order that emission
 // uses to consume them.
 
-pub(crate) fn collect_scratch_types_block(
+/// Reserve only a call's argument scratch (no scalar-ABI return materialize),
+/// mirroring `emit::emit_raw_call`.
+fn call_arg_scratch(
+    func: &hir::FuncId,
+    args: &[hir::Expr],
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
+    out: &mut Vec<ValType>,
+) {
+    let abi = scalar_abi.get(func);
+    for (i, a) in args.iter().enumerate() {
+        if abi.is_some_and(|v| v.get(i).copied().unwrap_or(false)) {
+            scalar_value_scratch(a, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        } else {
+            collect_scratch_types_expr(a, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        }
+    }
+}
+
+/// Reserve the scratch that `emit::emit_scalar_value` consumes for `e` (a
+/// by-value call argument or return): none for a name (it pushes field locals or
+/// loads via an existing local), the literal's own box for a struct/tuple
+/// literal, a scalar-return call's argument scratch (passed through, no box),
+/// else the value's own scratch plus one stash pointer.
+fn scalar_value_scratch(
+    e: &hir::Expr,
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
+    out: &mut Vec<ValType>,
+) {
+    match &e.kind {
+        hir::ExprKind::Ident(_) => {}
+        hir::ExprKind::StructLit { .. } | hir::ExprKind::TupleLit(_) => {
+            collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        }
+        // A scalar-ABI-returning call is passed straight through (no box).
+        hir::ExprKind::Call { func, args, .. } if scalar_ret.contains_key(func) => {
+            call_arg_scratch(func, args, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        }
+        _ => {
+            collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            out.push(ValType::I32);
+        }
+    }
+}
+
+/// Collect scratch types for a whole function body. The trailing expression is
+/// the implicit return value, so for a scalar-ABI return it reserves the same
+/// scratch as `emit_scalar_value` (mirroring an explicit `return`). Inner-block
+/// trailing expressions are ordinary block values and stay in
+/// `collect_scratch_types_block`.
+pub(crate) fn collect_scratch_types_body(
+    body: &hir::Block,
+    runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
+    out: &mut Vec<ValType>,
+) {
+    for stmt in &body.stmts {
+        collect_scratch_types_stmt(stmt, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+    }
+    if let Some(expr) = &body.expr {
+        if ret_scalar {
+            scalar_value_scratch(expr, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        } else {
+            collect_scratch_types_expr(expr, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+        }
+    }
+}
+
+fn collect_scratch_types_block(
     block: &hir::Block,
     runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
     out: &mut Vec<ValType>,
 ) {
     for stmt in &block.stmts {
-        collect_scratch_types_stmt(stmt, runtime, scalar_abi, out);
+        collect_scratch_types_stmt(stmt, runtime, scalar_abi, scalar_ret, ret_scalar, out);
     }
     if let Some(expr) = &block.expr {
-        collect_scratch_types_expr(expr, runtime, scalar_abi, out);
+        collect_scratch_types_expr(expr, runtime, scalar_abi, scalar_ret, ret_scalar, out);
     }
 }
 
@@ -180,38 +258,48 @@ fn collect_scratch_types_stmt(
     stmt: &hir::Stmt,
     runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
     out: &mut Vec<ValType>,
 ) {
     match stmt {
         hir::Stmt::Assign { value, .. } => {
-            collect_scratch_types_expr(value, runtime, scalar_abi, out);
+            collect_scratch_types_expr(value, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         // The value is produced first, then the pattern binds it (reserving a
         // scratch pointer per tuple level).
         hir::Stmt::Let { pattern, value, .. } => {
-            collect_scratch_types_expr(value, runtime, scalar_abi, out);
+            collect_scratch_types_expr(value, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             collect_scratch_types_pattern(pattern, out);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
-            collect_scratch_types_expr(ptr, runtime, scalar_abi, out);
-            collect_scratch_types_expr(value, runtime, scalar_abi, out);
+            collect_scratch_types_expr(ptr, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            collect_scratch_types_expr(value, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::Stmt::FieldAssign { object, value, .. } => {
-            collect_scratch_types_expr(object, runtime, scalar_abi, out);
-            collect_scratch_types_expr(value, runtime, scalar_abi, out);
+            collect_scratch_types_expr(object, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            collect_scratch_types_expr(value, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
-        hir::Stmt::Expr(e) => collect_scratch_types_expr(e, runtime, scalar_abi, out),
-        hir::Stmt::Loop { body, .. } => collect_scratch_types_block(body, runtime, scalar_abi, out),
+        hir::Stmt::Expr(e) => {
+            collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out)
+        }
+        hir::Stmt::Loop { body, .. } => {
+            collect_scratch_types_block(body, runtime, scalar_abi, scalar_ret, ret_scalar, out)
+        }
         hir::Stmt::While {
             condition, body, ..
         } => {
-            collect_scratch_types_expr(condition, runtime, scalar_abi, out);
-            collect_scratch_types_block(body, runtime, scalar_abi, out);
+            collect_scratch_types_expr(condition, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            collect_scratch_types_block(body, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::Stmt::Break { .. } => {}
         hir::Stmt::Return { value, .. } => {
             if let Some(v) = value {
-                collect_scratch_types_expr(v, runtime, scalar_abi, out);
+                if ret_scalar {
+                    scalar_value_scratch(v, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+                } else {
+                    collect_scratch_types_expr(v, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+                }
             }
         }
         hir::Stmt::Drop { .. } => {}
@@ -290,105 +378,98 @@ fn collect_scratch_types_expr(
     expr: &hir::Expr,
     runtime: &HashMap<hir::FuncId, hir::RuntimeAbi>,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
+    ret_scalar: bool,
     out: &mut Vec<ValType>,
 ) {
     match &expr.kind {
         hir::ExprKind::StructLit { fields, .. } => {
             out.push(ValType::I32);
             for (_, val) in fields {
-                collect_scratch_types_expr(val, runtime, scalar_abi, out);
+                collect_scratch_types_expr(val, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::TupleLit(elems) => {
             out.push(ValType::I32);
             for e in elems {
-                collect_scratch_types_expr(e, runtime, scalar_abi, out);
+                collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::TupleIndex { base, .. } => {
-            collect_scratch_types_expr(base, runtime, scalar_abi, out);
+            collect_scratch_types_expr(base, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::VariantLit { fields, .. } => {
             out.push(ValType::I32);
             for (_, val) in fields {
-                collect_scratch_types_expr(val, runtime, scalar_abi, out);
+                collect_scratch_types_expr(val, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::Match { scrutinee, arms } => {
             // The scrutinee local holds the matched value (scalar or pointer).
             out.push(hir_type_to_valtype(&scrutinee.ty));
-            collect_scratch_types_expr(scrutinee, runtime, scalar_abi, out);
+            collect_scratch_types_expr(scrutinee, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             for arm in arms {
                 collect_match_arm_temps(&arm.pattern, out);
-                collect_scratch_types_expr(&arm.body, runtime, scalar_abi, out);
+                collect_scratch_types_expr(
+                    &arm.body, runtime, scalar_abi, scalar_ret, ret_scalar, out,
+                );
             }
         }
         hir::ExprKind::Dbg { inner, .. } => {
             out.push(hir_type_to_valtype(&inner.ty));
-            collect_scratch_types_expr(inner, runtime, scalar_abi, out);
+            collect_scratch_types_expr(inner, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::Str(_) => {
             // One scratch i32 holding the bump-allocated String struct ptr.
             out.push(ValType::I32);
         }
         hir::ExprKind::Binary { left, right, .. } => {
-            collect_scratch_types_expr(left, runtime, scalar_abi, out);
-            collect_scratch_types_expr(right, runtime, scalar_abi, out);
+            collect_scratch_types_expr(left, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            collect_scratch_types_expr(right, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::Call { func, args, .. } => {
-            let abi = scalar_abi.get(func);
-            for (i, a) in args.iter().enumerate() {
-                if abi.is_some_and(|v| v.get(i).copied().unwrap_or(false)) {
-                    // Mirror `emit_scalar_arg`'s scratch use: a scalarized-local
-                    // argument uses none; a literal builds a box (its own
-                    // scratch); any other value is stashed in one extra i32.
-                    match &a.kind {
-                        hir::ExprKind::Ident(_) => {}
-                        hir::ExprKind::StructLit { .. } | hir::ExprKind::TupleLit(_) => {
-                            collect_scratch_types_expr(a, runtime, scalar_abi, out);
-                        }
-                        _ => {
-                            collect_scratch_types_expr(a, runtime, scalar_abi, out);
-                            out.push(ValType::I32);
-                        }
-                    }
-                } else {
-                    collect_scratch_types_expr(a, runtime, scalar_abi, out);
+            call_arg_scratch(func, args, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            // In this general context `emit_expr` materializes a scalar-ABI
+            // return into a box: one temp per leaf field, then the box pointer.
+            if let Some(fields) = scalar_ret.get(func) {
+                for sf in fields {
+                    out.push(sf.valtype);
                 }
+                out.push(ValType::I32);
             }
         }
         hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
-            collect_scratch_types_expr(base, runtime, scalar_abi, out);
+            collect_scratch_types_expr(base, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::Neg(operand) | hir::ExprKind::BitNot(operand) => {
-            collect_scratch_types_expr(operand, runtime, scalar_abi, out);
+            collect_scratch_types_expr(operand, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::Coerce { value, .. } => {
             // Two i32 scratch slots: data_ptr stash and fat pointer base.
             out.push(ValType::I32);
             out.push(ValType::I32);
-            collect_scratch_types_expr(value, runtime, scalar_abi, out);
+            collect_scratch_types_expr(value, runtime, scalar_abi, scalar_ret, ret_scalar, out);
         }
         hir::ExprKind::DynCall { receiver, args, .. } => {
             // One i32 scratch slot for the fat pointer.
             out.push(ValType::I32);
-            collect_scratch_types_expr(receiver, runtime, scalar_abi, out);
+            collect_scratch_types_expr(receiver, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             for a in args {
-                collect_scratch_types_expr(a, runtime, scalar_abi, out);
+                collect_scratch_types_expr(a, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
             // Should be rewritten to Call by monomorphization before
             // codegen; recurse so any nested generic expression's scratch
             // needs are still counted if this leaks through.
-            collect_scratch_types_expr(receiver, runtime, scalar_abi, out);
+            collect_scratch_types_expr(receiver, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             for a in args {
-                collect_scratch_types_expr(a, runtime, scalar_abi, out);
+                collect_scratch_types_expr(a, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
-                collect_scratch_types_expr(e, runtime, scalar_abi, out);
+                collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::If {
@@ -396,13 +477,22 @@ fn collect_scratch_types_expr(
             then_branch,
             else_branch,
         } => {
-            collect_scratch_types_expr(condition, runtime, scalar_abi, out);
-            collect_scratch_types_block(then_branch, runtime, scalar_abi, out);
+            collect_scratch_types_expr(condition, runtime, scalar_abi, scalar_ret, ret_scalar, out);
+            collect_scratch_types_block(
+                then_branch,
+                runtime,
+                scalar_abi,
+                scalar_ret,
+                ret_scalar,
+                out,
+            );
             if let Some(eb) = else_branch {
-                collect_scratch_types_block(eb, runtime, scalar_abi, out);
+                collect_scratch_types_block(eb, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
-        hir::ExprKind::Block(block) => collect_scratch_types_block(block, runtime, scalar_abi, out),
+        hir::ExprKind::Block(block) => {
+            collect_scratch_types_block(block, runtime, scalar_abi, scalar_ret, ret_scalar, out)
+        }
         _ => {}
     }
 }

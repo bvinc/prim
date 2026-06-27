@@ -8,7 +8,7 @@ use crate::layout::{
     compute_tuple_layout, emit_field_load, emit_field_store,
 };
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
-use crate::walks::{collect_locals, collect_scratch_types_block};
+use crate::walks::{collect_locals, collect_scratch_types_body};
 use prim_compiler::hir;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -47,6 +47,11 @@ pub(crate) struct EmitCtx<'a> {
     /// Per-function: which parameters use the by-value scalar ABI (phase 3).
     /// Consulted when emitting call arguments.
     scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
+    /// Per-function: the leaf fields of a by-value scalar-ABI return. Consulted
+    /// at call sites to materialize a multi-value result.
+    scalar_ret: &'a HashMap<hir::FuncId, Vec<ScalarField>>,
+    /// This function's own scalar-ABI return fields, if it returns by value.
+    ret_fields: Option<Vec<ScalarField>>,
     pub locals: HashMap<hir::SymbolId, u32>,
     /// Locals (phase 2a) held in wasm locals instead of a heap box: their leaf
     /// fields occupy consecutive local slots. The whole value is never
@@ -102,6 +107,7 @@ pub(crate) fn build_emit_ctx<'a>(
     program: &'a hir::Program,
     policy: &'a InlinePolicy<'a>,
     scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &'a HashMap<hir::FuncId, Vec<ScalarField>>,
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
     drop_fns: &'a HashMap<hir::Type, u32>,
@@ -140,7 +146,7 @@ pub(crate) fn build_emit_ctx<'a>(
     // Assign body-local slots after the params. A scalarized aggregate expands to
     // one slot per leaf field (recorded in `scalarized`, absent from `locals`);
     // every other local takes a single slot.
-    let scalar_fields = scalarizable_locals(func, program, policy, scalar_abi);
+    let scalar_fields = scalarizable_locals(func, program, policy, scalar_abi, scalar_ret);
     let mut body_local_valtypes: Vec<ValType> = Vec::new();
     for (sym, vt) in collect_locals(&func.body) {
         if let Some(fields) = scalar_fields.get(&sym) {
@@ -167,6 +173,8 @@ pub(crate) fn build_emit_ctx<'a>(
         program,
         policy,
         scalar_abi,
+        scalar_ret,
+        ret_fields: scalar_ret.get(&func.id).cloned(),
         locals,
         scalarized,
         body_local_valtypes,
@@ -292,9 +300,10 @@ fn scalarizable_locals(
     program: &hir::Program,
     policy: &InlinePolicy,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
 ) -> HashMap<hir::SymbolId, Vec<ScalarField>> {
     let mut candidates: HashMap<hir::SymbolId, Vec<ScalarField>> = HashMap::new();
-    scalar_candidates_block(&func.body, program, policy, &mut candidates);
+    scalar_candidates_block(&func.body, program, policy, scalar_ret, &mut candidates);
     if candidates.is_empty() {
         return candidates;
     }
@@ -337,6 +346,7 @@ fn scalar_candidates_block(
     block: &hir::Block,
     program: &hir::Program,
     policy: &InlinePolicy,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
     for stmt in &block.stmts {
@@ -346,19 +356,24 @@ fn scalar_candidates_block(
             ..
         } = stmt
         {
-            if matches!(
-                value.kind,
-                hir::ExprKind::StructLit { .. } | hir::ExprKind::TupleLit(_)
-            ) {
+            // Scalarizable initializers: a struct/tuple literal, or a call whose
+            // scalar-ABI return arrives as field values (consumed straight into
+            // the locals, no box).
+            let init_ok = match &value.kind {
+                hir::ExprKind::StructLit { .. } | hir::ExprKind::TupleLit(_) => true,
+                hir::ExprKind::Call { func, .. } => scalar_ret.contains_key(func),
+                _ => false,
+            };
+            if init_ok {
                 if let Some(fields) = flat_scalar_fields(ty, program, policy) {
                     out.insert(*symbol, fields);
                 }
             }
         }
-        scalar_candidates_stmt(stmt, program, policy, out);
+        scalar_candidates_stmt(stmt, program, policy, scalar_ret, out);
     }
     if let Some(e) = &block.expr {
-        scalar_candidates_expr(e, program, policy, out);
+        scalar_candidates_expr(e, program, policy, scalar_ret, out);
     }
 }
 
@@ -366,6 +381,7 @@ fn scalar_candidates_stmt(
     stmt: &hir::Stmt,
     program: &hir::Program,
     policy: &InlinePolicy,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
     match stmt {
@@ -374,21 +390,23 @@ fn scalar_candidates_stmt(
         | hir::Stmt::Expr(value)
         | hir::Stmt::Return {
             value: Some(value), ..
-        } => scalar_candidates_expr(value, program, policy, out),
+        } => scalar_candidates_expr(value, program, policy, scalar_ret, out),
         hir::Stmt::DerefAssign { ptr, value, .. } => {
-            scalar_candidates_expr(ptr, program, policy, out);
-            scalar_candidates_expr(value, program, policy, out);
+            scalar_candidates_expr(ptr, program, policy, scalar_ret, out);
+            scalar_candidates_expr(value, program, policy, scalar_ret, out);
         }
         hir::Stmt::FieldAssign { object, value, .. } => {
-            scalar_candidates_expr(object, program, policy, out);
-            scalar_candidates_expr(value, program, policy, out);
+            scalar_candidates_expr(object, program, policy, scalar_ret, out);
+            scalar_candidates_expr(value, program, policy, scalar_ret, out);
         }
-        hir::Stmt::Loop { body, .. } => scalar_candidates_block(body, program, policy, out),
+        hir::Stmt::Loop { body, .. } => {
+            scalar_candidates_block(body, program, policy, scalar_ret, out)
+        }
         hir::Stmt::While {
             condition, body, ..
         } => {
-            scalar_candidates_expr(condition, program, policy, out);
-            scalar_candidates_block(body, program, policy, out);
+            scalar_candidates_expr(condition, program, policy, scalar_ret, out);
+            scalar_candidates_block(body, program, policy, scalar_ret, out);
         }
         hir::Stmt::Return { value: None, .. }
         | hir::Stmt::Break { .. }
@@ -400,6 +418,7 @@ fn scalar_candidates_expr(
     expr: &hir::Expr,
     program: &hir::Program,
     policy: &InlinePolicy,
+    scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
     match &expr.kind {
@@ -408,17 +427,17 @@ fn scalar_candidates_expr(
             then_branch,
             else_branch,
         } => {
-            scalar_candidates_expr(condition, program, policy, out);
-            scalar_candidates_block(then_branch, program, policy, out);
+            scalar_candidates_expr(condition, program, policy, scalar_ret, out);
+            scalar_candidates_block(then_branch, program, policy, scalar_ret, out);
             if let Some(b) = else_branch {
-                scalar_candidates_block(b, program, policy, out);
+                scalar_candidates_block(b, program, policy, scalar_ret, out);
             }
         }
-        hir::ExprKind::Block(b) => scalar_candidates_block(b, program, policy, out),
+        hir::ExprKind::Block(b) => scalar_candidates_block(b, program, policy, scalar_ret, out),
         hir::ExprKind::Match { scrutinee, arms } => {
-            scalar_candidates_expr(scrutinee, program, policy, out);
+            scalar_candidates_expr(scrutinee, program, policy, scalar_ret, out);
             for arm in arms {
-                scalar_candidates_expr(&arm.body, program, policy, out);
+                scalar_candidates_expr(&arm.body, program, policy, scalar_ret, out);
             }
         }
         _ => {}
@@ -628,7 +647,14 @@ pub(crate) fn emit_user_function(
     ctx: &EmitCtx,
 ) -> Result<Function, WasmError> {
     let mut scratch_types: Vec<ValType> = Vec::new();
-    collect_scratch_types_block(&func.body, ctx.runtime, ctx.scalar_abi, &mut scratch_types);
+    collect_scratch_types_body(
+        &func.body,
+        ctx.runtime,
+        ctx.scalar_abi,
+        ctx.scalar_ret,
+        ctx.ret_fields.is_some(),
+        &mut scratch_types,
+    );
     // Body locals (scalarized aggregates already expanded to one slot per leaf
     // field by `build_emit_ctx`), then scratch slots.
     let mut wasm_locals: Vec<(u32, ValType)> =
@@ -637,14 +663,33 @@ pub(crate) fn emit_user_function(
         wasm_locals.push((1, *vt));
     }
     let mut f = Function::new(wasm_locals);
-    emit_block(&mut f, &func.body, ctx)?;
+    // The body's trailing expression is the implicit return value; for a
+    // scalar-ABI return it must be emitted as N field values, not a pointer.
+    for stmt in &func.body.stmts {
+        emit_stmt(&mut f, stmt, ctx)?;
+    }
+    if let Some(expr) = &func.body.expr {
+        if ctx.ret_fields.is_some() {
+            emit_scalar_value(&mut f, expr, ctx)?;
+        } else {
+            emit_expr(&mut f, expr, ctx)?;
+        }
+    }
     if let Some(ret_ty) = &func.ret {
         let needs_default = match &func.body.expr {
             Some(expr) => !produces_value(&expr.ty),
             None => true,
         };
         if needs_default {
-            emit_default_value(&mut f, ret_ty);
+            if let Some(fields) = &ctx.ret_fields {
+                // Unreachable fall-through (all paths return); balance the stack
+                // with one default per result field.
+                for sf in fields {
+                    emit_default_for(&mut f, sf.valtype);
+                }
+            } else {
+                emit_default_value(&mut f, ret_ty);
+            }
         }
     }
     f.instruction(&Instruction::End);
@@ -666,7 +711,12 @@ fn bail(f: &mut Function, ctx: &EmitCtx, msg: impl Into<String>) {
 }
 
 fn emit_default_value(f: &mut Function, ty: &hir::Type) {
-    match hir_type_to_valtype(ty) {
+    emit_default_for(f, hir_type_to_valtype(ty));
+}
+
+/// Push a zero value of the given wasm type.
+fn emit_default_for(f: &mut Function, vt: ValType) {
+    match vt {
         ValType::I32 => f.instruction(&Instruction::I32Const(0)),
         ValType::I64 => f.instruction(&Instruction::I64Const(0)),
         ValType::F32 => f.instruction(&Instruction::F32Const(0.0_f32.into())),
@@ -717,7 +767,11 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
         }
         hir::Stmt::Return { value, .. } => {
             if let Some(expr) = value {
-                emit_expr(f, expr, ctx)?;
+                if ctx.ret_fields.is_some() {
+                    emit_scalar_value(f, expr, ctx)?;
+                } else {
+                    emit_expr(f, expr, ctx)?;
+                }
             }
             f.instruction(&Instruction::Return);
         }
@@ -859,16 +913,14 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::Call { func, args, .. } => {
             if let Some(&runtime) = ctx.runtime.get(func) {
                 emit_runtime_call(f, runtime, args, ctx)?;
-            } else if let Some(&idx) = ctx.funcs.get(func) {
-                let abi = ctx.scalar_abi.get(func);
-                for (i, arg) in args.iter().enumerate() {
-                    if abi.is_some_and(|v| v[i]) {
-                        emit_scalar_arg(f, arg, ctx)?;
-                    } else {
-                        emit_expr(f, arg, ctx)?;
-                    }
+            } else if ctx.funcs.contains_key(func) {
+                emit_raw_call(f, func, args, ctx)?;
+                // A scalar-ABI return arrives as N stack values; in this general
+                // context, materialize them into a box so the value reads as the
+                // usual aggregate pointer.
+                if let Some(fields) = ctx.scalar_ret.get(func) {
+                    materialize_scalar_box(f, &expr.ty, fields, ctx)?;
                 }
-                f.instruction(&Instruction::Call(idx));
             } else {
                 return Err(WasmError::Internal("call to unresolved function".into()));
             }
@@ -1295,15 +1347,86 @@ fn emit_println_for_ty(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
     }
 }
 
-/// Emit a by-value scalar-ABI argument (phase 3): push one wasm value per leaf
-/// field, in declaration order. A scalarized local/param pushes its field
-/// locals directly; any other value is realized as a box (an existing local, or
-/// a freshly built literal whose box pointer is re-read from its scratch local)
-/// and its fields are loaded. Mirrors the parameter expansion in
-/// `scalar_abi_params`/`build_emit_ctx`.
-fn emit_scalar_arg(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
+/// Emit a user-function call: its arguments (each by-value if the callee's
+/// parameter uses the scalar ABI, else as a pointer), then the `call`. Leaves
+/// the callee's results on the stack — N values for a scalar-ABI return.
+fn emit_raw_call(
+    f: &mut Function,
+    func: &hir::FuncId,
+    args: &[hir::Expr],
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let idx = *ctx
+        .funcs
+        .get(func)
+        .ok_or_else(|| WasmError::Internal("call to unresolved function".into()))?;
+    let abi = ctx.scalar_abi.get(func);
+    for (i, arg) in args.iter().enumerate() {
+        if abi.is_some_and(|v| v.get(i).copied().unwrap_or(false)) {
+            emit_scalar_value(f, arg, ctx)?;
+        } else {
+            emit_expr(f, arg, ctx)?;
+        }
+    }
+    f.instruction(&Instruction::Call(idx));
+    Ok(())
+}
+
+/// Materialize a scalar-ABI value (N leaf-field values on the stack, in
+/// declaration order) into a fresh heap box, leaving the box pointer. The N
+/// field temporaries and the box pointer are reserved for this call site in
+/// `collect_scratch_types`.
+fn materialize_scalar_box(
+    f: &mut Function,
+    ty: &hir::Type,
+    fields: &[ScalarField],
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let n = fields.len() as u32;
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + n + 1);
+    let field_temp = |i: u32| ctx.scratch_base + counter + i;
+    let box_temp = ctx.scratch_base + counter + n;
+
+    // Pop the N values (the last field is on top) into temporaries.
+    for i in (0..n).rev() {
+        f.instruction(&Instruction::LocalSet(field_temp(i)));
+    }
+    let size = match ty {
+        hir::Type::Struct(sid, _) => ctx
+            .struct_layouts
+            .get(sid)
+            .map(|l| l.size)
+            .ok_or_else(|| WasmError::Internal("missing struct layout".into()))?,
+        hir::Type::Tuple(elems) => compute_tuple_layout(elems, ctx.policy).size,
+        _ => {
+            return Err(WasmError::Internal(
+                "scalar-ABI value has no box layout".into(),
+            ));
+        }
+    };
+    f.instruction(&Instruction::I32Const(size as i32));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalSet(box_temp));
+    for (i, sf) in fields.iter().enumerate() {
+        let (offset, fty) = scalar_field_offset(ty, &sf.key, ctx)?;
+        f.instruction(&Instruction::LocalGet(box_temp));
+        f.instruction(&Instruction::LocalGet(field_temp(i as u32)));
+        emit_field_store(f, &fty, offset);
+    }
+    f.instruction(&Instruction::LocalGet(box_temp));
+    Ok(())
+}
+
+/// Emit a flat-POD aggregate as a by-value scalar-ABI sequence (phase 3): push
+/// one wasm value per leaf field, in declaration order. Used for by-value call
+/// arguments and by-value returns. A scalarized local/param pushes its field
+/// locals directly; a scalar-ABI-returning call passes its results straight
+/// through; any other value is realized as a box (an existing local, a freshly
+/// built literal, or a stashed pointer) and its fields are loaded.
+fn emit_scalar_value(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
     let fields = flat_scalar_fields(&arg.ty, ctx.program, ctx.policy).ok_or_else(|| {
-        WasmError::Internal("scalar-ABI argument is not a flat scalar aggregate".into())
+        WasmError::Internal("scalar-ABI value is not a flat scalar aggregate".into())
     })?;
     // A scalarized local/param: push its leaf-field locals directly (no box).
     if let hir::ExprKind::Ident(sym) = &arg.kind {
@@ -1315,6 +1438,13 @@ fn emit_scalar_arg(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result<(
                 f.instruction(&Instruction::LocalGet(local));
             }
             return Ok(());
+        }
+    }
+    // A scalar-ABI-returning call already leaves N values on the stack — pass
+    // them straight through (no box).
+    if let hir::ExprKind::Call { func, args, .. } = &arg.kind {
+        if ctx.scalar_ret.contains_key(func) {
+            return emit_raw_call(f, func, args, ctx);
         }
     }
     // Otherwise the value lives in a box; find a local holding its pointer.
@@ -1407,8 +1537,6 @@ fn emit_scalar_let(
     value: &hir::Expr,
     ctx: &EmitCtx,
 ) -> Result<(), WasmError> {
-    let counter = ctx.scratch_counter.get();
-    ctx.scratch_counter.set(counter + 1);
     let set_field = |f: &mut Function, ctx: &EmitCtx, key: &ScalarKey| -> Result<(), WasmError> {
         match ctx.scalarized.get(&symbol).and_then(|s| s.local_of(key)) {
             Some(local) => {
@@ -1418,8 +1546,15 @@ fn emit_scalar_let(
             None => Err(WasmError::Internal("scalarized field has no local".into())),
         }
     };
+    // Skip the box-pointer scratch slot `collect_scratch_types` reserved for a
+    // struct/tuple literal (the scalarized value uses no box).
+    let skip_box_slot = |ctx: &EmitCtx| {
+        let c = ctx.scratch_counter.get();
+        ctx.scratch_counter.set(c + 1);
+    };
     match &value.kind {
         hir::ExprKind::StructLit { fields, .. } => {
+            skip_box_slot(ctx);
             for (fsym, fval) in fields {
                 emit_expr(f, fval, ctx)?;
                 set_field(f, ctx, &ScalarKey::Field(*fsym))?;
@@ -1427,14 +1562,32 @@ fn emit_scalar_let(
             Ok(())
         }
         hir::ExprKind::TupleLit(elems) => {
+            skip_box_slot(ctx);
             for (i, elem) in elems.iter().enumerate() {
                 emit_expr(f, elem, ctx)?;
                 set_field(f, ctx, &ScalarKey::Index(i))?;
             }
             Ok(())
         }
+        // A scalar-ABI-returning call leaves N values; consume them into the
+        // locals (the last field is on top), then skip the N+1 materialize temps
+        // that `collect_scratch_types` reserved for this call.
+        hir::ExprKind::Call { func, args, .. } if ctx.scalar_ret.contains_key(func) => {
+            emit_raw_call(f, func, args, ctx)?;
+            let scalar = ctx
+                .scalarized
+                .get(&symbol)
+                .cloned()
+                .ok_or_else(|| WasmError::Internal("scalarized let symbol missing".into()))?;
+            for sf in scalar.fields.iter().rev() {
+                set_field(f, ctx, &sf.key)?;
+            }
+            let c = ctx.scratch_counter.get();
+            ctx.scratch_counter.set(c + scalar.fields.len() as u32 + 1);
+            Ok(())
+        }
         _ => Err(WasmError::Internal(
-            "scalarized let with non-literal initializer".into(),
+            "scalarized let with unsupported initializer".into(),
         )),
     }
 }
