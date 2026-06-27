@@ -98,10 +98,24 @@ pub fn compile_and_run_with_root(
             ))
         })?;
 
+    // A `panic`/`trap` writes ABORT_SENTINEL to stderr just before its wasm
+    // trap. The stack-switching scheduler swallows that trap (the process exits
+    // 0), so the sentinel is how an abort surfaces as a nonzero exit code here.
+    // Keep in sync with `panic` in prim-std/src/std/sys/sys.prim.
+    const ABORT_SENTINEL: &str = "prim-runtime-abort: nonzero exit\n";
+    let mut stderr = String::from_utf8_lossy(&run_result.stderr).into_owned();
+    let mut exit_code = run_result.status.code().unwrap_or(1);
+    if stderr.contains(ABORT_SENTINEL) {
+        stderr = stderr.replace(ABORT_SENTINEL, "");
+        if exit_code == 0 {
+            exit_code = 1;
+        }
+    }
+
     Ok(RunOutput {
         stdout: String::from_utf8_lossy(&run_result.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&run_result.stderr).into_owned(),
-        exit_code: run_result.status.code().unwrap_or(1),
+        stderr,
+        exit_code,
     })
 }
 

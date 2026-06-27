@@ -1,9 +1,10 @@
 import std.io.println
 import std.sys.panic
 
-// panic prints its message and halts: the line after it never runs.
-// (It currently exits 0 — traps don't yet propagate a nonzero exit code
-// through the scheduler — so this is checked as a halting program.)
+// panic prints its message and halts: the line after it never runs, and the
+// process exits nonzero (RUNTIME_ERROR). The wasm trap itself is swallowed by
+// the scheduler's continuation, so `panic` writes an abort sentinel that the
+// runner turns into a nonzero exit code.
 fn main() {
     println(1i32)
     panic("halting here")

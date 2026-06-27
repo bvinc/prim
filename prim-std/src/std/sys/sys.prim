@@ -39,6 +39,12 @@ fn panic(msg: String) {
     write_raw(1, msg.data, msg.len)
     let nl = "\n"
     write_raw(1, nl.data, nl.len)
+    // Signal the abort to the host runner on stderr, then trap. A wasm trap
+    // raised inside the scheduler's continuation is swallowed (the process would
+    // exit 0), so `prim run` watches for this sentinel and reports a nonzero exit
+    // code. Keep in sync with ABORT_SENTINEL in prim-cli/src/lib.rs.
+    let abort = "prim-runtime-abort: nonzero exit\n"
+    write_raw(2, abort.data, abort.len)
     trap()
 }
 

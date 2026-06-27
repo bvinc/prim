@@ -1,0 +1,11 @@
+import std.io.println
+import std.option.Option
+import std.option.unwrap
+
+// Unwrapping a None aborts via panic_value -> panic. The process must exit
+// nonzero (the abort sentinel is surfaced by the runner).
+fn main() {
+    let o: Option[i32] = Option.None
+    let v = unwrap[i32](take o)
+    println(v)
+}
