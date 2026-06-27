@@ -687,6 +687,44 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// The `self` type and type parameters for an `impl` on `owner`. For a
+    /// generic struct/enum, `self` is the type applied to its own parameters
+    /// (`Option[T]`, not the bare `Option`) and the methods become generic over
+    /// those parameters — so `o.unwrap()` on `Option[i32]` monomorphizes the
+    /// method with `T = i32`. Non-generic owners get an empty parameter list.
+    fn generic_self_and_params(&self, owner: hir::MethodOwner) -> (hir::Type, Vec<hir::TypeParam>) {
+        let param_args = |n: usize| -> Vec<hir::Type> {
+            (0..n)
+                .map(|i| hir::Type::Param(hir::TypeParamId(i as u32)))
+                .collect()
+        };
+        match owner {
+            hir::MethodOwner::Enum(eid) => {
+                let tps = self.enums[eid.0 as usize].type_params.clone();
+                (hir::Type::Enum(eid, param_args(tps.len())), tps)
+            }
+            hir::MethodOwner::Struct(sid) => {
+                let tps = self.structs[sid.0 as usize].type_params.clone();
+                (hir::Type::Struct(sid, param_args(tps.len())), tps)
+            }
+            other => (Self::owner_self_type(other), Vec::new()),
+        }
+    }
+
+    /// Register `owner`'s type parameters (by name) as the in-scope type params
+    /// for lowering an impl method's signature and body, so `T` resolves.
+    fn enter_owner_type_params(&mut self, tps: &[hir::TypeParam]) {
+        self.current_type_params.clear();
+        for (i, tp) in tps.iter().enumerate() {
+            let name = self
+                .interner
+                .resolve(&self.symbols[tp.name.0 as usize].name)
+                .to_string();
+            self.current_type_params
+                .insert(name, hir::TypeParamId(i as u32));
+        }
+    }
+
     fn populate_items(&mut self) {
         // Pass A: type definitions (structs and enums) for ALL modules. This
         // runs before any function body is lowered so a body in one module can
@@ -906,8 +944,12 @@ impl<'a> LoweringContext<'a> {
                         continue;
                     };
                     // `Self` and a bare `self` param resolve to the target type
-                    // while lowering this impl's bodies.
-                    self.current_self_type = Some(Self::owner_self_type(owner));
+                    // while lowering this impl's bodies. For a generic owner the
+                    // self type carries its parameters (`Option[T]`) and they are
+                    // brought into scope so method signatures/bodies resolve `T`.
+                    let (self_type, owner_tps) = self.generic_self_and_params(owner);
+                    self.current_self_type = Some(self_type);
+                    self.enter_owner_type_params(&owner_tps);
                     // Resolve the trait so we can index into its method order.
                     // The resulting `(trait, owner)` entry records bound
                     // satisfaction for every owner (struct, enum, primitive);
@@ -981,9 +1023,17 @@ impl<'a> LoweringContext<'a> {
                             hir_func.ret = ret;
                             hir_func.body = body;
                             hir_func.span = span;
+                            // Only a `self`-method is generic over the owner's
+                            // parameters (`self: Option[T]`, inferred from the
+                            // receiver, then monomorphized). Associated functions
+                            // keep their own (possibly concrete) signatures.
+                            if impl_fn.is_method {
+                                hir_func.type_params = owner_tps.clone();
+                            }
                         }
                     }
                     self.current_self_type = None;
+                    self.current_type_params.clear();
                 }
             }
         }

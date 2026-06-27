@@ -1,23 +1,19 @@
 import std.io.println
 import std.option.Option
-import std.option.unwrap
-import std.option.unwrap_or
-import std.option.is_some
-import std.option.is_none
 
 fn main() {
-    // `unwrap`/`unwrap_or` consume their Option (take), so the borrowing
-    // checks below use fresh values rather than reusing a moved one.
+    // `unwrap`/`unwrap_or` consume their Option (take self), so the checks
+    // below use fresh values rather than reusing a moved one.
     let some = Option.Some(42i32)
     let none: Option[i32] = Option.None
     let some_check = Option.Some(42i32)
     let none_check: Option[i32] = Option.None
-    println(unwrap(take some))
-    println(unwrap_or(take none, take 7i32))
-    if is_some(some_check) {
+    println(some.unwrap())
+    println(none.unwrap_or(take 7i32))
+    if some_check.is_some() {
         println(1i32)
     }
-    if is_none(none_check) {
+    if none_check.is_none() {
         println(2i32)
     }
 }

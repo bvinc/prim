@@ -470,6 +470,71 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Type-check a call to a generic callee: infer one type argument per type
+    /// parameter from the value arguments (seeded by any turbofish `type_args`),
+    /// write the resolved list back into `type_args`, unify each substituted
+    /// formal against its actual, and return the substituted return type. Shared
+    /// by free `Call`s and by `MethodCall` rewrites (where the receiver is
+    /// `args[0]`, so the method's `self: Option[T]` pins `T` from the receiver).
+    fn check_generic_call(
+        &mut self,
+        tparams: &[crate::hir::TypeParam],
+        params: &[Type],
+        ret: &Option<Type>,
+        args: &mut [Expr],
+        type_args: &mut Vec<Type>,
+        span: SpanId,
+        locals: &mut HashMap<SymbolId, Type>,
+    ) -> Result<Type, TypeCheckError> {
+        let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
+        Self::pin_type_args(&mut pins, type_args);
+        let mut arg_types: Vec<Type> = Vec::with_capacity(args.len());
+        for (arg, formal) in args.iter_mut().zip(params.iter()) {
+            let expected = Self::substitute_params(formal, &pins);
+            self.apply_expected(arg, &expected);
+            let got = self.check_expr(arg, locals)?;
+            if !Self::infer_pins(formal, &got, &mut pins) {
+                return Err(self.error(
+                    span,
+                    TypeCheckKind::Legacy(format!(
+                        "conflicting inferences for a type parameter (got {} for a position already pinned to a different type)",
+                        self.type_name(&got)
+                    )),
+                ));
+            }
+            arg_types.push(got);
+        }
+        let inferred = self.resolve_type_args(
+            tparams,
+            &pins,
+            span,
+            BoundCheckMode::AllowForwardedParam,
+            "cannot infer type parameter ",
+        )?;
+        for (i, (arg, formal)) in args.iter_mut().zip(params.iter()).enumerate() {
+            let substituted = Self::substitute_params(formal, &pins);
+            let got = &arg_types[i];
+            if self.try_coerce_struct_to_trait(arg, got, &substituted) {
+                continue;
+            }
+            if self.unify(&substituted, got).is_none() {
+                return Err(self.error(
+                    span,
+                    TypeCheckKind::TypeMismatch {
+                        expected: self.type_name(&substituted),
+                        found: self.type_name(got),
+                    },
+                ));
+            }
+        }
+        let ret_ty = ret
+            .as_ref()
+            .map(|r| Self::substitute_params(r, &pins))
+            .unwrap_or(Type::Unit);
+        *type_args = inferred;
+        Ok(ret_ty)
+    }
+
     fn infer_field_pins(
         &self,
         fields: &[CheckedField],
@@ -1638,8 +1703,9 @@ impl<'a> Checker<'a> {
                 let mut new_arg_modes = Vec::with_capacity(arg_modes.len() + 1);
                 new_arg_modes.push(self_mode);
                 new_arg_modes.append(arg_modes);
-                // Step 4: rewrite in place to a Call. Impl methods are
-                // not yet generic, so type_args stays empty.
+                // Step 4: rewrite in place to a Call. For a method on a generic
+                // owner the callee is generic; its type args are inferred below
+                // (from the receiver onward) and written into `type_args`.
                 *kind = ExprKind::Call {
                     func,
                     type_args: Vec::new(),
@@ -1648,7 +1714,13 @@ impl<'a> Checker<'a> {
                 };
                 // Step 5: typecheck the rewritten call. The receiver's type
                 // is already known so check_expr on it is a no-op.
-                let ExprKind::Call { func, args, .. } = kind else {
+                let ExprKind::Call {
+                    func,
+                    type_args,
+                    args,
+                    ..
+                } = kind
+                else {
                     unreachable!()
                 };
                 let (params, ret) = self
@@ -1665,6 +1737,15 @@ impl<'a> Checker<'a> {
                             found: args.len(),
                         },
                     ));
+                }
+                // A method on a generic owner is a generic function: infer its
+                // type args from the receiver/args (`self: Option[T]` pins `T`).
+                if let Some(tparams) = self.func_type_params.get(func).cloned() {
+                    let ret_ty = self.check_generic_call(
+                        &tparams, &params, &ret, args, type_args, *span, locals,
+                    )?;
+                    *ty = ret_ty.clone();
+                    return Ok(ret_ty);
                 }
                 for (arg, expected) in args.iter_mut().zip(params.iter()) {
                     self.apply_expected(arg, expected);
@@ -1714,64 +1795,9 @@ impl<'a> Checker<'a> {
                 }
                 let callee_type_params = self.func_type_params.get(func).cloned();
                 if let Some(tparams) = callee_type_params {
-                    // Generic callee: infer one type-arg per type param by
-                    // matching the formal/actual structure, then substitute
-                    // before unifying. Explicit turbofish args seed the pins
-                    // first; value-argument inference then refines and is
-                    // checked for consistency against them.
-                    let mut pins: HashMap<crate::hir::TypeParamId, Type> = HashMap::new();
-                    Self::pin_type_args(&mut pins, type_args);
-                    let mut arg_types: Vec<Type> = Vec::with_capacity(args.len());
-                    for (arg, formal) in args.iter_mut().zip(params.iter()) {
-                        // Apply the formal with any already-known pins
-                        // substituted in, so turbofish-supplied types steer
-                        // literal coercion (e.g. `identity[i32](7)`).
-                        let expected = Self::substitute_params(formal, &pins);
-                        self.apply_expected(arg, &expected);
-                        let got = self.check_expr(arg, locals)?;
-                        if !Self::infer_pins(formal, &got, &mut pins) {
-                            return Err(self.error(
-                                *span,
-                                TypeCheckKind::Legacy(format!(
-                                    "conflicting inferences for a type parameter (got {} for a position already pinned to a different type)",
-                                    self.type_name(&got)
-                                )),
-                            ));
-                        }
-                        arg_types.push(got);
-                    }
-                    let inferred = self.resolve_type_args(
-                        &tparams,
-                        &pins,
-                        *span,
-                        BoundCheckMode::AllowForwardedParam,
-                        "cannot infer type parameter ",
+                    let ret_ty = self.check_generic_call(
+                        &tparams, &params, &ret, args, type_args, *span, locals,
                     )?;
-                    // Substitute pins into formals and unify against the
-                    // already-checked actual types.
-                    for (i, (arg, formal)) in args.iter_mut().zip(params.iter()).enumerate() {
-                        let substituted = Self::substitute_params(formal, &pins);
-                        let got = &arg_types[i];
-                        if self.try_coerce_struct_to_trait(arg, got, &substituted) {
-                            continue;
-                        }
-                        if self.unify(&substituted, got).is_none() {
-                            let expected_name = self.type_name(&substituted);
-                            let found_name = self.type_name(got);
-                            return Err(self.error(
-                                *span,
-                                TypeCheckKind::TypeMismatch {
-                                    expected: expected_name,
-                                    found: found_name,
-                                },
-                            ));
-                        }
-                    }
-                    let ret_ty = ret
-                        .as_ref()
-                        .map(|r| Self::substitute_params(r, &pins))
-                        .unwrap_or(Type::Unit);
-                    *type_args = inferred;
                     *ty = ret_ty.clone();
                     return Ok(ret_ty);
                 }

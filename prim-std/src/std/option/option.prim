@@ -8,32 +8,38 @@ enum Option[T] {
     Some(T),
 }
 
-fn is_some[T](o: Option[T]) -> bool {
-    return match o {
-        Option.Some(_) => true,
-        Option.None => false,
+// Methods are generic over the enum's `T`, inferred from the receiver: a call
+// `o.unwrap()` on an `Option[i32]` monomorphizes the method with `T = i32`.
+impl Option {
+    // Whether this is a `Some`. Borrows the value (`view self`).
+    fn is_some(view self) -> bool {
+        return match self {
+            Option.Some(_) => true,
+            Option.None => false,
+        }
     }
-}
 
-fn is_none[T](o: Option[T]) -> bool {
-    return match o {
-        Option.Some(_) => false,
-        Option.None => true,
+    // Whether this is a `None`.
+    fn is_none(view self) -> bool {
+        return match self {
+            Option.Some(_) => false,
+            Option.None => true,
+        }
     }
-}
 
-// Extract the value, aborting if there is none.
-fn unwrap[T](take o: Option[T]) -> T {
-    return match o {
-        Option.Some(take v) => v,
-        Option.None => panic_value[T]("Option.unwrap called on None"),
+    // Extract the value, aborting if there is none. Consumes the option.
+    fn unwrap(take self) -> T {
+        return match self {
+            Option.Some(take v) => v,
+            Option.None => panic_value[T]("Option.unwrap called on None"),
+        }
     }
-}
 
-// Extract the value, or return `default` if there is none.
-fn unwrap_or[T](take o: Option[T], take default: T) -> T {
-    return match o {
-        Option.Some(take v) => v,
-        Option.None => default,
+    // Extract the value, or return `default` if there is none.
+    fn unwrap_or(take self, take default: T) -> T {
+        return match self {
+            Option.Some(take v) => v,
+            Option.None => default,
+        }
     }
 }

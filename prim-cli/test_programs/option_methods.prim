@@ -1,0 +1,14 @@
+import std.io.println
+import std.option.Option
+
+// Generic methods, inferred from the receiver and monomorphized per type:
+// unwrap on Option[i32], is_some on Option[bool].
+fn main() {
+    let a = Option.Some(5i32)
+    println(a.unwrap())
+    let b = Option.Some(true)
+    println(b.is_some())
+    let c: Option[i32] = Option.None
+    println(c.is_none())
+    println(c.unwrap_or(take 9i32))
+}
