@@ -1,0 +1,15 @@
+import std.io.println
+
+// A flat POD aggregate whose only uses are field reads is held directly in
+// wasm locals (phase 2a) — no heap box. Covers structs and tuples.
+struct Point { x: i32, y: i32 }
+
+fn main() {
+    let p = Point { x = 3, y = 4 }
+    println(p.x)
+    println(p.y)
+    println(p.x + p.y)
+    let t = (10i32, 20i32, 30i32)
+    println(t.0)
+    println(t.2)
+}
