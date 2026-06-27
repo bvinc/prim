@@ -1,0 +1,6 @@
+// Accessing a field on a non-struct value is a type error, reported at
+// typecheck (it used to leak Undetermined into codegen and trap silently).
+fn main() {
+    let p: i32 = 5
+    let x = p.field
+}

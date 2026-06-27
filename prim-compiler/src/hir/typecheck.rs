@@ -1264,8 +1264,10 @@ impl<'a> Checker<'a> {
                     *ty = global_ty.clone();
                     Ok(global_ty)
                 } else {
-                    *ty = Type::Undetermined;
-                    Ok(Type::Undetermined)
+                    // Resolved to a non-value symbol (or one with no type) used
+                    // in value position — error here rather than leak
+                    // `Undetermined` into codegen.
+                    Err(self.error(*span, TypeCheckKind::UndefinedSymbol(*symbol)))
                 }
             }
             ExprKind::Binary {
@@ -1882,9 +1884,17 @@ impl<'a> Checker<'a> {
                 let base_ty = self.check_expr(base, locals)?;
                 let (struct_id, base_type_args) = match base_ty {
                     Type::Struct(id, args) => (id, args),
-                    _ => {
-                        *ty = Type::Undetermined;
-                        return Ok(Type::Undetermined);
+                    // A field access on a non-struct value is a type error. It
+                    // used to leak `Undetermined` to codegen (a silent trap);
+                    // report it here instead.
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(format!(
+                                "field access on `{}`, which is not a struct",
+                                self.type_name(&other)
+                            )),
+                        ));
                     }
                 };
                 let fields = self
