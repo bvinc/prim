@@ -365,6 +365,7 @@ impl Insert<'_> {
             | ExprKind::Bool(_)
             | ExprKind::Str(_)
             | ExprKind::Ident(_)
+            | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::TraitBoundCall { .. }
@@ -539,6 +540,7 @@ impl Filter<'_> {
             | ExprKind::Bool(_)
             | ExprKind::Str(_)
             | ExprKind::Ident(_)
+            | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
         }

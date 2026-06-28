@@ -1,0 +1,15 @@
+import std.io.println
+
+// A function generic over a const array length N. The length is inferred from
+// the array argument's type and monomorphized per value, so count(a) and
+// count(b) are distinct specializations with N folded to a literal.
+fn count[T, const N: usize](view a: Array[T, N]) -> usize {
+    return N
+}
+
+fn main() {
+    let a: Array[i32, 3] = [1i32, 2i32, 3i32]
+    let b: Array[u8, 5] = [9u8, 9u8, 9u8, 9u8, 9u8]
+    println(count(a))
+    println(count(b))
+}

@@ -573,6 +573,7 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
         | ExprKind::Bool(_)
         | ExprKind::Str(_)
         | ExprKind::Ident(_)
+        | ExprKind::ConstParam(_)
         | ExprKind::Spawn { .. }
         | ExprKind::Error => {}
     }

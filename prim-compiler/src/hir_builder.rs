@@ -296,6 +296,9 @@ struct LoweringContext<'a> {
     /// Type-param scope of the function currently being populated.
     /// Resolved name → `TypeParamId`. Cleared between functions.
     current_type_params: HashMap<String, hir::TypeParamId>,
+    /// The subset of `current_type_params` that are `const` value parameters,
+    /// so a name like `N` in the body lowers to a `ConstParam` value.
+    current_const_params: HashMap<String, hir::TypeParamId>,
     /// The type `Self` (and a bare `self` param) resolves to while lowering an
     /// `impl`/`trait` body. `None` outside one.
     current_self_type: Option<hir::Type>,
@@ -339,6 +342,7 @@ impl<'a> LoweringContext<'a> {
             trait_ids: HashMap::new(),
             enum_ids: HashMap::new(),
             current_type_params: HashMap::new(),
+            current_const_params: HashMap::new(),
             current_self_type: None,
             impl_methods: HashMap::new(),
             impls: HashMap::new(),
@@ -715,6 +719,7 @@ impl<'a> LoweringContext<'a> {
     /// for lowering an impl method's signature and body, so `T` resolves.
     fn enter_owner_type_params(&mut self, tps: &[hir::TypeParam]) {
         self.current_type_params.clear();
+        self.current_const_params.clear();
         for (i, tp) in tps.iter().enumerate() {
             let name = self
                 .interner
@@ -764,6 +769,7 @@ impl<'a> LoweringContext<'a> {
                         hir_struct.fields = fields;
                     }
                     self.current_type_params.clear();
+                    self.current_const_params.clear();
                 }
 
                 for e in &ast.enums {
@@ -802,6 +808,7 @@ impl<'a> LoweringContext<'a> {
                         hir_enum.variant_idx = variant_idx;
                     }
                     self.current_type_params.clear();
+                    self.current_const_params.clear();
                 }
             }
         }
@@ -919,6 +926,7 @@ impl<'a> LoweringContext<'a> {
                         hir_func.span = span;
                     }
                     self.current_type_params.clear();
+                    self.current_const_params.clear();
                 }
 
                 for g in &ast.globals {
@@ -1034,6 +1042,7 @@ impl<'a> LoweringContext<'a> {
                     }
                     self.current_self_type = None;
                     self.current_type_params.clear();
+                    self.current_const_params.clear();
                 }
             }
         }
@@ -1719,12 +1728,17 @@ impl<'a> LoweringContext<'a> {
             ),
             ExprKind::Ident(ident) => {
                 let name_str = self.interner.resolve(&ident.sym).to_string();
-                match self.resolve_name(&name_str, module, file_id, ident.span, module_scope) {
-                    Some(sym) => (
-                        hir::ExprKind::Ident(sym),
-                        self.lower_type(&expr.ty, module_scope),
-                    ),
-                    None => return error(),
+                // A const generic parameter referenced as a value.
+                if let Some(&tp_id) = self.current_const_params.get(&name_str) {
+                    (hir::ExprKind::ConstParam(tp_id), hir::Type::Usize)
+                } else {
+                    match self.resolve_name(&name_str, module, file_id, ident.span, module_scope) {
+                        Some(sym) => (
+                            hir::ExprKind::Ident(sym),
+                            self.lower_type(&expr.ty, module_scope),
+                        ),
+                        None => return error(),
+                    }
                 }
             }
             ExprKind::Path(path) => {
@@ -2426,7 +2440,10 @@ impl<'a> LoweringContext<'a> {
         for (idx, p) in params.iter().enumerate() {
             let tp_id = hir::TypeParamId(idx as u32);
             let name_str = self.interner.resolve(&p.name.sym).to_string();
-            self.current_type_params.insert(name_str, tp_id);
+            self.current_type_params.insert(name_str.clone(), tp_id);
+            if p.is_const {
+                self.current_const_params.insert(name_str, tp_id);
+            }
             let bound = p.bound.as_ref().and_then(|b| {
                 let bname = self.interner.resolve(&b.sym).to_string();
                 let res_id = module_scope.get(&bname).copied()?;
@@ -2445,6 +2462,11 @@ impl<'a> LoweringContext<'a> {
                 name: sym,
                 bound,
                 span: self.span_id(p.name.span, file_id),
+                kind: if p.is_const {
+                    hir::ParamKind::Const
+                } else {
+                    hir::ParamKind::Type
+                },
             });
         }
         out
@@ -2479,7 +2501,21 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             Type::Array(inner, n) => {
-                hir::Type::Array(Box::new(self.lower_type(inner, module_scope)), *n)
+                let elem = Box::new(self.lower_type(inner, module_scope));
+                // The length is either a literal or a const generic parameter.
+                let len = match n {
+                    prim_parse::ConstArg::Int(v) => hir::Type::ConstInt(*v),
+                    prim_parse::ConstArg::Name(name) => {
+                        let name_str = self.interner.resolve(&name.sym).to_string();
+                        match self.current_type_params.get(&name_str) {
+                            Some(&tp_id) => hir::Type::Param(tp_id),
+                            None => panic!(
+                                "resolver should have caught unknown array length '{name_str}'"
+                            ),
+                        }
+                    }
+                };
+                hir::Type::Array(elem, Box::new(len))
             }
             Type::Tuple(elems) => hir::Type::Tuple(
                 elems

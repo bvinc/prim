@@ -42,8 +42,9 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    /// Fixed-size array `Array[T, N]`: element type and a compile-time length.
-    Array(Box<Type>, usize),
+    /// Fixed-size array `Array[T, N]`: element type and a length that is either
+    /// a literal or a const generic parameter name.
+    Array(Box<Type>, ConstArg),
     /// Named type — either a struct or a trait. The optional type
     /// argument list lets generic instantiations like `Pair<i32>` appear
     /// in type positions (function params, return, let bindings). Empty
@@ -406,6 +407,16 @@ pub struct Function {
 pub struct TypeParam {
     pub name: Ident,
     pub bound: Option<Ident>,
+    /// `true` for a `const N: usize` value parameter, `false` for a type `T`.
+    pub is_const: bool,
+}
+
+/// An `Array[T, N]` length: either a literal count or a const generic
+/// parameter referenced by name.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstArg {
+    Int(u64),
+    Name(Ident),
 }
 
 /// How a value crosses a call boundary. A *property of the parameter/binding*,

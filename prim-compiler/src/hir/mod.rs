@@ -364,6 +364,16 @@ pub struct TypeParam {
     pub name: SymbolId,
     pub bound: Option<TraitId>,
     pub span: SpanId,
+    /// Whether this is an ordinary type parameter `T` or a const value
+    /// parameter `const N: usize` (usable as a value in the body).
+    pub kind: ParamKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParamKind {
+    Type,
+    /// A const generic parameter; its value type is `usize` for now.
+    Const,
 }
 
 #[derive(Clone, Debug)]
@@ -655,6 +665,10 @@ pub enum ExprKind {
         index: u32,
     },
     ArrayLit(Vec<Expr>),
+    /// A reference to a const generic parameter used as a value (e.g. `N` in
+    /// the body of `fn f[const N: usize]`). Typed `usize`; monomorphization
+    /// replaces it with the concrete `Int` literal.
+    ConstParam(TypeParamId),
     Dbg {
         /// Pre-rendered `[path:line:col] expr_text = ` prefix string,
         /// computed at lowering time so codegen needs no source access.
@@ -789,8 +803,14 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    /// Fixed-size array `Array[T, N]`: element type and compile-time length.
-    Array(Box<Type>, usize),
+    /// Fixed-size array `Array[T, N]`: element type and a length. The length
+    /// is itself a `Type` so it rides the generic machinery — `ConstInt(n)`
+    /// for a concrete length, `Param(id)` for a const generic parameter.
+    Array(Box<Type>, Box<Type>),
+    /// A const integer used as a generic argument (currently only an array
+    /// length). Appears in substitution/inference/mono-key positions, never as
+    /// the type of a runtime value.
+    ConstInt(u64),
     /// A struct type with optional concrete type arguments. Empty
     /// `Vec<Type>` means a non-generic struct or an as-yet-uninstantiated
     /// generic; non-empty means a specific instantiation that mono will
@@ -906,6 +926,7 @@ impl fmt::Display for Type {
                 }
             }
             Type::Param(id) => write!(f, "T#{}", id.0),
+            Type::ConstInt(n) => write!(f, "{n}"),
             Type::Pointer { mutable, pointee } => {
                 if *mutable {
                     write!(f, "*mut {pointee}")

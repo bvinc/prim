@@ -135,6 +135,15 @@ impl Mono<'_> {
             | ExprKind::Ident(_)
             | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
+            // A const generic parameter folds to its concrete value.
+            ExprKind::ConstParam(id) => {
+                let id = *id;
+                if let Some(Type::ConstInt(v)) = subst.get(id.0 as usize) {
+                    let v = *v;
+                    expr.kind = ExprKind::Int(v as i64);
+                    expr.ty = Type::Usize;
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.rewrite_expr(left, subst);
                 self.rewrite_expr(right, subst);
@@ -374,7 +383,10 @@ impl Mono<'_> {
                 mutable: *mutable,
                 pointee: Box::new(self.substitute_type(pointee, subst)),
             },
-            Type::Array(elem, n) => Type::Array(Box::new(self.substitute_type(elem, subst)), *n),
+            Type::Array(elem, n) => Type::Array(
+                Box::new(self.substitute_type(elem, subst)),
+                Box::new(self.substitute_type(n, subst)),
+            ),
             Type::Tuple(elems) => Type::Tuple(
                 elems
                     .iter()
@@ -480,6 +492,14 @@ impl Mono<'_> {
             | ExprKind::Ident(_)
             | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
+            ExprKind::ConstParam(id) => {
+                let id = *id;
+                if let Some(Type::ConstInt(v)) = subst.get(id.0 as usize) {
+                    let v = *v;
+                    expr.kind = ExprKind::Int(v as i64);
+                    expr.ty = Type::Usize;
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.substitute_expr(left, subst);
                 self.substitute_expr(right, subst);

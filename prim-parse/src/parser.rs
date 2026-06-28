@@ -1,6 +1,6 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Block, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
+    BinaryOp, Block, ConstArg, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
     ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, Severity, Span,
     Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
@@ -759,20 +759,40 @@ impl<'a> Parser<'a> {
     fn parse_type_param_list(&mut self) -> Result<Vec<crate::TypeParam>, ParseError> {
         let mut params = Vec::new();
         loop {
+            // `const N: usize` declares a const value parameter; a bare name is
+            // an ordinary type parameter.
+            let is_const = if matches!(self.peek_kind(), Some(TokenKind::Const)) {
+                self.advance(); // consume 'const'
+                true
+            } else {
+                false
+            };
             let name_span = self
                 .consume(TokenKind::Identifier, "Expected type parameter name")?
                 .span;
             let name = self.ident(name_span);
             let bound = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
                 self.advance(); // consume ':'
-                let bound_span = self
-                    .consume(TokenKind::Identifier, "Expected trait name after ':'")?
-                    .span;
-                Some(self.ident(bound_span))
+                if is_const {
+                    // A const param's annotation is its value type (only `usize`
+                    // for now) — a primitive-type keyword, not an identifier.
+                    // Accept and drop it.
+                    self.advance();
+                    None
+                } else {
+                    let bound_span = self
+                        .consume(TokenKind::Identifier, "Expected trait name after ':'")?
+                        .span;
+                    Some(self.ident(bound_span))
+                }
             } else {
                 None
             };
-            params.push(crate::TypeParam { name, bound });
+            params.push(crate::TypeParam {
+                name,
+                bound,
+                is_const,
+            });
             match self.peek_kind() {
                 Some(TokenKind::Comma) => {
                     self.advance();
@@ -1428,10 +1448,20 @@ impl<'a> Parser<'a> {
                         TokenKind::Comma,
                         "Expected ',' between Array element type and length",
                     )?;
-                    let len_span = self.advance().span;
-                    let (len, _) = parse_int_literal(len_span.text(self.source), len_span)?;
+                    // Length is either a literal count or a const-param name.
+                    let len = match self.peek_kind() {
+                        Some(TokenKind::Identifier) => {
+                            let s = self.advance().span;
+                            ConstArg::Name(self.ident(s))
+                        }
+                        _ => {
+                            let s = self.advance().span;
+                            let (n, _) = parse_int_literal(s.text(self.source), s)?;
+                            ConstArg::Int(n as u64)
+                        }
+                    };
                     self.consume(TokenKind::RightBracket, "Expected ']' to close Array[T, N]")?;
-                    return Ok(Type::Array(Box::new(elem_ty), len as usize));
+                    return Ok(Type::Array(Box::new(elem_ty), len));
                 }
                 let name = self.intern(span);
                 // Optional generic instantiation: `Pair[i32]` or `Map[K, V]`.

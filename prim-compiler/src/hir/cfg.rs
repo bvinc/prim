@@ -586,6 +586,7 @@ impl Builder<'_> {
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::Str(_)
+            | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
             | ExprKind::Error => {}
         }

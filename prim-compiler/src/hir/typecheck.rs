@@ -296,7 +296,11 @@ impl<'a> Checker<'a> {
                     pointee: pb,
                 },
             ) if ma == mb => Self::infer_pins(pa, pb, pins),
-            (Type::Array(a, _), Type::Array(b, _)) => Self::infer_pins(a, b, pins),
+            (Type::Array(a, la), Type::Array(b, lb)) => {
+                let e = Self::infer_pins(a, b, pins);
+                let l = Self::infer_pins(la, lb, pins);
+                e && l
+            }
             (Type::Struct(sa, aa), Type::Struct(sb, ab)) if sa == sb && aa.len() == ab.len() => {
                 for (a, b) in aa.iter().zip(ab.iter()) {
                     if !Self::infer_pins(a, b, pins) {
@@ -326,7 +330,10 @@ impl<'a> Checker<'a> {
                 mutable: *mutable,
                 pointee: Box::new(Self::substitute_params(pointee, pins)),
             },
-            Type::Array(elem, n) => Type::Array(Box::new(Self::substitute_params(elem, pins)), *n),
+            Type::Array(elem, n) => Type::Array(
+                Box::new(Self::substitute_params(elem, pins)),
+                Box::new(Self::substitute_params(n, pins)),
+            ),
             Type::Struct(sid, args) => Type::Struct(
                 *sid,
                 args.iter()
@@ -356,9 +363,10 @@ impl<'a> Checker<'a> {
                 mutable: *mutable,
                 pointee: Box::new(Self::substitute_params_with_slice(pointee, args)),
             },
-            Type::Array(elem, n) => {
-                Type::Array(Box::new(Self::substitute_params_with_slice(elem, args)), *n)
-            }
+            Type::Array(elem, n) => Type::Array(
+                Box::new(Self::substitute_params_with_slice(elem, args)),
+                Box::new(Self::substitute_params_with_slice(n, args)),
+            ),
             Type::Struct(sid, type_args) => Type::Struct(
                 *sid,
                 type_args
@@ -1309,6 +1317,11 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             ExprKind::Float(_) => Ok(ty.clone()),
+            // A const generic parameter used as a value is a `usize`.
+            ExprKind::ConstParam(_) => {
+                *ty = Type::Usize;
+                Ok(Type::Usize)
+            }
             // `spawn(f)` yields the new task's handle.
             ExprKind::Spawn { .. } => {
                 *ty = Type::Usize;
@@ -2024,7 +2037,7 @@ impl<'a> Checker<'a> {
                 }
                 let arr = Type::Array(
                     Box::new(elem_ty.unwrap_or(Type::Undetermined)),
-                    elements.len(),
+                    Box::new(Type::ConstInt(elements.len() as u64)),
                 );
                 *ty = arr.clone();
                 Ok(arr)
@@ -2326,9 +2339,12 @@ impl<'a> Checker<'a> {
                 mutable: *ma,
                 pointee: Box::new(p),
             }),
-            (Type::Array(a_elem, na), Type::Array(b_elem, nb)) if na == nb => self
-                .unify(a_elem, b_elem)
-                .map(|e| Type::Array(Box::new(e), *na)),
+            (Type::Array(a_elem, na), Type::Array(b_elem, nb)) => {
+                match (self.unify(a_elem, b_elem), self.unify(na, nb)) {
+                    (Some(e), Some(n)) => Some(Type::Array(Box::new(e), Box::new(n))),
+                    _ => None,
+                }
+            }
             (Type::Tuple(ax), Type::Tuple(bx)) if ax.len() == bx.len() => {
                 let mut elems = Vec::with_capacity(ax.len());
                 for (ea, eb) in ax.iter().zip(bx.iter()) {

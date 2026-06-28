@@ -627,6 +627,7 @@ fn scalar_disqualify_expr(
         | hir::ExprKind::Float(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::Str(_)
+        | hir::ExprKind::ConstParam(_)
         | hir::ExprKind::Spawn { .. }
         | hir::ExprKind::Error => {}
     }
@@ -1041,7 +1042,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             // A fixed array is a homogeneous tuple `(T, T, ..., T)`; build it
             // with the tuple machinery (layout, inline/box, per-element init).
             let (elem, n) = match &expr.ty {
-                hir::Type::Array(e, n) => ((**e).clone(), *n),
+                hir::Type::Array(e, len) => ((**e).clone(), array_const_len(len)),
                 _ => {
                     return Err(WasmError::Internal(
                         "array literal with non-array type".into(),
@@ -2312,6 +2313,15 @@ pub(crate) fn emit_drop_fn(
 /// declaration order. Structs and tuples have a static field list; enums and
 /// arrays are not yet recursed (their payloads/elements are left to a
 /// follow-up), so they contribute none.
+/// The concrete length of an array length-type. After monomorphization every
+/// array length is a `ConstInt`; anything else would be a compiler bug.
+fn array_const_len(len: &hir::Type) -> usize {
+    match len {
+        hir::Type::ConstInt(v) => *v as usize,
+        _ => 0,
+    }
+}
+
 fn recursable_fields(
     ty: &hir::Type,
     program: &hir::Program,
@@ -2335,8 +2345,8 @@ fn recursable_fields(
         },
         hir::Type::Tuple(elems) => compute_tuple_layout(elems, policy).elems,
         // An array drops each element: lay it out as a homogeneous tuple.
-        hir::Type::Array(elem, n) => {
-            compute_tuple_layout(&vec![(**elem).clone(); *n], policy).elems
+        hir::Type::Array(elem, len) => {
+            compute_tuple_layout(&vec![(**elem).clone(); array_const_len(len)], policy).elems
         }
         _ => Vec::new(),
     }
