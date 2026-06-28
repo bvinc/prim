@@ -103,11 +103,17 @@ later feature).
 - **No impls on generic instantiations.** `impl Opt for Option[i32]` is
   unsupported; impls only target the generic type, not a concrete instantiation.
 
-- **Const generics are limited.** `const N: usize` params work on functions and
-  on `impl Array[T, N]` methods (`a.get(i)` / `a.len()`), but not yet on structs
-  or enums, and only `usize` const params are supported. `N` is usable as a value
-  but const arithmetic (`N + 1`) is not. An array impl's params come from its
-  target (`impl Array[T, N]`), since `Array` has no nominal definition.
+- **Const generics are limited.** `const N: usize` params work on functions, on
+  the `@builtin type Array[T, const N: usize]` stub, and on `impl Array[T, N]`
+  methods (`a.get(i)` / `a.len()`), but not yet on user structs or enums, and
+  only `usize` const params are supported. `N` is usable as a value but const
+  arithmetic (`N + 1`) is not.
+
+- **`@builtin type` only covers `Array`; primitives stay on `PrimKind`.** The
+  `@builtin type Name[params]` stub gives a builtin a nominal home for type
+  params and impls. Only `Array` uses it; `u32` etc. keep the `PrimKind` owner
+  (their names are reserved keywords, and being non-generic the stub buys little).
+  Bare `type` (aliases / opaque user types) is parsed but rejected.
 
 - **Drop/RAII — recursive field drops cover structs and tuples, not yet enums.**
   Each concrete needs-drop type gets a synthesized `drop_T(ptr)` function
