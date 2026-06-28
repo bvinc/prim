@@ -67,6 +67,22 @@ later feature).
 
 ## Deferred design
 
+- **By-value aggregates — a direct struct/tuple literal at a scalar-ABI
+  boundary still boxes.** Small POD aggregates cross parameter and return
+  boundaries as wasm field values (no box) when they come from a scalarized
+  local, an existing box, or a passed-through scalar-return call. But a *literal*
+  written directly at the boundary — `return Point{..}` or `f(Point{..})` —
+  still builds a transient heap box and loads its fields back out
+  (`emit::emit_scalar_value`, the `StructLit`/`TupleLit` arm), because emitting
+  the fields directly would need the scratch pre-walk
+  (`walks::scalar_value_scratch`) to reserve field scratch in *declaration*
+  order while the literal's field list is in *source* order — i.e. thread the
+  struct layout into the pre-walk plus a box-pointer-slot skip. This is a missed
+  optimization, not a correctness bug or a regression: the box count is never
+  higher than before this work. Writing the literal into a local first
+  (`let q = Point{..}; return q`) already avoids the box. See the
+  `aggregate-unboxing` plan.
+
 - **No `*const` pointer operations.** `std.ptr` only provides `*mut` ops, so
   there's still no way to read/write through a `*const` pointer. `String.data`
   was made `*mut u8` to unblock reading string bytes (the `std.fmt` formatter),
