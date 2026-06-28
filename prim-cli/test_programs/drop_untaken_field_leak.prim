@@ -1,0 +1,17 @@
+import std.io.println
+
+// CHARACTERIZATION TEST (known leak, not a soundness bug). A consuming match
+// that takes one Drop field (`a`) but ignores another (`b: _`): the taken `x`
+// drops at the arm's end (prints 1), but the un-taken Res(2) leaks — its drop
+// never runs. Expected output OMITS 2. The point: 2 is ABSENT (leak), never
+// duplicated (no double-free).
+struct Res { id: i32 }
+impl Drop for Res { fn drop(edit self) { println(self.id) } }
+struct Pair { a: Res, b: Res }
+
+fn main() {
+    let p = Pair { a = Res { id = 1 }, b = Res { id = 2 } }
+    match p {
+        Pair { a: take x, b: _ } => println(0i32),
+    }
+}

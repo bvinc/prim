@@ -3,3 +3,5 @@ float_ops
 literal_errors
 numeric_min_max
 struct_type_checking
+drop_enum_payload_leak
+drop_untaken_field_leak

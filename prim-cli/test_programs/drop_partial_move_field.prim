@@ -1,0 +1,21 @@
+import std.io.println
+
+// SOUNDNESS TEST. Move a Drop field out of a consumed struct and return it
+// across a function boundary. The partial move consumes `o`, so `o`'s box is
+// abandoned and must NOT free `inner` again (it moved into `r`, then `got`).
+// `inner`(5) must drop EXACTLY once — printed once, never twice (a double-free
+// would print 5 twice or corrupt the heap).
+struct Inner { id: i32 }
+impl Drop for Inner { fn drop(edit self) { println(self.id) } }
+struct Outer { inner: Inner, tag: i32 }
+
+fn take_inner(take o: Outer) -> Inner {
+    let take r = o.inner
+    return r
+}
+
+fn main() {
+    let o = Outer { inner = Inner { id = 5 }, tag = 9 }
+    let got = take_inner(take o)
+    println(0i32)
+}

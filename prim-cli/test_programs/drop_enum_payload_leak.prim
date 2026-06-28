@@ -1,0 +1,17 @@
+import std.io.println
+
+// CHARACTERIZATION TEST (known leak, not a soundness bug). An enum that owns a
+// Drop-implementing payload, dropped at scope end WITHOUT being matched: the
+// enum's own box is freed, but `drop_T` does not yet recurse into enum variant
+// payloads, so Res(7)'s drop never runs. Expected output therefore OMITS 7.
+// If enum payload recursion is ever implemented, this test will print 7 and
+// must be updated. The point: 7 is ABSENT (leak), never duplicated (no
+// double-free). See KNOWN_ISSUES.md "Enums and arrays are not yet recursed".
+struct Res { id: i32 }
+impl Drop for Res { fn drop(edit self) { println(self.id) } }
+enum Opt { None, Some { r: Res } }
+
+fn main() {
+    let o = Opt.Some { r = Res { id = 7 } }
+    println(0i32)
+}
