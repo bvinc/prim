@@ -1,0 +1,16 @@
+import std.io.println
+
+// A local built and then returned by name scalarizes (it is not forced to a
+// box by the return), so a factory function is zero-allocation end to end.
+struct Point { x: i32, y: i32 }
+
+fn make(a: i32, b: i32) -> Point {
+    let q = Point { x = a, y = b }
+    return q
+}
+
+fn main() {
+    let p = make(7, 8)
+    println(p.x)
+    println(p.y)
+}

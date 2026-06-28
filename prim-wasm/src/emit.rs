@@ -308,7 +308,10 @@ fn scalarizable_locals(
         return candidates;
     }
     let mut disq: HashSet<hir::SymbolId> = HashSet::new();
-    scalar_disqualify_block(&func.body, scalar_abi, &mut disq);
+    // A function returning by value may return a local by name without forcing a
+    // box, so relax the walk at return positions for scalar-ABI returns.
+    let ret_scalar = scalar_ret.contains_key(&func.id);
+    scalar_disqualify_body(&func.body, scalar_abi, ret_scalar, &mut disq);
     candidates.retain(|sym, _| !disq.contains(sym));
     candidates
 }
@@ -329,7 +332,7 @@ pub(crate) fn scalar_abi_params(
     // only if used purely by field reads.
     let empty: HashMap<hir::FuncId, Vec<bool>> = HashMap::new();
     let mut disq: HashSet<hir::SymbolId> = HashSet::new();
-    scalar_disqualify_block(&func.body, &empty, &mut disq);
+    scalar_disqualify_block(&func.body, &empty, false, &mut disq);
     func.params
         .iter()
         .map(|p| {
@@ -448,57 +451,101 @@ fn scalar_candidates_expr(
 /// `TupleIndex` rooted at a name is a read of that name (recorded by *not*
 /// recursing into the chain); a bare `Ident` reached anywhere else is a
 /// whole-value use.
+/// A returned value at a by-value scalar-ABI return position: a whole local
+/// returned by name does not force a box (`emit_scalar_value` pushes its field
+/// locals), so it is not disqualified. Any other returned value is a normal use.
+fn disqualify_return_value(
+    value: &hir::Expr,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    ret_scalar: bool,
+    disq: &mut HashSet<hir::SymbolId>,
+) {
+    if ret_scalar && matches!(&value.kind, hir::ExprKind::Ident(_)) {
+        return;
+    }
+    scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq);
+}
+
+/// Disqualify locals over a whole function body. The trailing expression is the
+/// implicit return value, so it is treated like an explicit `return` (relaxed at
+/// a scalar-ABI return). Inner-block trailing expressions are ordinary block
+/// values and stay in `scalar_disqualify_block`.
+fn scalar_disqualify_body(
+    body: &hir::Block,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    ret_scalar: bool,
+    disq: &mut HashSet<hir::SymbolId>,
+) {
+    for stmt in &body.stmts {
+        scalar_disqualify_stmt(stmt, scalar_abi, ret_scalar, disq);
+    }
+    if let Some(e) = &body.expr {
+        disqualify_return_value(e, scalar_abi, ret_scalar, disq);
+    }
+}
+
 fn scalar_disqualify_block(
     block: &hir::Block,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    ret_scalar: bool,
     disq: &mut HashSet<hir::SymbolId>,
 ) {
     for stmt in &block.stmts {
-        match stmt {
-            hir::Stmt::Let { value, .. } | hir::Stmt::Expr(value) => {
-                scalar_disqualify_expr(value, scalar_abi, disq)
-            }
-            hir::Stmt::Assign { target, value, .. } => {
-                disq.insert(*target);
-                scalar_disqualify_expr(value, scalar_abi, disq);
-            }
-            hir::Stmt::DerefAssign { ptr, value, .. } => {
-                scalar_disqualify_expr(ptr, scalar_abi, disq);
-                scalar_disqualify_expr(value, scalar_abi, disq);
-            }
-            hir::Stmt::FieldAssign { object, value, .. } => {
-                // A write through `L.f` is not supported by 2a; if `L` is the
-                // root, disqualify it. Otherwise the object is a normal expr.
-                if let Some(root) = ident_root(object) {
-                    disq.insert(root);
-                } else {
-                    scalar_disqualify_expr(object, scalar_abi, disq);
-                }
-                scalar_disqualify_expr(value, scalar_abi, disq);
-            }
-            hir::Stmt::Return {
-                value: Some(value), ..
-            } => scalar_disqualify_expr(value, scalar_abi, disq),
-            hir::Stmt::Loop { body, .. } => scalar_disqualify_block(body, scalar_abi, disq),
-            hir::Stmt::While {
-                condition, body, ..
-            } => {
-                scalar_disqualify_expr(condition, scalar_abi, disq);
-                scalar_disqualify_block(body, scalar_abi, disq);
-            }
-            hir::Stmt::Return { value: None, .. }
-            | hir::Stmt::Break { .. }
-            | hir::Stmt::Drop { .. } => {}
-        }
+        scalar_disqualify_stmt(stmt, scalar_abi, ret_scalar, disq);
     }
     if let Some(e) = &block.expr {
-        scalar_disqualify_expr(e, scalar_abi, disq);
+        scalar_disqualify_expr(e, scalar_abi, ret_scalar, disq);
+    }
+}
+
+fn scalar_disqualify_stmt(
+    stmt: &hir::Stmt,
+    scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    ret_scalar: bool,
+    disq: &mut HashSet<hir::SymbolId>,
+) {
+    match stmt {
+        hir::Stmt::Let { value, .. } | hir::Stmt::Expr(value) => {
+            scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq)
+        }
+        hir::Stmt::Assign { target, value, .. } => {
+            disq.insert(*target);
+            scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq);
+        }
+        hir::Stmt::DerefAssign { ptr, value, .. } => {
+            scalar_disqualify_expr(ptr, scalar_abi, ret_scalar, disq);
+            scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq);
+        }
+        hir::Stmt::FieldAssign { object, value, .. } => {
+            // A write through `L.f` is not supported by 2a; if `L` is the
+            // root, disqualify it. Otherwise the object is a normal expr.
+            if let Some(root) = ident_root(object) {
+                disq.insert(root);
+            } else {
+                scalar_disqualify_expr(object, scalar_abi, ret_scalar, disq);
+            }
+            scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq);
+        }
+        hir::Stmt::Return {
+            value: Some(value), ..
+        } => disqualify_return_value(value, scalar_abi, ret_scalar, disq),
+        hir::Stmt::Loop { body, .. } => scalar_disqualify_block(body, scalar_abi, ret_scalar, disq),
+        hir::Stmt::While {
+            condition, body, ..
+        } => {
+            scalar_disqualify_expr(condition, scalar_abi, ret_scalar, disq);
+            scalar_disqualify_block(body, scalar_abi, ret_scalar, disq);
+        }
+        hir::Stmt::Return { value: None, .. }
+        | hir::Stmt::Break { .. }
+        | hir::Stmt::Drop { .. } => {}
     }
 }
 
 fn scalar_disqualify_expr(
     expr: &hir::Expr,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
+    ret_scalar: bool,
     disq: &mut HashSet<hir::SymbolId>,
 ) {
     match &expr.kind {
@@ -506,7 +553,7 @@ fn scalar_disqualify_expr(
         // recurse into the chain (its only content is the field path).
         hir::ExprKind::Field { base, .. } | hir::ExprKind::TupleIndex { base, .. } => {
             if ident_root(base).is_none() {
-                scalar_disqualify_expr(base, scalar_abi, disq);
+                scalar_disqualify_expr(base, scalar_abi, ret_scalar, disq);
             }
         }
         // A bare name reached here (not shortcut by a parent field access) is a
@@ -515,8 +562,8 @@ fn scalar_disqualify_expr(
             disq.insert(*s);
         }
         hir::ExprKind::Binary { left, right, .. } => {
-            scalar_disqualify_expr(left, scalar_abi, disq);
-            scalar_disqualify_expr(right, scalar_abi, disq);
+            scalar_disqualify_expr(left, scalar_abi, ret_scalar, disq);
+            scalar_disqualify_expr(right, scalar_abi, ret_scalar, disq);
         }
         hir::ExprKind::Call { func, args, .. } => {
             // A whole local passed by value at a by-value scalar-ABI position
@@ -527,49 +574,53 @@ fn scalar_disqualify_expr(
                 let by_value = abi.is_some_and(|v| v.get(i).copied().unwrap_or(false))
                     && matches!(&a.kind, hir::ExprKind::Ident(_));
                 if !by_value {
-                    scalar_disqualify_expr(a, scalar_abi, disq);
+                    scalar_disqualify_expr(a, scalar_abi, ret_scalar, disq);
                 }
             }
         }
         hir::ExprKind::DynCall { receiver, args, .. }
         | hir::ExprKind::MethodCall { receiver, args, .. }
         | hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
-            scalar_disqualify_expr(receiver, scalar_abi, disq);
+            scalar_disqualify_expr(receiver, scalar_abi, ret_scalar, disq);
             for a in args {
-                scalar_disqualify_expr(a, scalar_abi, disq);
+                scalar_disqualify_expr(a, scalar_abi, ret_scalar, disq);
             }
         }
         hir::ExprKind::StructLit { fields, .. } | hir::ExprKind::VariantLit { fields, .. } => {
             for (_, v) in fields {
-                scalar_disqualify_expr(v, scalar_abi, disq);
+                scalar_disqualify_expr(v, scalar_abi, ret_scalar, disq);
             }
         }
         hir::ExprKind::TupleLit(elems) | hir::ExprKind::ArrayLit(elems) => {
             for e in elems {
-                scalar_disqualify_expr(e, scalar_abi, disq);
+                scalar_disqualify_expr(e, scalar_abi, ret_scalar, disq);
             }
         }
         hir::ExprKind::Deref(e) | hir::ExprKind::BitNot(e) | hir::ExprKind::Neg(e) => {
-            scalar_disqualify_expr(e, scalar_abi, disq)
+            scalar_disqualify_expr(e, scalar_abi, ret_scalar, disq)
         }
-        hir::ExprKind::Coerce { value, .. } => scalar_disqualify_expr(value, scalar_abi, disq),
-        hir::ExprKind::Dbg { inner, .. } => scalar_disqualify_expr(inner, scalar_abi, disq),
+        hir::ExprKind::Coerce { value, .. } => {
+            scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq)
+        }
+        hir::ExprKind::Dbg { inner, .. } => {
+            scalar_disqualify_expr(inner, scalar_abi, ret_scalar, disq)
+        }
         hir::ExprKind::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            scalar_disqualify_expr(condition, scalar_abi, disq);
-            scalar_disqualify_block(then_branch, scalar_abi, disq);
+            scalar_disqualify_expr(condition, scalar_abi, ret_scalar, disq);
+            scalar_disqualify_block(then_branch, scalar_abi, ret_scalar, disq);
             if let Some(b) = else_branch {
-                scalar_disqualify_block(b, scalar_abi, disq);
+                scalar_disqualify_block(b, scalar_abi, ret_scalar, disq);
             }
         }
-        hir::ExprKind::Block(b) => scalar_disqualify_block(b, scalar_abi, disq),
+        hir::ExprKind::Block(b) => scalar_disqualify_block(b, scalar_abi, ret_scalar, disq),
         hir::ExprKind::Match { scrutinee, arms } => {
-            scalar_disqualify_expr(scrutinee, scalar_abi, disq);
+            scalar_disqualify_expr(scrutinee, scalar_abi, ret_scalar, disq);
             for arm in arms {
-                scalar_disqualify_expr(&arm.body, scalar_abi, disq);
+                scalar_disqualify_expr(&arm.body, scalar_abi, ret_scalar, disq);
             }
         }
         hir::ExprKind::Int(_)
