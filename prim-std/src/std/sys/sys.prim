@@ -26,6 +26,27 @@ fn now_nanos() -> u64;
 @runtime("prim_rt_read")
 fn read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize;
 
+// Open a path under a preopened directory fd (WASI path_open) and close a
+// descriptor (WASI fd_close). These are the only WASI-specific file primitives;
+// higher layers (std.io.File) build on them, so WASI stays confined here.
+// `path_open_raw` writes the new descriptor to `*opened` and returns a WASI
+// errno (0 on success); `close_fd` returns an errno.
+@runtime("prim_rt_path_open")
+fn path_open_raw(
+    dir_fd: i32,
+    dirflags: i32,
+    path: *mut u8,
+    path_len: usize,
+    oflags: i32,
+    rights_base: u64,
+    rights_inheriting: u64,
+    fdflags: i32,
+    opened: *mut i32
+) -> i32;
+
+@runtime("prim_rt_close")
+fn close_fd(fd: i32) -> i32;
+
 // Wait (WASI poll_oneoff) on `nsubs` subscriptions laid out at `subs`, writing
 // fired events to `events`; returns how many fired. The scheduler builds the
 // subscription/event structs — one per parked task — so a single call blocks

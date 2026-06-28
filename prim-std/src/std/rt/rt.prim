@@ -75,6 +75,11 @@ fn park_until(deadline: u64) {
 
 // Suspend until `fd` is readable. Backs reads in std.io.
 fn park_on_read(fd: i32) {
+    // An invalid fd (e.g. -1 from a failed open) is never readable; don't park
+    // on it forever — let the following read hit EBADF and return 0.
+    if fd < 0i32 {
+        return
+    }
     PENDING_KIND = 2i32
     PENDING_FD = fd
     yield()
@@ -82,6 +87,9 @@ fn park_on_read(fd: i32) {
 
 // Suspend until `fd` is writable. Backs writes in std.io.
 fn park_on_write(fd: i32) {
+    if fd < 0i32 {
+        return
+    }
     PENDING_KIND = 3i32
     PENDING_FD = fd
     yield()

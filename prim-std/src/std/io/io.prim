@@ -2,6 +2,11 @@ mod io
 
 import std.sys.write_raw
 import std.sys.read_raw
+import std.sys.path_open_raw
+import std.sys.close_fd
+import std.mem.alloc
+import std.mem.free
+import std.mem.at
 import std.rt.park_on_read
 import std.rt.park_on_write
 import std.vec.Vec
@@ -9,15 +14,56 @@ import std.fmt.Display
 import std.fmt.Formatter
 import std.fmt.new_formatter
 
-// A file-descriptor handle. `stdout`/`stderr`/`stdin` are the standard
-// streams; the same type extends to real files later.
+// A file-descriptor handle. `stdout`/`stderr`/`stdin` are the standard streams
+// (borrowed, never closed); `File.open`/`File.create` produce *owned* files
+// that close their descriptor when dropped. `owned` distinguishes the two so a
+// transient `stdout()` does not close fd 1 when it drops.
 struct File {
     fd: i32,
+    owned: bool,
 }
 
-fn stdout() -> File { return File { fd = 1 } }
-fn stderr() -> File { return File { fd = 2 } }
-fn stdin() -> File { return File { fd = 0 } }
+fn stdout() -> File { return File { fd = 1, owned = false } }
+fn stderr() -> File { return File { fd = 2, owned = false } }
+fn stdin() -> File { return File { fd = 0, owned = false } }
+
+// Open `path` under the first preopened directory (fd 3, the cwd granted by
+// `prim run --dir .`) with the given WASI open flags, returning an owned File.
+// `rights` requests the read/write/seek/stat capabilities a regular file needs.
+fn open_flags(path: String, oflags: i32) -> File {
+    let out = alloc(4usize)
+    let slot = at[i32](out, 0usize)
+    // -1 if path_open fails (it leaves the slot untouched), so a failed open's
+    // read/write/close are harmless EBADFs rather than a stray fd.
+    *slot = -1i32
+    let rights = 2097222u64
+    path_open_raw(3i32, 1i32, path.data, path.len, oflags, rights, rights, 0i32, slot)
+    let fd = *slot
+    free(out)
+    return File { fd = fd, owned = true }
+}
+
+impl File {
+    // Create or truncate a file for writing (O_CREAT | O_TRUNC).
+    fn create(path: String) -> File {
+        return open_flags(path, 9i32)
+    }
+
+    // Open an existing file for reading.
+    fn open(path: String) -> File {
+        return open_flags(path, 0i32)
+    }
+}
+
+// An owned File closes its descriptor when it goes out of scope; the standard
+// streams (owned = false) are left open.
+impl Drop for File {
+    fn drop(edit self) {
+        if self.owned {
+            close_fd(self.fd)
+        }
+    }
+}
 
 // A sink for bytes. I/O is byte-oriented; text is just bytes (see the
 // `Display` helpers below, which format into a byte buffer).

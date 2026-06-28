@@ -1,24 +1,30 @@
+import std.io.File
+import std.io.Reader
+import std.io.write_display
 import std.io.println
-import std.fs.File
-import std.mem.alloc
-import std.mem.free
-import std.mem.at
+import std.vec.new
+import std.vec.push
+import std.vec.get
 
-// Write "hi" to a file; the File closes when it drops at function return.
+// Write "hi" through the Writer-backed write_display; File closes on drop.
 fn write_file() {
     let f = File.create("__prim_fs_test.txt")
-    f.write("hi")
+    write_display(f, "hi", false)
 }
 
-// Read it back: print the byte count, then the two bytes (104='h', 105='i').
+// Read it back via the Reader trait into a Vec[u8] (grown to capacity with a
+// few pushes), then print the byte count and the two bytes (104='h', 105='i').
 fn read_file() {
     let g = File.open("__prim_fs_test.txt")
-    let buf = alloc(8usize)
-    let n = g.read(buf, 8usize)
+    let mut buf = new[u8]()
+    push(edit buf, take 0u8)
+    push(edit buf, take 0u8)
+    push(edit buf, take 0u8)
+    push(edit buf, take 0u8)
+    let n = g.read(edit buf)
     println(n)
-    println(*at[u8](buf, 0usize))
-    println(*at[u8](buf, 1usize))
-    free(buf)
+    println(get(buf, 0usize))
+    println(get(buf, 1usize))
 }
 
 fn main() {

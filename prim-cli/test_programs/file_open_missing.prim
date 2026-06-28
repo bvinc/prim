@@ -1,14 +1,15 @@
+import std.io.File
+import std.io.Reader
 import std.io.println
-import std.fs.File
-import std.mem.alloc
-import std.mem.free
+import std.vec.new
+import std.vec.push
 
-// Opening a nonexistent file fails gracefully: path_open leaves the fd as -1,
-// so read returns 0 and the File's drop-close is a harmless EBADF (no crash).
+// Opening a nonexistent file yields fd = -1; reading returns 0 and the owned
+// File's drop-close is a harmless EBADF (no crash, no hang).
 fn main() {
     let g = File.open("definitely_missing_file.txt")
-    let buf = alloc(4usize)
-    let n = g.read(buf, 4usize)
-    free(buf)
+    let mut buf = new[u8]()
+    push(edit buf, take 0u8)
+    let n = g.read(edit buf)
     println(n)
 }
