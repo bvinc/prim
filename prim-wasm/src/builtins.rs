@@ -34,6 +34,10 @@ pub(crate) struct Builtins {
     pub poll_oneoff: u32,
     /// Index of the imported WASI `fd_read`, backing `read_raw`.
     pub fd_read: u32,
+    /// Index of the imported WASI `path_open`, backing `std.fs.File.open`.
+    pub path_open: u32,
+    /// Index of the imported WASI `fd_close`, backing `std.fs` close.
+    pub fd_close: u32,
     /// Tag index for cooperative yield. Used by `std.rt.yield` which
     /// lowers to `suspend $yield_tag`.
     pub yield_tag: u32,

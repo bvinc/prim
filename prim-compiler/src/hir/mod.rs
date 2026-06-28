@@ -167,6 +167,12 @@ pub enum RuntimeAbi {
     /// `cap` bytes from `fd` into `ptr` via WASI `fd_read`; returns the count
     /// read (0 at EOF).
     Read,
+    /// `path_open_raw(dir_fd, dirflags, path, path_len, oflags, rights_base,
+    /// rights_inheriting, fdflags, opened_out) -> errno` — direct WASI
+    /// `path_open` passthrough backing `std.fs.File.open`.
+    PathOpen,
+    /// `close_fd(fd: i32) -> i32` — WASI `fd_close`; backs `std.fs` close/Drop.
+    Close,
     /// `poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize` — block in
     /// WASI `poll_oneoff` on `nsubs` subscriptions until at least one fires;
     /// returns the number of events written. The scheduler builds the
@@ -276,6 +282,8 @@ impl RuntimeAbi {
             "prim_rt_write" => Some(Self::Write),
             "prim_rt_now" => Some(Self::ClockNow),
             "prim_rt_read" => Some(Self::Read),
+            "prim_rt_path_open" => Some(Self::PathOpen),
+            "prim_rt_close" => Some(Self::Close),
             "prim_rt_poll" => Some(Self::Poll),
             "prim_rt_resume" => Some(Self::Resume),
             "prim_rt_task_count" => Some(Self::TaskCount),

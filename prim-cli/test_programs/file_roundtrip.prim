@@ -1,0 +1,27 @@
+import std.io.println
+import std.fs.File
+import std.mem.alloc
+import std.mem.free
+import std.mem.at
+
+// Write "hi" to a file; the File closes when it drops at function return.
+fn write_file() {
+    let f = File.create("__prim_fs_test.txt")
+    f.write("hi")
+}
+
+// Read it back: print the byte count, then the two bytes (104='h', 105='i').
+fn read_file() {
+    let g = File.open("__prim_fs_test.txt")
+    let buf = alloc(8usize)
+    let n = g.read(buf, 8usize)
+    println(n)
+    println(*at[u8](buf, 0usize))
+    println(*at[u8](buf, 1usize))
+    free(buf)
+}
+
+fn main() {
+    write_file()
+    read_file()
+}

@@ -2429,6 +2429,21 @@ fn emit_runtime_call(
             f.instruction(&Instruction::I32Const(8));
             f.instruction(&Instruction::I32Load(store32));
         }
+        // path_open(dir_fd, dirflags, path, path_len, oflags, rights_base,
+        // rights_inheriting, fdflags, opened_out) -> errno. A direct WASI
+        // passthrough: the 9 Prim arguments already match the import's wasm
+        // types, so push them and call.
+        hir::RuntimeAbi::PathOpen => {
+            for arg in args {
+                emit_expr(f, arg, ctx)?;
+            }
+            f.instruction(&Instruction::Call(ctx.builtins.path_open));
+        }
+        // fd_close(fd) -> errno: direct passthrough.
+        hir::RuntimeAbi::Close => {
+            emit_expr(f, &args[0], ctx)?;
+            f.instruction(&Instruction::Call(ctx.builtins.fd_close));
+        }
         // poll(subs, events, nsubs) -> nevents: the scheduler has already laid
         // out the subscription structs; call poll_oneoff and return the count
         // the host writes to POLL_NEVENTS.

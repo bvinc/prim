@@ -155,32 +155,56 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
     );
+    // path_open(dir_fd, dirflags, path, path_len, oflags, rights_base: i64,
+    //   rights_inheriting: i64, fdflags, opened_fd_out) -> errno: i32
+    let path_open_type = types.register(
+        vec![
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I64,
+            ValType::I64,
+            ValType::I32,
+            ValType::I32,
+        ],
+        vec![ValType::I32],
+    );
+    // fd_close(fd: i32) -> errno: i32
+    let fd_close_type = types.register(vec![ValType::I32], vec![ValType::I32]);
 
     // Function index layout:
     //   0: fd_write (import)
     //   1: clock_time_get (import)
     //   2: poll_oneoff (import)
     //   3: fd_read (import)
-    //   4: __println_i64
-    //   5: __println_u64
-    //   6: __println_bool
-    //   7: __println_f64
-    //   8: __write_bytes
-    //   9+: user functions (the `@entry` function is exported as `_start`)
+    //   4: path_open (import)
+    //   5: fd_close (import)
+    //   6: __println_i64
+    //   7: __println_u64
+    //   8: __println_bool
+    //   9: __println_f64
+    //   10: __write_bytes
+    //   11+: user functions (the `@entry` function is exported as `_start`)
     //   last: __rt_resume
     let fd_write_idx: u32 = 0;
     let clock_idx: u32 = 1;
     let poll_oneoff_idx: u32 = 2;
     let fd_read_idx: u32 = 3;
+    let path_open_idx: u32 = 4;
+    let fd_close_idx: u32 = 5;
     let mut builtins = Builtins {
-        println_i64: 4,
-        println_u64: 5,
-        println_bool: 6,
-        println_f64: 7,
-        write_bytes: 8,
+        println_i64: 6,
+        println_u64: 7,
+        println_bool: 8,
+        println_f64: 9,
+        write_bytes: 10,
         clock: clock_idx,
         poll_oneoff: poll_oneoff_idx,
         fd_read: fd_read_idx,
+        path_open: path_open_idx,
+        fd_close: fd_close_idx,
         // Object allocation routes through std.mem.alloc, resolved below. It is
         // always linked (the prelude force-loads std.io, which imports std.mem),
         // so there is no fallback allocator.
@@ -199,7 +223,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut func_map: HashMap<hir::FuncId, u32> = HashMap::new();
     let mut runtime_map: HashMap<hir::FuncId, hir::RuntimeAbi> = HashMap::new();
     let mut user_func_types: Vec<u32> = Vec::new();
-    let mut next_idx: u32 = 9;
+    let mut next_idx: u32 = 11;
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
@@ -492,6 +516,16 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         "wasi_snapshot_preview1",
         "fd_read",
         wasm_encoder::EntityType::Function(fd_read_type),
+    );
+    imports.import(
+        "wasi_snapshot_preview1",
+        "path_open",
+        wasm_encoder::EntityType::Function(path_open_type),
+    );
+    imports.import(
+        "wasi_snapshot_preview1",
+        "fd_close",
+        wasm_encoder::EntityType::Function(fd_close_type),
     );
     module.section(&imports);
 

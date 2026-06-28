@@ -89,6 +89,10 @@ pub fn compile_and_run_with_root(
         .arg("function-references=y")
         .arg("-W")
         .arg("exceptions=y")
+        // Preopen the current directory so WASI `path_open` (std.fs) can reach
+        // files by relative path; the first preopen is fd 3.
+        .arg("--dir")
+        .arg(".")
         .arg(temp_wasm.path())
         .output()
         .map_err(|err| {
