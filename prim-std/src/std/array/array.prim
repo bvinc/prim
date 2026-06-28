@@ -1,0 +1,27 @@
+mod array
+
+import std.ptr.add
+import std.option.Option
+
+// Fixed-size array helpers. `Array[T, N]` is a value type whose length lives in
+// its type; const generics let these be written in plain Prim. The only
+// compiler primitive is `ptr` (the array value reinterpreted as the address of
+// its first element); everything else is ordinary code.
+
+// A pointer to the array's first element. No-op reinterpret at the wasm level.
+@runtime("prim_rt_array_ptr")
+fn ptr[T, const N: usize](view a: Array[T, N]) -> *mut T;
+
+// The number of elements (a compile-time constant).
+fn len[T, const N: usize](view a: Array[T, N]) -> usize {
+    return N
+}
+
+// A pointer to element `i`, or `None` if `i` is out of bounds — no panic. The
+// returned `*mut T` is a place: dereference it to read or write the element.
+fn get[T, const N: usize](view a: Array[T, N], i: usize) -> Option[*mut T] {
+    if i < N {
+        return Option.Some(add[T](ptr(a), i))
+    }
+    return Option.None
+}

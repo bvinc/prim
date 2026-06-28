@@ -252,6 +252,11 @@ pub enum RuntimeAbi {
     /// which must live in a `usize` global because globals take a literal init
     /// and there is no pointer literal.
     FromAddr,
+    /// `array_ptr[T, const N](a: Array[T, N]) -> *mut T` — a pointer to the
+    /// array's first element. A no-op at the wasm level: a boxed array's value
+    /// already is the address of its inline storage. This is the one compiler
+    /// primitive array access needs; `get`/`len` are then ordinary Prim.
+    ArrayPtr,
     /// Integer conversion primitives (std.convert). One wasm operation backs
     /// many named conversions; the source/destination types live in the std
     /// function signatures, not here.
@@ -299,6 +304,7 @@ impl RuntimeAbi {
             "prim_rt_ptr_addr" => Some(Self::PtrAddr),
             "prim_rt_at" => Some(Self::At),
             "prim_rt_from_addr" => Some(Self::FromAddr),
+            "prim_rt_array_ptr" => Some(Self::ArrayPtr),
             // prim_rt_alloc / prim_rt_free intentionally have no mapping: the
             // allocator is now Prim code (std.mem), called as a normal function.
             "prim_rt_f64_to_u64_trunc" => Some(Self::F64ToU64Trunc),
