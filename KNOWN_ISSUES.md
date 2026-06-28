@@ -103,18 +103,21 @@ later feature).
 - **No impls on generic instantiations.** `impl Opt for Option[i32]` is
   unsupported; impls only target the generic type, not a concrete instantiation.
 
-- **Arrays don't codegen.** Array literals are parsed but ignored in codegen
-  (`case_byte_array_literal`). No array support end to end yet.
+- **No methods on `Array`.** `Array[T, N]` element access is `std.array`'s free
+  functions `len(a)` / `get(a, i) -> Option[*mut T]`, not methods — `a.get(i)`
+  would need `Array` as a `MethodOwner` plus const-generic impls. Const generics
+  are also functions-only (no `const` params on structs/enums) and support `N`
+  as a value but not const arithmetic (`N + 1`).
 
 - **Drop/RAII — recursive field drops cover structs and tuples, not yet enums.**
   Each concrete needs-drop type gets a synthesized `drop_T(ptr)` function
   (`prim-wasm`): it runs `T`'s own `Drop::drop`, recursively calls `drop_F` on
   each owned struct field / tuple element that needs dropping, then frees `T`'s
   box. So a composite holding a `Drop` field (even without its own `Drop` impl)
-  now drops that field correctly. **Enums and arrays are not yet recursed:** a
-  needs-drop enum has its own box freed but its active variant's payload is *not*
-  dropped (sound, just leaky), because that needs discriminant dispatch — the
-  next follow-up. Arrays don't codegen at all yet.
+  now drops that field correctly. Arrays recurse too (each element is dropped).
+  **Enums are not yet recursed:** a needs-drop enum has its own box freed but its
+  active variant's payload is *not* dropped (sound, just leaky), because that
+  needs discriminant dispatch — the next follow-up.
 
 - **Drop/RAII — `take` in a `match` ends ownership; some payloads still leak.**
   Binding a non-`Copy` value in a `match` arm requires `take` (`Some { take r }`,
