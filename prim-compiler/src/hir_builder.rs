@@ -616,6 +616,9 @@ impl<'a> LoweringContext<'a> {
                 return self.method_owner(res).ok_or(TargetError::Invalid(name));
             }
         }
+        if matches!(target, Type::Array(_, _)) {
+            return Ok(hir::MethodOwner::Array);
+        }
         let prim = match target {
             Type::U8 => hir::PrimKind::U8,
             Type::I8 => hir::PrimKind::I8,
@@ -688,6 +691,12 @@ impl<'a> LoweringContext<'a> {
                 hir::PrimKind::F32 => hir::Type::F32,
                 hir::PrimKind::F64 => hir::Type::F64,
             },
+            // Array impls are handled via the target (array_owner_self_and_params);
+            // this is only the exhaustiveness fallback.
+            hir::MethodOwner::Array => hir::Type::Array(
+                Box::new(hir::Type::Param(hir::TypeParamId(0))),
+                Box::new(hir::Type::Param(hir::TypeParamId(1))),
+            ),
         }
     }
 
@@ -715,6 +724,46 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// The self type and (element, length) parameters for an `impl Array[T, N]`.
+    /// The element name becomes a type param and the length name a const param,
+    /// so methods resolve `T` and `N`; self is `Array[T, N]`.
+    fn array_owner_self_and_params(
+        &mut self,
+        elem: &Type,
+        len: &prim_parse::ConstArg,
+        module_id: ModuleId,
+        file_id: FileId,
+        span: Span,
+    ) -> (hir::Type, Vec<hir::TypeParam>) {
+        let sp = self.span_id(span, file_id);
+        let mut params = Vec::new();
+        if let Type::Struct(sym, args) = elem {
+            if args.is_empty() {
+                let t_id = self.insert_symbol(module_id, *sym, SymbolKind::Unknown);
+                params.push(hir::TypeParam {
+                    name: t_id,
+                    bound: None,
+                    span: sp,
+                    kind: hir::ParamKind::Type,
+                });
+            }
+        }
+        if let prim_parse::ConstArg::Name(id) = len {
+            let n_id = self.insert_symbol(module_id, id.sym, SymbolKind::Unknown);
+            params.push(hir::TypeParam {
+                name: n_id,
+                bound: None,
+                span: sp,
+                kind: hir::ParamKind::Const,
+            });
+        }
+        let self_ty = hir::Type::Array(
+            Box::new(hir::Type::Param(hir::TypeParamId(0))),
+            Box::new(hir::Type::Param(hir::TypeParamId(1))),
+        );
+        (self_ty, params)
+    }
+
     /// Register `owner`'s type parameters (by name) as the in-scope type params
     /// for lowering an impl method's signature and body, so `T` resolves.
     fn enter_owner_type_params(&mut self, tps: &[hir::TypeParam]) {
@@ -725,8 +774,11 @@ impl<'a> LoweringContext<'a> {
                 .interner
                 .resolve(&self.symbols[tp.name.0 as usize].name)
                 .to_string();
-            self.current_type_params
-                .insert(name, hir::TypeParamId(i as u32));
+            let id = hir::TypeParamId(i as u32);
+            if tp.kind == hir::ParamKind::Const {
+                self.current_const_params.insert(name.clone(), id);
+            }
+            self.current_type_params.insert(name, id);
         }
     }
 
@@ -955,7 +1007,19 @@ impl<'a> LoweringContext<'a> {
                     // while lowering this impl's bodies. For a generic owner the
                     // self type carries its parameters (`Option[T]`) and they are
                     // brought into scope so method signatures/bodies resolve `T`.
-                    let (self_type, owner_tps) = self.generic_self_and_params(owner);
+                    // `Array[T, N]` has no nominal definition, so an array impl
+                    // declares its element/length parameters in its target.
+                    let (self_type, owner_tps) = if let Type::Array(elem, len) = &im.target {
+                        self.array_owner_self_and_params(
+                            elem,
+                            len,
+                            module_id,
+                            file.file_id,
+                            im.span,
+                        )
+                    } else {
+                        self.generic_self_and_params(owner)
+                    };
                     self.current_self_type = Some(self_type);
                     self.enter_owner_type_params(&owner_tps);
                     // Resolve the trait so we can index into its method order.

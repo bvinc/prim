@@ -86,6 +86,9 @@ pub enum MethodOwner {
     Struct(StructId),
     Enum(EnumId),
     Prim(PrimKind),
+    /// The `Array[T, N]` type family. A single owner for all array impls; the
+    /// element type and length are the impl's own (const) generic parameters.
+    Array,
 }
 
 /// Primitive types usable as `impl` targets (e.g. `impl u8 { ... }`).
@@ -112,6 +115,7 @@ impl MethodOwner {
         Some(match ty {
             Type::Struct(id, _) => MethodOwner::Struct(*id),
             Type::Enum(id, _) => MethodOwner::Enum(*id),
+            Type::Array(_, _) => MethodOwner::Array,
             Type::U8 => MethodOwner::Prim(PrimKind::U8),
             Type::I8 => MethodOwner::Prim(PrimKind::I8),
             Type::U16 => MethodOwner::Prim(PrimKind::U16),

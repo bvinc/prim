@@ -1,16 +1,15 @@
 import std.io.println
-import std.array.get
-import std.array.len
 
-// Array element access written entirely in std Prim (std.array), on top of one
-// no-op compiler primitive (array_ptr). get returns Option[*mut T] — a place to
-// read or write, or None when out of bounds (no panic).
+// Array[T, N] element access as methods on the builtin array (std.array's
+// impl Array[T, N]). get returns Option[*mut T] — a place to read or write, or
+// None when out of bounds (no panic). Written in plain Prim over const generics
+// plus one no-op reinterpret primitive (array_ptr).
 fn main() {
     let a: Array[i32, 4] = [10i32, 20i32, 30i32, 40i32]
-    println(len(a))
-    println(*get(a, 0).unwrap())
-    println(*get(a, 3).unwrap())
-    *get(a, 1).unwrap() = 99i32
-    println(*get(a, 1).unwrap())
-    println(get(a, 9).is_none())
+    println(a.len())
+    println(*a.get(0).unwrap())
+    println(*a.get(3).unwrap())
+    *a.get(1).unwrap() = 99i32
+    println(*a.get(1).unwrap())
+    println(a.get(9).is_none())
 }

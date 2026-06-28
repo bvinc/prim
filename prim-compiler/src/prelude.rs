@@ -30,6 +30,10 @@ pub(crate) fn extra_modules() -> Vec<Vec<String>> {
         // `std.ops` provides the `Drop` trait; the compiler recognizes it by
         // name to drive RAII, and user code impls it without an explicit import.
         vec!["std".into(), "ops".into()],
+        // `std.array` provides the inherent methods on the builtin `Array[T, N]`
+        // (len/get), which resolve through the global method map — so the module
+        // must be loaded even though `Array` needs no import.
+        vec!["std".into(), "array".into()],
     ]
 }
 
