@@ -282,6 +282,10 @@ pub struct StructDefinition {
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
+    /// `true` for an `@builtin type Name[...]` stub: a fieldless nominal entry
+    /// whose representation is intrinsic (e.g. `Array[T, N]`). It exists to give
+    /// the built-in type a home for type parameters and impls.
+    pub is_builtin: bool,
     pub span: Span,
 }
 

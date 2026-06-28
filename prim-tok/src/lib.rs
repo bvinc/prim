@@ -24,6 +24,7 @@ pub enum TokenKind {
     // Keywords
     Let,
     Struct,
+    Type,
     Enum,
     Fn,
     Impl,
@@ -533,6 +534,7 @@ impl<'a> Tokenizer<'a> {
             "fn" => TokenKind::Fn,
             "impl" => TokenKind::Impl,
             "trait" => TokenKind::Trait,
+            "type" => TokenKind::Type,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "loop" => TokenKind::Loop,

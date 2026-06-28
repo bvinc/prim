@@ -3,9 +3,14 @@ mod array
 import std.ptr.add
 import std.option.Option
 
-// Inherent methods on the builtin fixed array `Array[T, N]`. Const generics let
-// these be written in plain Prim; the only compiler primitive is `ptr` (the
-// array value reinterpreted as the address of its first element).
+// The builtin fixed-size array. Its representation (inline storage, N*size(T))
+// is intrinsic; this stub gives it a nominal home for its type parameters and
+// the inherent methods below.
+@builtin type Array[T, const N: usize]
+
+// Inherent methods on `Array[T, N]`. Const generics let these be written in
+// plain Prim; the only compiler primitive is `ptr` (the array value
+// reinterpreted as the address of its first element).
 
 // A pointer to the array's first element. No-op reinterpret at the wasm level.
 @runtime("prim_rt_array_ptr")

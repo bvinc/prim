@@ -214,6 +214,10 @@ impl<'a> Parser<'a> {
                     let tr = self.parse_trait_definition()?;
                     traits.push(tr);
                 }
+                Some(TokenKind::Type) => {
+                    let ty = self.parse_builtin_type(attrs)?;
+                    structs.push(ty);
+                }
                 Some(TokenKind::Impl) => {
                     let im = self.parse_impl_definition()?;
                     impls.push(im);
@@ -992,6 +996,45 @@ impl<'a> Parser<'a> {
             type_params,
             fields,
             repr_c,
+            is_builtin: false,
+            span: full_span,
+        })
+    }
+
+    /// Parse an `@builtin type Name[params]` stub: a fieldless nominal type
+    /// whose representation is intrinsic. Modeled as a `StructDefinition` so it
+    /// flows through the normal nominal pipeline (ids, type params, impls).
+    fn parse_builtin_type(&mut self, attrs: PendingAttrs) -> Result<StructDefinition, ParseError> {
+        let start = self
+            .consume(TokenKind::Type, "Expected 'type'")?
+            .span
+            .start();
+        if !attrs.builtin {
+            return Err(ParseError::InvalidAttributeUsage {
+                message: "a `type` declaration must be `@builtin` (type aliases are not yet \
+                          supported)"
+                    .to_string(),
+                span: self.current_span(),
+            });
+        }
+        let name_span = self
+            .consume(TokenKind::Identifier, "Expected type name")?
+            .span;
+        let name = self.ident(name_span);
+        let type_params = if matches!(self.peek_kind(), Some(TokenKind::LeftBracket)) {
+            self.advance(); // consume '['
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
+        let end = self.previous().span.end();
+        let full_span = attrs.finalize_span(start, end);
+        Ok(StructDefinition {
+            name,
+            type_params,
+            fields: Vec::new(),
+            repr_c: false,
+            is_builtin: true,
             span: full_span,
         })
     }
@@ -2296,6 +2339,7 @@ struct PendingAttrs {
     runtime: Option<String>,
     repr_c: bool,
     entry: bool,
+    builtin: bool,
     span_start: Option<usize>,
     span_end: Option<usize>,
 }
@@ -2383,6 +2427,16 @@ impl<'a> Parser<'a> {
                         });
                     }
                     attrs.entry = true;
+                }
+                "builtin" => {
+                    // `@builtin type Name[...]` marks an intrinsic opaque type.
+                    if attrs.builtin {
+                        return Err(ParseError::InvalidAttributeUsage {
+                            message: "duplicate @builtin attribute".to_string(),
+                            span: name_span,
+                        });
+                    }
+                    attrs.builtin = true;
                 }
                 "repr" => {
                     self.consume(TokenKind::LeftParen, "Expected '(' after attribute name")?;

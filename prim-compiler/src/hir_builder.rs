@@ -310,6 +310,9 @@ struct LoweringContext<'a> {
     /// back dynamic dispatch, which is struct-only for now.
     impls: HashMap<(hir::TraitId, hir::MethodOwner), Vec<FuncId>>,
     stdlib_string_struct: Option<StructId>,
+    /// The `@builtin type Array[T, const N]` stub's struct id — the nominal home
+    /// for array type params and the `impl Array[T, N]` methods.
+    array_builtin_struct: Option<StructId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
 }
@@ -347,6 +350,7 @@ impl<'a> LoweringContext<'a> {
             impl_methods: HashMap::new(),
             impls: HashMap::new(),
             stdlib_string_struct: None,
+            array_builtin_struct: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
         }
@@ -380,6 +384,9 @@ impl<'a> LoweringContext<'a> {
                         && name == "String"
                     {
                         self.stdlib_string_struct = Some(sid);
+                    }
+                    if s.is_builtin && name == "Array" {
+                        self.array_builtin_struct = Some(sid);
                     }
                     let span = self.span_id(s.span, file.file_id);
                     self.structs.push(Struct {
@@ -691,8 +698,8 @@ impl<'a> LoweringContext<'a> {
                 hir::PrimKind::F32 => hir::Type::F32,
                 hir::PrimKind::F64 => hir::Type::F64,
             },
-            // Array impls are handled via the target (array_owner_self_and_params);
-            // this is only the exhaustiveness fallback.
+            // Array's self type comes from generic_self_and_params (via its
+            // @builtin stub); this is only the exhaustiveness fallback.
             hir::MethodOwner::Array => hir::Type::Array(
                 Box::new(hir::Type::Param(hir::TypeParamId(0))),
                 Box::new(hir::Type::Param(hir::TypeParamId(1))),
@@ -720,48 +727,21 @@ impl<'a> LoweringContext<'a> {
                 let tps = self.structs[sid.0 as usize].type_params.clone();
                 (hir::Type::Struct(sid, param_args(tps.len())), tps)
             }
+            // `Array[T, N]`'s params live on its `@builtin type` stub; self is
+            // `Array[T, N]` (element + length parameters).
+            hir::MethodOwner::Array => {
+                let tps = self
+                    .array_builtin_struct
+                    .map(|sid| self.structs[sid.0 as usize].type_params.clone())
+                    .unwrap_or_default();
+                let self_ty = hir::Type::Array(
+                    Box::new(hir::Type::Param(hir::TypeParamId(0))),
+                    Box::new(hir::Type::Param(hir::TypeParamId(1))),
+                );
+                (self_ty, tps)
+            }
             other => (Self::owner_self_type(other), Vec::new()),
         }
-    }
-
-    /// The self type and (element, length) parameters for an `impl Array[T, N]`.
-    /// The element name becomes a type param and the length name a const param,
-    /// so methods resolve `T` and `N`; self is `Array[T, N]`.
-    fn array_owner_self_and_params(
-        &mut self,
-        elem: &Type,
-        len: &prim_parse::ConstArg,
-        module_id: ModuleId,
-        file_id: FileId,
-        span: Span,
-    ) -> (hir::Type, Vec<hir::TypeParam>) {
-        let sp = self.span_id(span, file_id);
-        let mut params = Vec::new();
-        if let Type::Struct(sym, args) = elem {
-            if args.is_empty() {
-                let t_id = self.insert_symbol(module_id, *sym, SymbolKind::Unknown);
-                params.push(hir::TypeParam {
-                    name: t_id,
-                    bound: None,
-                    span: sp,
-                    kind: hir::ParamKind::Type,
-                });
-            }
-        }
-        if let prim_parse::ConstArg::Name(id) = len {
-            let n_id = self.insert_symbol(module_id, id.sym, SymbolKind::Unknown);
-            params.push(hir::TypeParam {
-                name: n_id,
-                bound: None,
-                span: sp,
-                kind: hir::ParamKind::Const,
-            });
-        }
-        let self_ty = hir::Type::Array(
-            Box::new(hir::Type::Param(hir::TypeParamId(0))),
-            Box::new(hir::Type::Param(hir::TypeParamId(1))),
-        );
-        (self_ty, params)
     }
 
     /// Register `owner`'s type parameters (by name) as the in-scope type params
@@ -1007,19 +987,7 @@ impl<'a> LoweringContext<'a> {
                     // while lowering this impl's bodies. For a generic owner the
                     // self type carries its parameters (`Option[T]`) and they are
                     // brought into scope so method signatures/bodies resolve `T`.
-                    // `Array[T, N]` has no nominal definition, so an array impl
-                    // declares its element/length parameters in its target.
-                    let (self_type, owner_tps) = if let Type::Array(elem, len) = &im.target {
-                        self.array_owner_self_and_params(
-                            elem,
-                            len,
-                            module_id,
-                            file.file_id,
-                            im.span,
-                        )
-                    } else {
-                        self.generic_self_and_params(owner)
-                    };
+                    let (self_type, owner_tps) = self.generic_self_and_params(owner);
                     self.current_self_type = Some(self_type);
                     self.enter_owner_type_params(&owner_tps);
                     // Resolve the trait so we can index into its method order.
