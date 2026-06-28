@@ -103,11 +103,11 @@ later feature).
 - **No impls on generic instantiations.** `impl Opt for Option[i32]` is
   unsupported; impls only target the generic type, not a concrete instantiation.
 
-- **No methods on `Array`.** `Array[T, N]` element access is `std.array`'s free
-  functions `len(a)` / `get(a, i) -> Option[*mut T]`, not methods — `a.get(i)`
-  would need `Array` as a `MethodOwner` plus const-generic impls. Const generics
-  are also functions-only (no `const` params on structs/enums) and support `N`
-  as a value but not const arithmetic (`N + 1`).
+- **Const generics are limited.** `const N: usize` params work on functions and
+  on `impl Array[T, N]` methods (`a.get(i)` / `a.len()`), but not yet on structs
+  or enums, and only `usize` const params are supported. `N` is usable as a value
+  but const arithmetic (`N + 1`) is not. An array impl's params come from its
+  target (`impl Array[T, N]`), since `Array` has no nominal definition.
 
 - **Drop/RAII — recursive field drops cover structs and tuples, not yet enums.**
   Each concrete needs-drop type gets a synthesized `drop_T(ptr)` function
