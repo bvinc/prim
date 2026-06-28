@@ -14,22 +14,36 @@ import std.fmt.Display
 import std.fmt.Formatter
 import std.fmt.new_formatter
 
-// A file-descriptor handle. `stdout`/`stderr`/`stdin` are the standard streams
-// (borrowed, never closed); `File.open`/`File.create` produce *owned* files
-// that close their descriptor when dropped. `owned` distinguishes the two so a
-// transient `stdout()` does not close fd 1 when it drops.
-struct File {
-    fd: i32,
-    owned: bool,
+// A sink for bytes. I/O is byte-oriented; text is just bytes (see the
+// `Display` helpers below, which format into a byte buffer).
+trait Writer {
+    fn write(self, bytes: Vec[u8]) -> usize;
 }
 
-fn stdout() -> File { return File { fd = 1, owned = false } }
-fn stderr() -> File { return File { fd = 2, owned = false } }
-fn stdin() -> File { return File { fd = 0, owned = false } }
+// A source of bytes.
+trait Reader {
+    fn read(self, edit buf: Vec[u8]) -> usize;
+}
+
+// The standard streams are distinct, zero-sized handles whose descriptors
+// outlive the program — so, unlike File, they implement no Drop and can never
+// be closed. `stdin`/`stdout`/`stderr` return them.
+struct Stdin {}
+struct Stdout {}
+struct Stderr {}
+
+fn stdin() -> Stdin { return Stdin {} }
+fn stdout() -> Stdout { return Stdout {} }
+fn stderr() -> Stderr { return Stderr {} }
+
+// An owned file: it owns its descriptor and closes it when dropped (RAII).
+struct File {
+    fd: i32,
+}
 
 // Open `path` under the first preopened directory (fd 3, the cwd granted by
-// `prim run --dir .`) with the given WASI open flags, returning an owned File.
-// `rights` requests the read/write/seek/stat capabilities a regular file needs.
+// `prim run --dir .`) with the given WASI open flags. `rights` requests the
+// read/write/seek/stat capabilities a regular file needs.
 fn open_flags(path: String, oflags: i32) -> File {
     let out = alloc(4usize)
     let slot = at[i32](out, 0usize)
@@ -40,7 +54,7 @@ fn open_flags(path: String, oflags: i32) -> File {
     path_open_raw(3i32, 1i32, path.data, path.len, oflags, rights, rights, 0i32, slot)
     let fd = *slot
     free(out)
-    return File { fd = fd, owned = true }
+    return File { fd = fd }
 }
 
 impl File {
@@ -55,52 +69,47 @@ impl File {
     }
 }
 
-// An owned File closes its descriptor when it goes out of scope; the standard
-// streams (owned = false) are left open.
 impl Drop for File {
     fn drop(edit self) {
-        if self.owned {
-            close_fd(self.fd)
-        }
+        close_fd(self.fd)
     }
 }
 
-// A sink for bytes. I/O is byte-oriented; text is just bytes (see the
-// `Display` helpers below, which format into a byte buffer).
-trait Writer {
-    fn write(self, bytes: Vec[u8]) -> usize;
+// Shared fd-level I/O. Both park the task until the fd is ready, so a slow peer
+// blocks only this task, not the whole scheduler. `read_fd` sets the buffer's
+// length to the number of bytes read (0 at end of input).
+fn write_fd(fd: i32, bytes: Vec[u8]) -> usize {
+    park_on_write(fd)
+    return write_raw(fd, bytes.ptr, bytes.len)
 }
 
+fn read_fd(fd: i32, edit buf: Vec[u8]) -> usize {
+    park_on_read(fd)
+    let n = read_raw(fd, buf.ptr, buf.cap)
+    buf.len = n
+    return n
+}
+
+impl Writer for Stdout {
+    fn write(self, bytes: Vec[u8]) -> usize { return write_fd(1i32, bytes) }
+}
+impl Writer for Stderr {
+    fn write(self, bytes: Vec[u8]) -> usize { return write_fd(2i32, bytes) }
+}
 impl Writer for File {
-    fn write(self, bytes: Vec[u8]) -> usize {
-        // Park until the fd is writable so a slow consumer blocks only this
-        // task, not the whole scheduler.
-        park_on_write(self.fd)
-        return write_raw(self.fd, bytes.ptr, bytes.len)
-    }
+    fn write(self, bytes: Vec[u8]) -> usize { return write_fd(self.fd, bytes) }
 }
-
-// A source of bytes.
-trait Reader {
-    fn read(self, edit buf: Vec[u8]) -> usize;
+impl Reader for Stdin {
+    fn read(self, edit buf: Vec[u8]) -> usize { return read_fd(0i32, edit buf) }
 }
-
 impl Reader for File {
-    // Read up to `buf`'s capacity, parking until the fd is readable so a task
-    // waiting on input yields to others instead of blocking everyone. Sets the
-    // buffer's length to the number of bytes read (0 at end of input).
-    fn read(self, edit buf: Vec[u8]) -> usize {
-        park_on_read(self.fd)
-        let n = read_raw(self.fd, buf.ptr, buf.cap)
-        buf.len = n
-        return n
-    }
+    fn read(self, edit buf: Vec[u8]) -> usize { return read_fd(self.fd, edit buf) }
 }
 
-// Render a `Display` value into a byte buffer and write it to `w`, optionally
-// followed by a newline. The `Formatter` accumulates a `Vec[u8]`, so the bytes
-// go straight to the writer with no intermediate `String`.
-fn write_display[T: Display](w: File, x: T, newline: bool) {
+// Render a `Display` value into a byte buffer and write it to any `Writer`,
+// optionally followed by a newline. The `Formatter` accumulates a `Vec[u8]`, so
+// the bytes go straight to the writer with no intermediate `String`.
+fn write_display[W: Writer, T: Display](w: W, x: T, newline: bool) {
     let f = new_formatter()
     x.fmt(edit f)
     if newline {
