@@ -67,6 +67,17 @@ later feature).
 
 ## Deferred design
 
+- **Expression-scoped borrows (non-storable places).** TODO: a `place T` value
+  usable only *within the expression that produces it* — never bound to a `let`
+  or stored in a field. Because it can't escape, dereferencing it is safe
+  *without lifetimes and without exposing raw pointers* — the return-position
+  dual of `view`/`edit` (which are call-scoped *parameter* borrows). This is the
+  intended safe form of accessors like `Array.get(i) -> place T` / a future
+  `Option[place T]`, replacing the raw `*mut T` they return today (which can
+  dangle — same hole as the `from_vec` issue). A first-class, *storable*
+  borrow-checked reference is the larger lifetimes stage; this is the smaller,
+  escape-free subset.
+
 - **By-value aggregates — a direct struct/tuple literal at a scalar-ABI
   boundary still boxes.** Small POD aggregates cross parameter and return
   boundaries as wasm field values (no box) when they come from a scalarized
