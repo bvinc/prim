@@ -9,32 +9,39 @@ enum Result[T, E] {
     Err(E),
 }
 
-fn is_ok[T, E](r: Result[T, E]) -> bool {
-    return match r {
-        Result.Ok(_) => true,
-        Result.Err(_) => false,
+// Methods are generic over the enum's `T` and `E`, inferred from the receiver:
+// `r.unwrap()` on a `Result[i32, E]` monomorphizes with `T = i32`.
+impl Result {
+    // Whether this is an `Ok`.
+    fn is_ok(view self) -> bool {
+        return match self {
+            Result.Ok(_) => true,
+            Result.Err(_) => false,
+        }
     }
-}
 
-fn is_err[T, E](r: Result[T, E]) -> bool {
-    return match r {
-        Result.Ok(_) => false,
-        Result.Err(_) => true,
+    // Whether this is an `Err`.
+    fn is_err(view self) -> bool {
+        return match self {
+            Result.Ok(_) => false,
+            Result.Err(_) => true,
+        }
     }
-}
 
-// Extract the success value, aborting if the result is an `Err`.
-fn unwrap[T, E](take r: Result[T, E]) -> T {
-    return match r {
-        Result.Ok(take v) => v,
-        Result.Err(_) => panic_value[T]("Result.unwrap called on Err"),
+    // Extract the success value, aborting if the result is an `Err`. Consumes
+    // the result.
+    fn unwrap(take self) -> T {
+        return match self {
+            Result.Ok(take v) => v,
+            Result.Err(_) => panic_value[T]("Result.unwrap called on Err"),
+        }
     }
-}
 
-// Extract the success value, or return `default` if it is an `Err`.
-fn unwrap_or[T, E](take r: Result[T, E], take default: T) -> T {
-    return match r {
-        Result.Ok(take v) => v,
-        Result.Err(_) => default,
+    // Extract the success value, or return `default` if it is an `Err`.
+    fn unwrap_or(take self, take default: T) -> T {
+        return match self {
+            Result.Ok(take v) => v,
+            Result.Err(_) => default,
+        }
     }
 }
