@@ -42,7 +42,8 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    Array(Box<Type>),
+    /// Fixed-size array `Array[T, N]`: element type and a compile-time length.
+    Array(Box<Type>, usize),
     /// Named type — either a struct or a trait. The optional type
     /// argument list lets generic instantiations like `Pair<i32>` appear
     /// in type positions (function params, return, let bindings). Empty

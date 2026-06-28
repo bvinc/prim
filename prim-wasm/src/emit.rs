@@ -1037,6 +1037,20 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::TupleLit(elems) => {
             emit_tuple_lit(f, &expr.ty, elems, ctx)?;
         }
+        hir::ExprKind::ArrayLit(elems) => {
+            // A fixed array is a homogeneous tuple `(T, T, ..., T)`; build it
+            // with the tuple machinery (layout, inline/box, per-element init).
+            let (elem, n) = match &expr.ty {
+                hir::Type::Array(e, n) => ((**e).clone(), *n),
+                _ => {
+                    return Err(WasmError::Internal(
+                        "array literal with non-array type".into(),
+                    ));
+                }
+            };
+            let tuple_ty = hir::Type::Tuple(vec![elem; n]);
+            emit_tuple_lit(f, &tuple_ty, elems, ctx)?;
+        }
         hir::ExprKind::TupleIndex { base, index } => {
             if let Some(local) = scalar_base_local(base, &ScalarKey::Index(*index as usize), ctx)? {
                 f.instruction(&Instruction::LocalGet(local));
@@ -2320,6 +2334,10 @@ fn recursable_fields(
             None => Vec::new(),
         },
         hir::Type::Tuple(elems) => compute_tuple_layout(elems, policy).elems,
+        // An array drops each element: lay it out as a homogeneous tuple.
+        hir::Type::Array(elem, n) => {
+            compute_tuple_layout(&vec![(**elem).clone(); *n], policy).elems
+        }
         _ => Vec::new(),
     }
 }

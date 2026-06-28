@@ -130,7 +130,7 @@ fn subst_params(ty: &Type, args: &[Type]) -> Type {
             mutable: *mutable,
             pointee: Box::new(subst_params(pointee, args)),
         },
-        Type::Array(elem) => Type::Array(Box::new(subst_params(elem, args))),
+        Type::Array(elem, n) => Type::Array(Box::new(subst_params(elem, args)), *n),
         Type::Struct(sid, ta) => {
             Type::Struct(*sid, ta.iter().map(|t| subst_params(t, args)).collect())
         }

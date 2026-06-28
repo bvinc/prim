@@ -1,3 +1,5 @@
+// A POD fixed array constructs (and, being non-Drop, simply leaks at scope end
+// with no output). Exercises Array[T, N] type + literal construction.
 fn main() {
-    let a: [u8] = [1i32, 2, 3]
+    let a: Array[u8, 3] = [1u8, 2u8, 3u8]
 }

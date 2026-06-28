@@ -374,7 +374,7 @@ impl Mono<'_> {
                 mutable: *mutable,
                 pointee: Box::new(self.substitute_type(pointee, subst)),
             },
-            Type::Array(elem) => Type::Array(Box::new(self.substitute_type(elem, subst))),
+            Type::Array(elem, n) => Type::Array(Box::new(self.substitute_type(elem, subst)), *n),
             Type::Tuple(elems) => Type::Tuple(
                 elems
                     .iter()

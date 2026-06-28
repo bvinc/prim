@@ -2478,7 +2478,9 @@ impl<'a> LoweringContext<'a> {
                     panic!("missing struct/trait/enum id for resolved type '{name_str}'")
                 }
             }
-            Type::Array(inner) => hir::Type::Array(Box::new(self.lower_type(inner, module_scope))),
+            Type::Array(inner, n) => {
+                hir::Type::Array(Box::new(self.lower_type(inner, module_scope)), *n)
+            }
             Type::Tuple(elems) => hir::Type::Tuple(
                 elems
                     .iter()

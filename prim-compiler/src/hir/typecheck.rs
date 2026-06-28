@@ -296,7 +296,7 @@ impl<'a> Checker<'a> {
                     pointee: pb,
                 },
             ) if ma == mb => Self::infer_pins(pa, pb, pins),
-            (Type::Array(a), Type::Array(b)) => Self::infer_pins(a, b, pins),
+            (Type::Array(a, _), Type::Array(b, _)) => Self::infer_pins(a, b, pins),
             (Type::Struct(sa, aa), Type::Struct(sb, ab)) if sa == sb && aa.len() == ab.len() => {
                 for (a, b) in aa.iter().zip(ab.iter()) {
                     if !Self::infer_pins(a, b, pins) {
@@ -326,7 +326,7 @@ impl<'a> Checker<'a> {
                 mutable: *mutable,
                 pointee: Box::new(Self::substitute_params(pointee, pins)),
             },
-            Type::Array(elem) => Type::Array(Box::new(Self::substitute_params(elem, pins))),
+            Type::Array(elem, n) => Type::Array(Box::new(Self::substitute_params(elem, pins)), *n),
             Type::Struct(sid, args) => Type::Struct(
                 *sid,
                 args.iter()
@@ -356,8 +356,8 @@ impl<'a> Checker<'a> {
                 mutable: *mutable,
                 pointee: Box::new(Self::substitute_params_with_slice(pointee, args)),
             },
-            Type::Array(elem) => {
-                Type::Array(Box::new(Self::substitute_params_with_slice(elem, args)))
+            Type::Array(elem, n) => {
+                Type::Array(Box::new(Self::substitute_params_with_slice(elem, args)), *n)
             }
             Type::Struct(sid, type_args) => Type::Struct(
                 *sid,
@@ -2022,7 +2022,10 @@ impl<'a> Checker<'a> {
                         },
                     }
                 }
-                let arr = Type::Array(Box::new(elem_ty.unwrap_or(Type::Undetermined)));
+                let arr = Type::Array(
+                    Box::new(elem_ty.unwrap_or(Type::Undetermined)),
+                    elements.len(),
+                );
                 *ty = arr.clone();
                 Ok(arr)
             }
@@ -2323,9 +2326,9 @@ impl<'a> Checker<'a> {
                 mutable: *ma,
                 pointee: Box::new(p),
             }),
-            (Type::Array(a_elem), Type::Array(b_elem)) => {
-                self.unify(a_elem, b_elem).map(|e| Type::Array(Box::new(e)))
-            }
+            (Type::Array(a_elem, na), Type::Array(b_elem, nb)) if na == nb => self
+                .unify(a_elem, b_elem)
+                .map(|e| Type::Array(Box::new(e), *na)),
             (Type::Tuple(ax), Type::Tuple(bx)) if ax.len() == bx.len() => {
                 let mut elems = Vec::with_capacity(ax.len());
                 for (ea, eb) in ax.iter().zip(bx.iter()) {

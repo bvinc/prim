@@ -1413,19 +1413,25 @@ impl<'a> Parser<'a> {
                     Ok(first)
                 }
             }
-            TokenKind::LeftBracket => {
-                self.advance(); // consume '['
-                let elem_ty = self.parse_type()?;
-                self.consume(
-                    TokenKind::RightBracket,
-                    "Expected ']' after array element type",
-                )?;
-                Ok(Type::Array(Box::new(elem_ty)))
-            }
             TokenKind::Identifier => {
                 let span = self.advance().span;
-                if span.text(self.source) == "Self" {
+                let text = span.text(self.source);
+                if text == "Self" {
                     return Ok(Type::SelfType);
+                }
+                if text == "Array" {
+                    // Fixed-size array `Array[T, N]`: element type, then a
+                    // length literal (a const, not a type).
+                    self.consume(TokenKind::LeftBracket, "Expected '[' after Array")?;
+                    let elem_ty = self.parse_type()?;
+                    self.consume(
+                        TokenKind::Comma,
+                        "Expected ',' between Array element type and length",
+                    )?;
+                    let len_span = self.advance().span;
+                    let (len, _) = parse_int_literal(len_span.text(self.source), len_span)?;
+                    self.consume(TokenKind::RightBracket, "Expected ']' to close Array[T, N]")?;
+                    return Ok(Type::Array(Box::new(elem_ty), len as usize));
                 }
                 let name = self.intern(span);
                 // Optional generic instantiation: `Pair[i32]` or `Map[K, V]`.

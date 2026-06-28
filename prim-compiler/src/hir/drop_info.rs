@@ -86,7 +86,7 @@ impl<'a> DropInfo<'a> {
                 })
                 .unwrap_or(false),
             Type::Tuple(elems) => elems.iter().any(|t| self.needs_drop(t)),
-            Type::Array(elem) => self.needs_drop(elem),
+            Type::Array(elem, _) => self.needs_drop(elem),
             _ => false,
         }
     }

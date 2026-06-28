@@ -789,7 +789,8 @@ pub enum Type {
     F32,
     F64,
     Bool,
-    Array(Box<Type>),
+    /// Fixed-size array `Array[T, N]`: element type and compile-time length.
+    Array(Box<Type>, usize),
     /// A struct type with optional concrete type arguments. Empty
     /// `Vec<Type>` means a non-generic struct or an as-yet-uninstantiated
     /// generic; non-empty means a specific instantiation that mono will
@@ -864,7 +865,7 @@ impl fmt::Display for Type {
             Type::F32 => write!(f, "f32"),
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
-            Type::Array(elem) => write!(f, "[{elem}]"),
+            Type::Array(elem, n) => write!(f, "Array[{elem}, {n}]"),
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, t) in elems.iter().enumerate() {

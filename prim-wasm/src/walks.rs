@@ -389,7 +389,8 @@ fn collect_scratch_types_expr(
                 collect_scratch_types_expr(val, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
-        hir::ExprKind::TupleLit(elems) => {
+        hir::ExprKind::TupleLit(elems) | hir::ExprKind::ArrayLit(elems) => {
+            // Built as a homogeneous tuple: one box pointer, then the elements.
             out.push(ValType::I32);
             for e in elems {
                 collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
@@ -465,11 +466,6 @@ fn collect_scratch_types_expr(
             collect_scratch_types_expr(receiver, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             for a in args {
                 collect_scratch_types_expr(a, runtime, scalar_abi, scalar_ret, ret_scalar, out);
-            }
-        }
-        hir::ExprKind::ArrayLit(elems) => {
-            for e in elems {
-                collect_scratch_types_expr(e, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
         hir::ExprKind::If {
