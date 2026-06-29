@@ -327,6 +327,8 @@ struct LoweringContext<'a> {
     debug_trait: Option<hir::TraitId>,
     formatter_struct: Option<StructId>,
     write_debug_fn: Option<FuncId>,
+    /// `std.io.dbg`, the function `@dbg` lowers to.
+    dbg_fn: Option<FuncId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
 }
@@ -370,6 +372,7 @@ impl<'a> LoweringContext<'a> {
             debug_trait: None,
             formatter_struct: None,
             write_debug_fn: None,
+            dbg_fn: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
         }
@@ -436,6 +439,13 @@ impl<'a> LoweringContext<'a> {
                     }
                     if is_std_fmt(&module.name) && name == "write_debug" {
                         self.write_debug_fn = Some(fid);
+                    }
+                    if module.name.len() == 2
+                        && module.name[0] == "std"
+                        && module.name[1] == "io"
+                        && name == "dbg"
+                    {
+                        self.dbg_fn = Some(fid);
                     }
                     let span = self.span_id(f.span, file.file_id);
                     let runtime = f.runtime_binding.as_deref().and_then(|binding| {
@@ -2403,13 +2413,35 @@ impl<'a> LoweringContext<'a> {
                 let prefix = format!("[{path_str}:{line}:{col}] {expr_text} = ");
                 let lowered_inner = self.lower_expr(inner, module, file_id, ast, module_scope);
                 let dbg_ty = lowered_inner.ty.clone();
-                (
-                    hir::ExprKind::Dbg {
-                        prefix,
-                        inner: Box::new(lowered_inner),
-                    },
-                    dbg_ty,
-                )
+                // Route `@dbg e` through `std.io.dbg(prefix, take e)`, which
+                // prints the value via `Debug` and returns it. Falls back to the
+                // intrinsic node only if std isn't available (shouldn't happen).
+                match (self.dbg_fn, self.stdlib_string_struct) {
+                    (Some(dbg_fid), Some(string_sid)) => {
+                        let span = self.span_id(inner_span, file_id);
+                        let prefix_lit = hir::Expr {
+                            kind: hir::ExprKind::Str(prefix),
+                            ty: hir::Type::Struct(string_sid, Vec::new()),
+                            span,
+                        };
+                        (
+                            hir::ExprKind::Call {
+                                func: dbg_fid,
+                                type_args: Vec::new(),
+                                args: vec![prefix_lit, lowered_inner],
+                                arg_modes: vec![PassMode::View, PassMode::Take],
+                            },
+                            dbg_ty,
+                        )
+                    }
+                    _ => (
+                        hir::ExprKind::Dbg {
+                            prefix,
+                            inner: Box::new(lowered_inner),
+                        },
+                        dbg_ty,
+                    ),
+                }
             }
         };
         hir::Expr { kind, ty, span }

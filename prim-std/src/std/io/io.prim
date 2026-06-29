@@ -13,6 +13,8 @@ import std.vec.Vec
 import std.fmt.Display
 import std.fmt.Formatter
 import std.fmt.new_formatter
+import std.fmt.Debug
+import std.fmt.debug_string
 
 // A sink for bytes. I/O is byte-oriented; text is just bytes (see the
 // `Display` helpers below, which format into a byte buffer).
@@ -138,4 +140,13 @@ fn eprint[T: Display](x: T) {
 // Render a `Display` value to stderr, followed by a newline.
 fn eprintln[T: Display](x: T) {
     write_display(stderr(), x, true)
+}
+
+// Backs the `@dbg` expression: print the `[file:line] expr = ` prefix and the
+// value's `Debug` form (with a trailing newline), then return the value so
+// `@dbg e` still evaluates to `e`.
+fn dbg[T: Debug](prefix: String, take x: T) -> T {
+    print(prefix)
+    println(debug_string(x))
+    return x
 }

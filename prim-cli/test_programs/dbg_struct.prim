@@ -1,0 +1,7 @@
+struct Point { x: i32, y: i32 }
+
+// @dbg now routes through Debug, so it prints structs (it used to only handle
+// primitives). It still evaluates to the value.
+fn main() {
+    let p = @dbg(Point { x = 1, y = 2 })
+}
