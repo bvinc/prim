@@ -227,3 +227,9 @@ fn debug_string[T: Debug](x: T) -> String {
     x.fmt(edit f)
     return from_vec(take f.buf)
 }
+
+// Write a value's `Debug` form into an existing formatter. The bound resolves
+// `fmt` to `Debug` (not `Display`); derived `Debug` impls call this per field.
+fn write_debug[T: Debug](edit f: Formatter, x: T) {
+    x.fmt(edit f)
+}
