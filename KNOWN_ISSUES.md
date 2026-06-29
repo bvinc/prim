@@ -35,13 +35,6 @@ later feature).
   followed by `(expr)` on the next line is still silently absorbed as
   `v.field(expr)`.
 
-- **`String.from_vec` aliases a live buffer.** It points the String at the Vec's
-  buffer without invalidating the Vec. Now that `free` actually reclaims, a
-  single `push` on the source Vec that triggers growth deallocates the buffer the
-  String still references — dlmalloc immediately writes free-list pointers over
-  its first bytes and recycles the chunk on the next `alloc`. Until the borrow
-  checker exists, `from_vec` should zero the source Vec's ptr/len/cap (or copy).
-
 - **Trait-object coercion is an untracked borrow.** `let g: Trait = s` (`Coerce`)
   builds a fat pointer `{vtable, data_addr}` that aliases `s`'s box, and the
   ownership checker treats it as a *borrow* of `s` — but with no lifetimes,
@@ -154,11 +147,14 @@ later feature).
   *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
   all paths or none).
 
-- **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** The stdlib's
-  `Vec`/`String` (backing buffers are raw `*mut`) don't implement `Drop`, so
-  their buffers still leak. Trait impls on generic types now monomorphize, so
-  `impl Drop for Vec[T]` is *expressible* — but two pieces remain: (1) a way to
-  drop the **heap elements**, which live behind `*mut T` (not as struct fields,
-  so the auto field-recursion misses them) — needs a `drop_in_place`/`read`
-  primitive or move-each-into-a-local; (2) the `from_vec` ownership fix (a
-  `from_vec`'d `String` aliases the `Vec` buffer, so freeing it would dangle).
+- **Drop/RAII — `Vec` frees its buffer, but not its elements.** `Vec` now
+  implements `Drop` and frees its backing buffer at scope end (and `from_vec`
+  was fixed to hand off ownership, closing that use-after-free). This is complete
+  for elements with no destructor (`Vec[i32]`, POD — the common case). What
+  remains: a `Vec` of a resource-owning type (`Vec[String]`, `Vec[Vec[_]]`,
+  `Vec` of a `Drop` type) still **leaks each element**, because dropping the
+  elements means running `T`'s destructor on each buffer slot — and there's no
+  way to express that yet (`take *ptr` doesn't parse, so elements can't be moved
+  out to drop). Needs a `drop_in_place[T](ptr)` intrinsic (call the synthesized
+  `drop_T` on a value in place). `String` has the same single-buffer shape but no
+  element destructors, so a `String` `Drop` is the simpler twin of this.
