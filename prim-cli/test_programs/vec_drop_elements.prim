@@ -1,0 +1,16 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+
+// Dropping a Vec drops its live elements (via drop_in_place), then frees the
+// buffer. Here each Res prints its id when dropped; the Vec of Vecs exercises
+// recursion (the inner Vecs' buffers are freed when the outer Vec drops).
+struct Res { id: i32 }
+impl Drop for Res { fn drop(edit self) { println(self.id) } }
+
+fn main() {
+    let mut v = new[Res]()
+    push(edit v, take Res { id = 1i32 })
+    push(edit v, take Res { id = 2i32 })
+    println(0i32)
+}

@@ -4,6 +4,7 @@ import std.mem.realloc
 import std.mem.dealloc
 import std.ptr.null
 import std.ptr.add
+import std.ptr.drop_in_place
 import std.sys.panic
 
 // A growable array. `ptr` points at `cap` slots of T; the first `len` are
@@ -15,13 +16,17 @@ struct Vec[T] {
     cap: usize,
 }
 
-// Free the backing buffer at scope end. This reclaims the array allocation,
-// which is complete for elements with no destructor (the common case). NOTE:
-// it does not yet run destructors on the live elements, so a `Vec` of a type
-// that owns a resource (e.g. `String`) still leaks each element — that needs a
-// drop-in-place primitive. A null `ptr` (empty Vec) is fine; `dealloc` ignores it.
+// Drop each live element, then free the backing buffer. Elements live in the
+// buffer behind `ptr` (not as struct fields), so they're dropped explicitly
+// with `drop_in_place` — a no-op for elements with no destructor. A null `ptr`
+// (empty Vec) is fine; the loop runs zero times and `dealloc` ignores null.
 impl Drop for Vec {
     fn drop(edit self) {
+        let mut i = 0usize
+        while i < self.len {
+            drop_in_place[T](add[T](self.ptr, i))
+            i = i + 1usize
+        }
         dealloc[T](self.ptr)
     }
 }

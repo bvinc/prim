@@ -19,6 +19,12 @@ import std.mem.size_of
 
 // ---- *mut u8 ----
 
+// Run T's destructor on the value at `p`, in place (no allocation freed). A
+// no-op for types with no destructor. Used by container Drop impls to drop
+// heap-stored elements.
+@runtime("prim_rt_drop_in_place")
+fn drop_in_place[T](p: *mut T);
+
 @runtime("prim_rt_null_mut_u8")
 fn null_mut_u8() -> *mut u8;
 

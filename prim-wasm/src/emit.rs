@@ -949,7 +949,11 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         }
         hir::ExprKind::Call { func, args, .. } => {
             if let Some(&runtime) = ctx.runtime.get(func) {
-                emit_runtime_call(f, runtime, args, ctx)?;
+                if runtime == hir::RuntimeAbi::DropInPlace {
+                    emit_drop_in_place(f, &args[0], ctx)?;
+                } else {
+                    emit_runtime_call(f, runtime, args, ctx)?;
+                }
             } else if ctx.funcs.contains_key(func) {
                 emit_raw_call(f, func, args, ctx)?;
                 // A scalar-ABI return arrives as N stack values; in this general
@@ -2169,7 +2173,7 @@ pub(crate) fn collect_drop_types(
 ) -> Vec<hir::Type> {
     let mut work: Vec<hir::Type> = Vec::new();
     for func in &program.functions {
-        collect_drop_sites(&func.body, &mut work);
+        collect_drop_sites(&func.body, program, &mut work);
     }
     work.reverse(); // process in source order despite the LIFO worklist
     let mut seen: HashSet<hir::Type> = HashSet::new();
@@ -2265,26 +2269,26 @@ fn recursable_fields(
 }
 
 /// Walk a body collecting the type of every `Stmt::Drop` it contains.
-fn collect_drop_sites(block: &hir::Block, out: &mut Vec<hir::Type>) {
+fn collect_drop_sites(block: &hir::Block, program: &hir::Program, out: &mut Vec<hir::Type>) {
     for stmt in &block.stmts {
         match stmt {
             hir::Stmt::Drop { ty, .. } => out.push(ty.clone()),
             hir::Stmt::Loop { body, .. } | hir::Stmt::While { body, .. } => {
-                collect_drop_sites(body, out)
+                collect_drop_sites(body, program, out)
             }
             hir::Stmt::Let { value, .. }
             | hir::Stmt::Assign { value, .. }
             | hir::Stmt::Return {
                 value: Some(value), ..
             }
-            | hir::Stmt::Expr(value) => collect_drop_sites_expr(value, out),
+            | hir::Stmt::Expr(value) => collect_drop_sites_expr(value, program, out),
             hir::Stmt::DerefAssign { ptr, value, .. } => {
-                collect_drop_sites_expr(ptr, out);
-                collect_drop_sites_expr(value, out);
+                collect_drop_sites_expr(ptr, program, out);
+                collect_drop_sites_expr(value, program, out);
             }
             hir::Stmt::FieldAssign { object, value, .. } => {
-                collect_drop_sites_expr(object, out);
-                collect_drop_sites_expr(value, out);
+                collect_drop_sites_expr(object, program, out);
+                collect_drop_sites_expr(value, program, out);
             }
             hir::Stmt::Return { value: None, .. } | hir::Stmt::Break { .. } => {}
         }
@@ -2293,26 +2297,59 @@ fn collect_drop_sites(block: &hir::Block, out: &mut Vec<hir::Type>) {
 
 /// Recurse into the blocks an expression can contain (`if`/`match`/block) to
 /// reach nested `Stmt::Drop`s.
-fn collect_drop_sites_expr(expr: &hir::Expr, out: &mut Vec<hir::Type>) {
+fn collect_drop_sites_expr(expr: &hir::Expr, program: &hir::Program, out: &mut Vec<hir::Type>) {
     match &expr.kind {
         hir::ExprKind::If {
             then_branch,
             else_branch,
             ..
         } => {
-            collect_drop_sites(then_branch, out);
+            collect_drop_sites(then_branch, program, out);
             if let Some(b) = else_branch {
-                collect_drop_sites(b, out);
+                collect_drop_sites(b, program, out);
             }
         }
-        hir::ExprKind::Block(b) => collect_drop_sites(b, out),
+        hir::ExprKind::Block(b) => collect_drop_sites(b, program, out),
         hir::ExprKind::Match { arms, .. } => {
             for arm in arms {
-                collect_drop_sites_expr(&arm.body, out);
+                collect_drop_sites_expr(&arm.body, program, out);
+            }
+        }
+        // `drop_in_place[T](p)` drops `T` in place — so `T` needs a `drop_T`
+        // even though no `Stmt::Drop` or field recursion reaches it (it lives
+        // behind the pointer). Register the pointee type.
+        hir::ExprKind::Call { func, args, .. }
+            if program.functions[func.0 as usize].runtime == Some(hir::RuntimeAbi::DropInPlace) =>
+        {
+            if let Some(hir::Type::Pointer { pointee, .. }) = args.first().map(|a| &a.ty) {
+                out.push((**pointee).clone());
             }
         }
         _ => {}
     }
+}
+
+/// `drop_in_place[T](p)`: run `T`'s destructor on the value at `p`. The element
+/// type is the pointee of the `*mut T` argument. A needs-drop `T` is a boxed
+/// aggregate, so the slot holds its box pointer — load it and call `drop_T`.
+/// For a `T` with no destructor this is a no-op (just discard the pointer).
+fn emit_drop_in_place(f: &mut Function, ptr: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
+    let elem_ty = match &ptr.ty {
+        hir::Type::Pointer { pointee, .. } => (**pointee).clone(),
+        _ => return Err(WasmError::Internal("drop_in_place on a non-pointer".into())),
+    };
+    emit_expr(f, ptr, ctx)?; // the slot address (*mut T)
+    if let Some(&didx) = ctx.drop_fns.get(&elem_ty) {
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::Call(didx));
+    } else {
+        f.instruction(&Instruction::Drop);
+    }
+    Ok(())
 }
 
 fn emit_runtime_call(
@@ -2431,6 +2468,9 @@ fn emit_runtime_call(
         // through the runtime ABI never reaches codegen.
         hir::RuntimeAbi::Spawn => {
             unreachable!("spawn is lowered to ExprKind::Spawn in hir_builder");
+        }
+        hir::RuntimeAbi::DropInPlace => {
+            unreachable!("drop_in_place is emitted via emit_drop_in_place in the Call arm");
         }
         // spawn_main(): seed the program's main as a task. Same shape as
         // ExprKind::Spawn but the target is `main`, known to the compiler.
