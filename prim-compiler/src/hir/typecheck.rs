@@ -31,7 +31,6 @@ pub enum TypeCheckKind {
         right: Type,
     },
     InvalidDereference(Type),
-    DbgUnsupportedType(Type),
     ArityMismatch {
         func: FuncId,
         expected: usize,
@@ -83,9 +82,6 @@ impl std::fmt::Display for TypeCheckError {
             ),
             TypeCheckKind::InvalidDereference(ty) => {
                 write!(f, "Invalid dereference of type {}", ty)
-            }
-            TypeCheckKind::DbgUnsupportedType(ty) => {
-                write!(f, "@dbg does not support values of type {}", ty)
             }
             TypeCheckKind::ArityMismatch {
                 func,
@@ -2148,15 +2144,6 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            ExprKind::Dbg { inner, .. } => {
-                let inner_ty = self.check_expr(inner, locals)?;
-                let resolved = self.finalize_type(&inner_ty);
-                if !self.is_dbg_supported(&resolved) {
-                    return Err(self.error(*span, TypeCheckKind::DbgUnsupportedType(resolved)));
-                }
-                *ty = inner_ty.clone();
-                Ok(inner_ty)
-            }
             ExprKind::Error => Ok(Type::Undetermined),
             ExprKind::DynCall { .. } => {
                 // DynCall nodes are produced by typecheck itself; the type
@@ -2295,10 +2282,6 @@ impl<'a> Checker<'a> {
                 Ok(final_ty)
             }
         }
-    }
-
-    fn is_dbg_supported(&self, t: &Type) -> bool {
-        self.is_numeric(t) || matches!(t, Type::Bool)
     }
 
     /// Types a `match` can scrutinize structurally: enums, booleans, integers,
@@ -2463,10 +2446,6 @@ impl<'a> Checker<'a> {
                         *ty = expected.clone();
                     }
                 }
-            }
-            ExprKind::Dbg { inner, .. } => {
-                self.apply_expected(inner, expected);
-                *ty = inner.ty.clone();
             }
             ExprKind::VariantLit {
                 enum_id, type_args, ..
@@ -2698,12 +2677,6 @@ impl<'a> Checker<'a> {
                     if let Some(expr) = &block.expr {
                         *ty = self.finalize_type(&expr.ty);
                     }
-                }
-            }
-            ExprKind::Dbg { inner, .. } => {
-                self.finalize_expr(inner)?;
-                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&inner.ty);
                 }
             }
             _ => {}

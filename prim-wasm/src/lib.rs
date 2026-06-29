@@ -6,10 +6,9 @@
 //! - [`types`] — HIR type ↔ wasm `ValType` mapping; function-type registry.
 //! - [`layout`] — static memory layout constants; struct layout computation;
 //!   field load/store helpers.
-//! - [`walks`] — pre-walks over HIR (locals, scratch types, dbg prefixes,
-//!   string literals).
-//! - [`builtins`] — hand-written wasm bodies for `__println_*`, `__alloc`,
-//!   `__write_bytes`, `__rt_resume`.
+//! - [`walks`] — pre-walks over HIR (locals, scratch types, string literals).
+//! - [`builtins`] — hand-written wasm bodies for `__alloc`, `__write_bytes`,
+//!   `__rt_resume`.
 //! - [`emit`] — per-function emission of user code.
 
 mod builtins;
@@ -18,20 +17,17 @@ mod layout;
 mod types;
 mod walks;
 
-use crate::builtins::{
-    Builtins, emit_println_bool, emit_println_f64, emit_println_i64, emit_println_u64,
-    emit_rt_resume, emit_write_bytes,
-};
+use crate::builtins::{Builtins, emit_rt_resume, emit_write_bytes};
 use crate::emit::{
-    DbgSite, ScalarField, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
+    ScalarField, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
     emit_user_function, flat_scalar_fields, scalar_abi_params,
 };
 use crate::layout::{
-    DOT_OFFSET, EnumLayout, FALSE_OFFSET, InlinePolicy, NEWLINE_OFFSET, STATIC_DATA_START,
-    StructLayout, TRUE_OFFSET, compute_enum_layout, compute_struct_layout,
+    EnumLayout, InlinePolicy, STATIC_DATA_START, StructLayout, compute_enum_layout,
+    compute_struct_layout,
 };
 use crate::types::{TypeRegistry, hir_type_to_valtype};
-use crate::walks::{collect_dbg_prefixes_block, collect_str_literals_block};
+use crate::walks::collect_str_literals_block;
 use prim_compiler::hir;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -133,9 +129,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
     );
-    let println_i64_type = types.register(vec![ValType::I64], vec![]);
-    let println_bool_type = types.register(vec![ValType::I32], vec![]);
-    let println_f64_type = types.register(vec![ValType::F64], vec![]);
     let write_bytes_type = types.register(
         vec![ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
@@ -181,12 +174,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     //   3: fd_read (import)
     //   4: path_open (import)
     //   5: fd_close (import)
-    //   6: __println_i64
-    //   7: __println_u64
-    //   8: __println_bool
-    //   9: __println_f64
-    //   10: __write_bytes
-    //   11+: user functions (the `@entry` function is exported as `_start`)
+    //   6: __write_bytes
+    //   7+: user functions (the `@entry` function is exported as `_start`)
     //   last: __rt_resume
     let fd_write_idx: u32 = 0;
     let clock_idx: u32 = 1;
@@ -195,11 +184,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let path_open_idx: u32 = 4;
     let fd_close_idx: u32 = 5;
     let mut builtins = Builtins {
-        println_i64: 6,
-        println_u64: 7,
-        println_bool: 8,
-        println_f64: 9,
-        write_bytes: 10,
+        write_bytes: 6,
         clock: clock_idx,
         poll_oneoff: poll_oneoff_idx,
         fd_read: fd_read_idx,
@@ -223,7 +208,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut func_map: HashMap<hir::FuncId, u32> = HashMap::new();
     let mut runtime_map: HashMap<hir::FuncId, hir::RuntimeAbi> = HashMap::new();
     let mut user_func_types: Vec<u32> = Vec::new();
-    let mut next_idx: u32 = 11;
+    let mut next_idx: u32 = 7;
     let mut main_wasm_idx = None;
     let mut main_func_type: Option<u32> = None;
 
@@ -364,28 +349,14 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // out in static memory starting at STATIC_DATA_START. Record per-function
     // slice ranges so each function's EmitCtx can index into the global
     // tables by per-function counter.
-    let mut dbg_sites: Vec<DbgSite> = Vec::new();
     let mut str_sites: Vec<StrSite> = Vec::new();
     let mut static_data: Vec<u8> = Vec::new();
-    let mut per_func_dbg_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
     let mut per_func_str_range: HashMap<hir::FuncId, std::ops::Range<usize>> = HashMap::new();
     let mut cursor: u32 = STATIC_DATA_START;
     for func in &program.functions {
         if func.runtime.is_some() || !func.type_params.is_empty() {
             continue;
         }
-        let dbg_start = dbg_sites.len();
-        let mut prefixes: Vec<&str> = Vec::new();
-        collect_dbg_prefixes_block(&func.body, &mut prefixes);
-        for prefix in prefixes {
-            let bytes = prefix.as_bytes();
-            let len = bytes.len() as u32;
-            static_data.extend_from_slice(bytes);
-            dbg_sites.push(DbgSite { ptr: cursor, len });
-            cursor += len;
-        }
-        per_func_dbg_range.insert(func.id, dbg_start..dbg_sites.len());
-
         let str_start = str_sites.len();
         let mut literals: Vec<&str> = Vec::new();
         collect_str_literals_block(&func.body, &mut literals);
@@ -531,10 +502,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
 
     // Function section
     let mut functions = FunctionSection::new();
-    functions.function(println_i64_type); // __println_i64
-    functions.function(println_i64_type); // __println_u64
-    functions.function(println_bool_type); // __println_bool
-    functions.function(println_f64_type); // __println_f64
     functions.function(write_bytes_type); // __write_bytes
     for &type_idx in &user_func_types {
         functions.function(type_idx);
@@ -653,16 +620,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
 
     // Code section
     let mut codes = CodeSection::new();
-    codes.function(&emit_println_i64(fd_write_idx));
-    codes.function(&emit_println_u64(fd_write_idx));
-    codes.function(&emit_println_bool(fd_write_idx));
-    codes.function(&emit_println_f64(fd_write_idx));
     codes.function(&emit_write_bytes(fd_write_idx));
     for func in &program.functions {
         if func.runtime.is_none() && func.type_params.is_empty() {
-            let dbg_range = per_func_dbg_range.get(&func.id).cloned().unwrap_or(0..0);
             let str_range = per_func_str_range.get(&func.id).cloned().unwrap_or(0..0);
-            let dbg_slice = &dbg_sites[dbg_range];
             let str_slice = &str_sites[str_range];
             let ctx = build_emit_ctx(
                 program,
@@ -680,7 +641,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 &global_wasm_idx,
                 &dyn_call_types,
                 &vtable_addr,
-                dbg_slice,
                 str_slice,
             );
             codes.function(&emit_user_function(func, &ctx)?);
@@ -714,22 +674,6 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
 
     // Data section
     let mut data = DataSection::new();
-    data.active(
-        0,
-        &ConstExpr::i32_const(NEWLINE_OFFSET),
-        b"\n".iter().copied(),
-    );
-    data.active(
-        0,
-        &ConstExpr::i32_const(TRUE_OFFSET),
-        b"true".iter().copied(),
-    );
-    data.active(
-        0,
-        &ConstExpr::i32_const(FALSE_OFFSET),
-        b"false".iter().copied(),
-    );
-    data.active(0, &ConstExpr::i32_const(DOT_OFFSET), b".".iter().copied());
     if !static_data.is_empty() {
         data.active(
             0,

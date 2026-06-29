@@ -683,12 +683,6 @@ pub enum ExprKind {
     /// the body of `fn f[const N: usize]`). Typed `usize`; monomorphization
     /// replaces it with the concrete `Int` literal.
     ConstParam(TypeParamId),
-    Dbg {
-        /// Pre-rendered `[path:line:col] expr_text = ` prefix string,
-        /// computed at lowering time so codegen needs no source access.
-        prefix: String,
-        inner: Box<Expr>,
-    },
     If {
         condition: Box<Expr>,
         then_branch: Block,

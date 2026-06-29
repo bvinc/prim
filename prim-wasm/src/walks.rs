@@ -416,10 +416,6 @@ fn collect_scratch_types_expr(
                 );
             }
         }
-        hir::ExprKind::Dbg { inner, .. } => {
-            out.push(hir_type_to_valtype(&inner.ty));
-            collect_scratch_types_expr(inner, runtime, scalar_abi, scalar_ret, ret_scalar, out);
-        }
         hir::ExprKind::Str(_) => {
             // One scratch i32 holding the bump-allocated String struct ptr.
             out.push(ValType::I32);
@@ -493,128 +489,6 @@ fn collect_scratch_types_expr(
     }
 }
 
-// === @dbg prefix strings ===
-
-/// Collect each `@dbg` site's prefix string (already built by HIR lowering)
-/// in pre-order, so the program-level layout pass can place them in static
-/// memory and emission can index them by counter.
-pub(crate) fn collect_dbg_prefixes_block<'a>(block: &'a hir::Block, out: &mut Vec<&'a str>) {
-    for stmt in &block.stmts {
-        collect_dbg_prefixes_stmt(stmt, out);
-    }
-    if let Some(expr) = &block.expr {
-        collect_dbg_prefixes_expr(expr, out);
-    }
-}
-
-fn collect_dbg_prefixes_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
-    match stmt {
-        hir::Stmt::Let { value, .. } | hir::Stmt::Assign { value, .. } => {
-            collect_dbg_prefixes_expr(value, out);
-        }
-        hir::Stmt::DerefAssign { ptr, value, .. } => {
-            collect_dbg_prefixes_expr(ptr, out);
-            collect_dbg_prefixes_expr(value, out);
-        }
-        hir::Stmt::FieldAssign { object, value, .. } => {
-            collect_dbg_prefixes_expr(object, out);
-            collect_dbg_prefixes_expr(value, out);
-        }
-        hir::Stmt::Expr(e) => collect_dbg_prefixes_expr(e, out),
-        hir::Stmt::Loop { body, .. } => collect_dbg_prefixes_block(body, out),
-        hir::Stmt::While {
-            condition, body, ..
-        } => {
-            collect_dbg_prefixes_expr(condition, out);
-            collect_dbg_prefixes_block(body, out);
-        }
-        hir::Stmt::Break { .. } => {}
-        hir::Stmt::Return { value, .. } => {
-            if let Some(v) = value {
-                collect_dbg_prefixes_expr(v, out);
-            }
-        }
-        hir::Stmt::Drop { .. } => {}
-    }
-}
-
-fn collect_dbg_prefixes_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
-    match &expr.kind {
-        hir::ExprKind::Dbg { prefix, inner } => {
-            out.push(prefix.as_str());
-            collect_dbg_prefixes_expr(inner, out);
-        }
-        hir::ExprKind::StructLit { fields, .. } => {
-            for (_, val) in fields {
-                collect_dbg_prefixes_expr(val, out);
-            }
-        }
-        hir::ExprKind::TupleLit(elems) => {
-            for e in elems {
-                collect_dbg_prefixes_expr(e, out);
-            }
-        }
-        hir::ExprKind::TupleIndex { base, .. } => collect_dbg_prefixes_expr(base, out),
-        hir::ExprKind::VariantLit { fields, .. } => {
-            for (_, val) in fields {
-                collect_dbg_prefixes_expr(val, out);
-            }
-        }
-        hir::ExprKind::Match { scrutinee, arms } => {
-            collect_dbg_prefixes_expr(scrutinee, out);
-            for arm in arms {
-                collect_dbg_prefixes_expr(&arm.body, out);
-            }
-        }
-        hir::ExprKind::Binary { left, right, .. } => {
-            collect_dbg_prefixes_expr(left, out);
-            collect_dbg_prefixes_expr(right, out);
-        }
-        hir::ExprKind::Call { args, .. } => {
-            for a in args {
-                collect_dbg_prefixes_expr(a, out);
-            }
-        }
-        hir::ExprKind::Field { base, .. } | hir::ExprKind::Deref(base) => {
-            collect_dbg_prefixes_expr(base, out);
-        }
-        hir::ExprKind::Neg(operand) | hir::ExprKind::BitNot(operand) => {
-            collect_dbg_prefixes_expr(operand, out);
-        }
-        hir::ExprKind::Coerce { value, .. } => collect_dbg_prefixes_expr(value, out),
-        hir::ExprKind::DynCall { receiver, args, .. } => {
-            collect_dbg_prefixes_expr(receiver, out);
-            for a in args {
-                collect_dbg_prefixes_expr(a, out);
-            }
-        }
-        hir::ExprKind::TraitBoundCall { receiver, args, .. } => {
-            collect_dbg_prefixes_expr(receiver, out);
-            for a in args {
-                collect_dbg_prefixes_expr(a, out);
-            }
-        }
-        hir::ExprKind::ArrayLit(elems) => {
-            for e in elems {
-                collect_dbg_prefixes_expr(e, out);
-            }
-        }
-        hir::ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_dbg_prefixes_expr(condition, out);
-            collect_dbg_prefixes_block(then_branch, out);
-            if let Some(eb) = else_branch {
-                collect_dbg_prefixes_block(eb, out);
-            }
-        }
-        hir::ExprKind::Block(block) => collect_dbg_prefixes_block(block, out),
-        _ => {}
-    }
-}
-
 // === String literal bytes ===
 
 /// Collect each string literal's bytes in pre-order — same shape as the
@@ -662,7 +536,6 @@ fn collect_str_literals_stmt<'a>(stmt: &'a hir::Stmt, out: &mut Vec<&'a str>) {
 fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
     match &expr.kind {
         hir::ExprKind::Str(s) => out.push(s.as_str()),
-        hir::ExprKind::Dbg { inner, .. } => collect_str_literals_expr(inner, out),
         hir::ExprKind::StructLit { fields, .. } => {
             for (_, val) in fields {
                 collect_str_literals_expr(val, out);

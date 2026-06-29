@@ -2414,34 +2414,32 @@ impl<'a> LoweringContext<'a> {
                 let lowered_inner = self.lower_expr(inner, module, file_id, ast, module_scope);
                 let dbg_ty = lowered_inner.ty.clone();
                 // Route `@dbg e` through `std.io.dbg(prefix, take e)`, which
-                // prints the value via `Debug` and returns it. Falls back to the
-                // intrinsic node only if std isn't available (shouldn't happen).
-                match (self.dbg_fn, self.stdlib_string_struct) {
-                    (Some(dbg_fid), Some(string_sid)) => {
-                        let span = self.span_id(inner_span, file_id);
-                        let prefix_lit = hir::Expr {
-                            kind: hir::ExprKind::Str(prefix),
-                            ty: hir::Type::Struct(string_sid, Vec::new()),
-                            span,
-                        };
-                        (
-                            hir::ExprKind::Call {
-                                func: dbg_fid,
-                                type_args: Vec::new(),
-                                args: vec![prefix_lit, lowered_inner],
-                                arg_modes: vec![PassMode::View, PassMode::Take],
-                            },
-                            dbg_ty,
-                        )
-                    }
-                    _ => (
-                        hir::ExprKind::Dbg {
-                            prefix,
-                            inner: Box::new(lowered_inner),
-                        },
-                        dbg_ty,
-                    ),
-                }
+                // prints the value via `Debug` and returns it. `@dbg` needs
+                // `Debug`, so std (and `std.io.dbg`) is always present.
+                let (Some(dbg_fid), Some(string_sid)) = (self.dbg_fn, self.stdlib_string_struct)
+                else {
+                    self.errors.push(LoweringError::UnknownName {
+                        name: "std.io.dbg (needed by @dbg)".to_string(),
+                        file: file_id,
+                        span: inner_span,
+                    });
+                    return error();
+                };
+                let span = self.span_id(inner_span, file_id);
+                let prefix_lit = hir::Expr {
+                    kind: hir::ExprKind::Str(prefix),
+                    ty: hir::Type::Struct(string_sid, Vec::new()),
+                    span,
+                };
+                (
+                    hir::ExprKind::Call {
+                        func: dbg_fid,
+                        type_args: Vec::new(),
+                        args: vec![prefix_lit, lowered_inner],
+                        arg_modes: vec![PassMode::View, PassMode::Take],
+                    },
+                    dbg_ty,
+                )
             }
         };
         hir::Expr { kind, ty, span }

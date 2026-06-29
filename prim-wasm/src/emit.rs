@@ -14,13 +14,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use wasm_encoder::{BlockType, Function, Instruction, MemArg, ValType};
 
-/// Static-memory location of an `@dbg` site's prefix bytes.
-#[derive(Clone, Copy)]
-pub(crate) struct DbgSite {
-    pub ptr: u32,
-    pub len: u32,
-}
-
 /// Static-memory location of a string literal's bytes.
 #[derive(Clone, Copy)]
 pub(crate) struct StrSite {
@@ -91,8 +84,6 @@ pub(crate) struct EmitCtx<'a> {
     /// its exit `block` was opened — i.e. that block's branch level. `break`
     /// targets the innermost.
     pub loop_exits: RefCell<Vec<u32>>,
-    pub dbg_sites: &'a [DbgSite],
-    pub dbg_counter: Cell<u32>,
     pub str_sites: &'a [StrSite],
     pub str_counter: Cell<u32>,
     /// First codegen invariant violation hit while emitting this function. The
@@ -119,7 +110,6 @@ pub(crate) fn build_emit_ctx<'a>(
     global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
     dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
     vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
-    dbg_sites: &'a [DbgSite],
     str_sites: &'a [StrSite],
 ) -> EmitCtx<'a> {
     let mut locals = HashMap::new();
@@ -192,8 +182,6 @@ pub(crate) fn build_emit_ctx<'a>(
         scratch_counter: Cell::new(0),
         ctrl_depth: Cell::new(0),
         loop_exits: RefCell::new(Vec::new()),
-        dbg_sites,
-        dbg_counter: Cell::new(0),
         str_sites,
         str_counter: Cell::new(0),
         codegen_error: RefCell::new(None),
@@ -601,9 +589,6 @@ fn scalar_disqualify_expr(
         }
         hir::ExprKind::Coerce { value, .. } => {
             scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq)
-        }
-        hir::ExprKind::Dbg { inner, .. } => {
-            scalar_disqualify_expr(inner, scalar_abi, ret_scalar, disq)
         }
         hir::ExprKind::If {
             condition,
@@ -1102,9 +1087,6 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         hir::ExprKind::Block(block) => {
             emit_block(f, block, ctx)?;
         }
-        hir::ExprKind::Dbg { inner, .. } => {
-            emit_dbg(f, inner, ctx)?;
-        }
         hir::ExprKind::Str(_) => {
             emit_str_lit(f, &expr.ty, ctx);
         }
@@ -1341,76 +1323,6 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
 
     // result: ptr to the struct
     f.instruction(&Instruction::LocalGet(scratch_local));
-}
-
-fn emit_dbg(f: &mut Function, inner: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
-    // Allocate scratch local and dbg slot in pre-order, matching the
-    // pre-walks done in `collect_scratch_types_*` and `collect_dbg_prefixes_*`.
-    let scratch_idx = ctx.scratch_counter.get();
-    ctx.scratch_counter.set(scratch_idx + 1);
-    let dbg_idx = ctx.dbg_counter.get();
-    ctx.dbg_counter.set(dbg_idx + 1);
-    let scratch_local = ctx.scratch_base + scratch_idx;
-    let site = match ctx.dbg_sites.get(dbg_idx as usize) {
-        Some(s) => *s,
-        None => {
-            return Err(WasmError::Internal(
-                "dbg site index out of sync with pre-walk".into(),
-            ));
-        }
-    };
-
-    // Emit the inner expression and stash its value.
-    emit_expr(f, inner, ctx)?;
-    f.instruction(&Instruction::LocalSet(scratch_local));
-
-    // Print the prefix ("[file:line:col] expr_text = ") to stdout — no
-    // trailing newline; ignore the returned byte count.
-    f.instruction(&Instruction::I32Const(1));
-    f.instruction(&Instruction::I32Const(site.ptr as i32));
-    f.instruction(&Instruction::I32Const(site.len as i32));
-    f.instruction(&Instruction::Call(ctx.builtins.write_bytes));
-    f.instruction(&Instruction::Drop);
-
-    // Print the value (with trailing newline, via __println_*).
-    f.instruction(&Instruction::LocalGet(scratch_local));
-    emit_println_for_ty(f, &inner.ty, ctx);
-
-    // @dbg evaluates to its inner value.
-    f.instruction(&Instruction::LocalGet(scratch_local));
-    Ok(())
-}
-
-fn emit_println_for_ty(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
-    match ty {
-        hir::Type::I64 => {
-            f.instruction(&Instruction::Call(ctx.builtins.println_i64));
-        }
-        hir::Type::I8 | hir::Type::I16 | hir::Type::I32 | hir::Type::Isize | hir::Type::IntVar => {
-            f.instruction(&Instruction::I64ExtendI32S);
-            f.instruction(&Instruction::Call(ctx.builtins.println_i64));
-        }
-        hir::Type::U64 => {
-            f.instruction(&Instruction::Call(ctx.builtins.println_u64));
-        }
-        hir::Type::U8 | hir::Type::U16 | hir::Type::U32 | hir::Type::Usize => {
-            f.instruction(&Instruction::I64ExtendI32U);
-            f.instruction(&Instruction::Call(ctx.builtins.println_u64));
-        }
-        hir::Type::Bool => {
-            f.instruction(&Instruction::Call(ctx.builtins.println_bool));
-        }
-        hir::Type::F64 | hir::Type::FloatVar => {
-            f.instruction(&Instruction::Call(ctx.builtins.println_f64));
-        }
-        hir::Type::F32 => {
-            f.instruction(&Instruction::F64PromoteF32);
-            f.instruction(&Instruction::Call(ctx.builtins.println_f64));
-        }
-        _ => {
-            bail(f, ctx, "no println for this type");
-        }
-    }
 }
 
 /// Emit a user-function call: its arguments (each by-value if the callee's

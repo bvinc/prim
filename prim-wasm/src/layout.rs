@@ -13,35 +13,17 @@ use wasm_encoder::{Function, Instruction, MemArg};
 //
 // [0..4)      iovec.buf
 // [4..8)      iovec.buf_len
-// [8..12)     nwritten
-// [12..13)    '\n'
-// [13..34)    digit scratch (21 bytes, enough for i64::MIN)
-// [34..38)    "true"
-// [38..43)    "false"
-// [43..44)    '.'
-// [48..128)   float fractional digit scratch
+// [8..12)     nwritten / fd_read result count
+// [12..128)   free (was the hand-written println digit/string scratch)
 // [128..136)  clock_time_get output (u64 nanos)
 // [136..140)  poll_oneoff nevents output (u32); subscription/event buffers are
 //             heap-allocated by the scheduler
-// [144..)     @dbg prefixes + string literal bytes (dynamic)
+// [144..)     string literal bytes (dynamic)
 // [HEAP..)    bump heap
 
-pub(crate) const NEWLINE_OFFSET: i32 = 12;
-pub(crate) const DIGIT_BUF_END: i32 = 34;
-pub(crate) const TRUE_OFFSET: i32 = 34;
-pub(crate) const FALSE_OFFSET: i32 = 38;
-pub(crate) const DOT_OFFSET: i32 = 43;
-pub(crate) const FLOAT_SCRATCH: i32 = 48;
 pub(crate) const CLOCK_SCRATCH: i32 = 128;
 pub(crate) const POLL_NEVENTS: i32 = 136;
 pub(crate) const STATIC_DATA_START: u32 = 144;
-
-/// MemArg for byte-wide loads/stores (alignment hint = 1).
-pub(crate) const MEM8: MemArg = MemArg {
-    offset: 0,
-    align: 0,
-    memory_index: 0,
-};
 
 /// MemArg for 4-byte loads/stores at offset 0 (alignment hint = 4).
 pub(crate) const MEM32: MemArg = MemArg {

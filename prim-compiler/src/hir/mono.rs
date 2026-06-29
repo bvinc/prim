@@ -218,7 +218,6 @@ impl Mono<'_> {
                 }
             }
             ExprKind::Block(block) => self.rewrite_block(block, subst),
-            ExprKind::Dbg { inner, .. } => self.rewrite_expr(inner, subst),
             ExprKind::Coerce { value, .. } => self.rewrite_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {
                 self.rewrite_expr(receiver, subst);
@@ -569,7 +568,6 @@ impl Mono<'_> {
                 }
             }
             ExprKind::Block(block) => self.substitute_block(block, subst),
-            ExprKind::Dbg { inner, .. } => self.substitute_expr(inner, subst),
             ExprKind::Coerce { value, .. } => self.substitute_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {
                 self.substitute_expr(receiver, subst);
