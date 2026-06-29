@@ -74,9 +74,11 @@ later feature).
   + `@dbg` scratch map are deleted (formatting now lives in `std.fmt`). Remaining:
   (1) **enums** — a derived enum `fmt` must read payloads out of a `view self`
   match, which needs borrowing-out-of-match (lifetimes) for non-`Copy` payloads;
-  (2) **generics** (`Option`/`Result`/`Vec`) — need conditional impl bounds
-  (`impl[T: Debug] Debug for Pair[T]`); (3) **wider coverage** — `Debug` for
-  pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
+  (2) **generics** (`Option`/`Result`/`Vec`) — trait impls on generic types now
+  monomorphize, so the remaining piece is **conditional impl bounds**
+  (`impl[T: Debug] Debug for Pair[T]`): the derive's body calls each field's
+  `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
+  `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
 - **Expression-scoped borrows (non-storable places).** TODO: a `place T` value
   usable only *within the expression that produces it* — never bound to a `let`
@@ -152,8 +154,11 @@ later feature).
   *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
   all paths or none).
 
-- **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** Plain aggregates
-  and the stdlib's `Vec`/`String` (whose backing buffers are raw `*mut`) don't
-  implement `Drop`, so their boxes/buffers still leak (unchanged from before).
-  Giving them `Drop` impls needs generic-impl support and the `from_vec`
-  buffer-ownership fix; that is "full RAII," deliberately deferred.
+- **Drop/RAII — std `Vec`/`String` buffers not auto-reclaimed.** The stdlib's
+  `Vec`/`String` (backing buffers are raw `*mut`) don't implement `Drop`, so
+  their buffers still leak. Trait impls on generic types now monomorphize, so
+  `impl Drop for Vec[T]` is *expressible* — but two pieces remain: (1) a way to
+  drop the **heap elements**, which live behind `*mut T` (not as struct fields,
+  so the auto field-recursion misses them) — needs a `drop_in_place`/`read`
+  primitive or move-each-into-a-local; (2) the `from_vec` ownership fix (a
+  `from_vec`'d `String` aliases the `Vec` buffer, so freeing it would dangle).
