@@ -1,5 +1,6 @@
-// Negative test: two impls with the same method on the same struct
-// must be rejected.
+// Negative test: two traits provide the same method name for one type, so a
+// concrete `c.greet()` call is ambiguous and must be rejected (the declarations
+// themselves are allowed — a bound would disambiguate a generic call).
 
 struct Counter { n: i32 }
 

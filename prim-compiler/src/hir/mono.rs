@@ -264,6 +264,7 @@ impl Mono<'_> {
             ExprKind::TraitBoundCall {
                 receiver,
                 type_param,
+                bound,
                 method,
                 args,
                 ..
@@ -282,12 +283,22 @@ impl Mono<'_> {
                         concrete
                     )
                 });
+                // Resolve through the *bound trait's* impl table, not the
+                // by-name method map: different traits can share a method name
+                // (e.g. `Display::fmt` and `Debug::fmt`), so the name alone is
+                // ambiguous — the bound disambiguates.
+                let method_idx = self.program.traits[bound.0 as usize]
+                    .method_idx
+                    .get(method)
+                    .copied()
+                    .expect("bound method not in trait") as usize;
                 let impl_fid = self
                     .program
-                    .impl_methods
-                    .get(&(owner, *method))
-                    .expect("missing impl method after substitution")
-                    .func;
+                    .impls
+                    .get(&(*bound, owner))
+                    .and_then(|fids| fids.get(method_idx))
+                    .copied()
+                    .expect("missing impl method after substitution");
                 let receiver_owned =
                     std::mem::replace(receiver.as_mut(), placeholder_expr(expr.span));
                 let mut new_args = Vec::with_capacity(args.len() + 1);

@@ -1,0 +1,14 @@
+import std.io.println
+import std.fmt.debug_string
+import std.fmt.to_string
+
+// Debug is a distinct trait from Display, sharing the method name `fmt` (resolved
+// by the trait bound). For numbers Debug matches Display; strings differ — Debug
+// quotes them.
+fn main() {
+    println(debug_string(42i32))
+    println(debug_string(0i32 - 7i32))
+    println(debug_string(true))
+    println(debug_string("hi"))
+    println(to_string("hi"))
+}

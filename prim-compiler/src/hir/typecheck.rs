@@ -1663,6 +1663,24 @@ impl<'a> Checker<'a> {
                     },
                 };
                 let method_name = *method;
+                // A method name provided by more than one trait can't be
+                // resolved from a concrete receiver — there is no bound to pick
+                // the trait. Require disambiguation.
+                if self
+                    .program
+                    .ambiguous_methods
+                    .contains(&(owner, method_name))
+                {
+                    let name = self.program.interner.resolve(&method_name).to_string();
+                    let type_name = self.type_name(&recv_ty);
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "method '{name}' on {type_name} is ambiguous: more than one trait \
+                             provides it"
+                        )),
+                    ));
+                }
                 // Step 2: look up the impl method. It must take `self` — an
                 // associated function can't be called on a value.
                 let func = match self

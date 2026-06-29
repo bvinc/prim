@@ -67,6 +67,10 @@ pub struct Program {
     /// check trait-bound satisfaction, generate vtables (struct owners only),
     /// and dispatch dynamic method calls.
     pub impls: std::collections::HashMap<(TraitId, MethodOwner), Vec<FuncId>>,
+    /// `(owner, method-name)` pairs provided by more than one trait. A concrete
+    /// `value.method()` on such a pair is ambiguous and rejected (the bound
+    /// disambiguates a generic call, but a concrete one has no bound).
+    pub ambiguous_methods: std::collections::HashSet<(MethodOwner, InternSymbol)>,
     pub symbols: Vec<Symbol>,
     /// Shared with the loader and all parsed files in this compilation.
     /// `Arc` because `ThreadedRodeo` isn't `Clone` (it holds internal state

@@ -157,3 +157,73 @@ fn to_string[T: Display](x: T) -> String {
     x.fmt(edit f)
     return from_vec(take f.buf)
 }
+
+// A type that can be rendered for *developers* — the representation that shows
+// structure (quoted strings, `Point { x: 1 }`, `Some(3)`), as opposed to
+// `Display`'s user-facing text. Backs `@dbg`, and will be auto-implemented for
+// every struct and enum. For primitive numbers Debug matches Display; strings
+// differ (Debug quotes them).
+trait Debug {
+    fn fmt(view self, edit f: Formatter);
+}
+
+impl Debug for u8 {
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u8(self)) }
+}
+impl Debug for u16 {
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u16(self)) }
+}
+impl Debug for u32 {
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_u32(self)) }
+}
+impl Debug for u64 {
+    fn fmt(view self, edit f: Formatter) { f.write_u64(self) }
+}
+impl Debug for usize {
+    fn fmt(view self, edit f: Formatter) { f.write_u64(u64.from_usize(self)) }
+}
+impl Debug for i8 {
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i8(self)) }
+}
+impl Debug for i16 {
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i16(self)) }
+}
+impl Debug for i32 {
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_i32(self)) }
+}
+impl Debug for i64 {
+    fn fmt(view self, edit f: Formatter) { f.write_i64(self) }
+}
+impl Debug for isize {
+    fn fmt(view self, edit f: Formatter) { f.write_i64(i64.from_isize(self)) }
+}
+impl Debug for f32 {
+    fn fmt(view self, edit f: Formatter) { f.write_f64(f64.from_f32(self)) }
+}
+impl Debug for f64 {
+    fn fmt(view self, edit f: Formatter) { f.write_f64(self) }
+}
+impl Debug for bool {
+    fn fmt(view self, edit f: Formatter) {
+        if self {
+            f.write_str("true")
+        } else {
+            f.write_str("false")
+        }
+    }
+}
+// Debug quotes strings, so `"hi"` renders as `"hi"` rather than `hi`.
+impl Debug for String {
+    fn fmt(view self, edit f: Formatter) {
+        f.write_byte(34u8)
+        f.write_str(self)
+        f.write_byte(34u8)
+    }
+}
+
+// Render a value to a fresh `String` using its `Debug` representation.
+fn debug_string[T: Debug](x: T) -> String {
+    let f = new_formatter()
+    x.fmt(edit f)
+    return from_vec(take f.buf)
+}

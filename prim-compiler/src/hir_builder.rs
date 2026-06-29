@@ -305,6 +305,14 @@ struct LoweringContext<'a> {
     /// `(receiver type, fn name)` → impl function. Built when lowering each
     /// `impl ... { fn ... }` block; the owner is a struct, enum, or primitive.
     impl_methods: HashMap<(hir::MethodOwner, hir::InternSymbol), hir::ImplFn>,
+    /// Each impl method's `FuncId`, keyed by its name's source span (unique per
+    /// declaration). Unlike `impl_methods` (keyed by name), this distinguishes
+    /// same-named methods from different traits — e.g. `Display::fmt` and
+    /// `Debug::fmt` on one type — when filling bodies and building vtables.
+    impl_method_fid: HashMap<(FileId, Span), FuncId>,
+    /// `(owner, method-name)` provided by more than one trait — a concrete call
+    /// is ambiguous (see `Program::ambiguous_methods`).
+    ambiguous_methods: std::collections::HashSet<(hir::MethodOwner, hir::InternSymbol)>,
     /// `(trait, owner)` → vec of FuncIds in trait method declaration order.
     /// Owner is the implementing type (struct, enum, or primitive). Vtables
     /// back dynamic dispatch, which is struct-only for now.
@@ -348,6 +356,8 @@ impl<'a> LoweringContext<'a> {
             current_const_params: HashMap::new(),
             current_self_type: None,
             impl_methods: HashMap::new(),
+            impl_method_fid: HashMap::new(),
+            ambiguous_methods: std::collections::HashSet::new(),
             impls: HashMap::new(),
             stdlib_string_struct: None,
             array_builtin_struct: None,
@@ -512,6 +522,11 @@ impl<'a> LoweringContext<'a> {
         // Function with a synthesized symbol (indices `>= N`). The method's
         // (receiver-struct, method-name) is recorded in `impl_methods` so
         // typecheck can resolve `receiver.method()` calls.
+        // `(owner, method-name)` → the trait it came from (`None` = inherent).
+        // Lets us allow same-named methods from *different* traits (e.g.
+        // `Display::fmt` and `Debug::fmt`) while still rejecting true duplicates.
+        let mut seen: HashMap<(hir::MethodOwner, hir::InternSymbol), Option<hir::InternSymbol>> =
+            HashMap::new();
         for module in &self.program.modules {
             let module_id = module.id;
             for file in &module.files {
@@ -568,23 +583,44 @@ impl<'a> LoweringContext<'a> {
                             span,
                             runtime,
                         });
-                        // Record (owner, fn-name) → ImplFn. Duplicate impls for
-                        // the same (owner, name) are a hard error.
+                        // Each method's FuncId, keyed by its unique declaration
+                        // span — survives same-name clashes across traits.
+                        self.impl_method_fid
+                            .insert((file.file_id, m.name.span), fid);
+                        // Record (owner, fn-name) → ImplFn for concrete
+                        // `value.method()` resolution. A clash is a hard error
+                        // unless the two methods come from different traits
+                        // (then both are valid; dispatch is trait-qualified).
                         let impl_fn = hir::ImplFn {
                             func: fid,
                             is_method,
                         };
-                        if self
-                            .impl_methods
-                            .insert((owner, m.name.sym), impl_fn)
-                            .is_some()
-                        {
-                            let method_name = self.interner.resolve(&m.name.sym).to_string();
-                            self.errors.push(LoweringError::DuplicateImplMethod {
-                                name: method_name,
-                                file: file.file_id,
-                                span: m.name.span,
-                            });
+                        let this_trait = im.trait_name.map(|t| t.sym);
+                        let key = (owner, m.name.sym);
+                        match seen.get(&key).copied() {
+                            Some(prev_trait) => {
+                                let distinct_traits = matches!(
+                                    (prev_trait, this_trait),
+                                    (Some(a), Some(b)) if a != b
+                                );
+                                if distinct_traits {
+                                    // Same name from two traits: allowed, but a
+                                    // concrete call can't choose between them.
+                                    self.ambiguous_methods.insert(key);
+                                } else {
+                                    let method_name =
+                                        self.interner.resolve(&m.name.sym).to_string();
+                                    self.errors.push(LoweringError::DuplicateImplMethod {
+                                        name: method_name,
+                                        file: file.file_id,
+                                        span: m.name.span,
+                                    });
+                                }
+                            }
+                            None => {
+                                seen.insert(key, this_trait);
+                                self.impl_methods.insert(key, impl_fn);
+                            }
                         }
                     }
                 }
@@ -1009,26 +1045,38 @@ impl<'a> LoweringContext<'a> {
                             let mut method_fids: Vec<FuncId> =
                                 Vec::with_capacity(trait_def.methods.len());
                             for trait_m in &trait_def.methods {
-                                if let Some(impl_fn) = self.impl_methods.get(&(owner, trait_m.name))
-                                {
-                                    method_fids.push(impl_fn.func);
-                                } else {
-                                    // Missing impl for this method — leave
-                                    // the slot with a sentinel; typecheck
-                                    // surfaces this as an unknown method on
-                                    // dispatch.
-                                    method_fids.push(FuncId(u32::MAX));
-                                }
+                                // Resolve to *this* impl's method of that name
+                                // (unique within one impl), so a same-named
+                                // method on another trait isn't picked up.
+                                let fid = im
+                                    .methods
+                                    .iter()
+                                    .find(|m| m.name.sym == trait_m.name)
+                                    .and_then(|m| {
+                                        self.impl_method_fid
+                                            .get(&(file.file_id, m.name.span))
+                                            .copied()
+                                    })
+                                    // Missing impl for this method — leave a
+                                    // sentinel; typecheck surfaces it as an
+                                    // unknown method on dispatch.
+                                    .unwrap_or(FuncId(u32::MAX));
+                                method_fids.push(fid);
                             }
                             self.impls.insert((tid, owner), method_fids);
                         }
                     }
                     for m in &im.methods {
-                        let Some(impl_fn) = self.impl_methods.get(&(owner, m.name.sym)).copied()
+                        // Resolve this method's FuncId by its span (not by name,
+                        // which can collide across traits).
+                        let Some(&fid) = self.impl_method_fid.get(&(file.file_id, m.name.span))
                         else {
                             continue;
                         };
-                        let fid = impl_fn.func;
+                        let is_method = matches!(
+                            m.parameters.first(),
+                            Some(p) if p.type_annotation == Type::SelfType
+                        );
                         self.local_scope.clear();
                         let params: Vec<Param> = m
                             .parameters
@@ -1067,7 +1115,7 @@ impl<'a> LoweringContext<'a> {
                             // parameters (`self: Option[T]`, inferred from the
                             // receiver, then monomorphized). Associated functions
                             // keep their own (possibly concrete) signatures.
-                            if impl_fn.is_method {
+                            if is_method {
                                 hir_func.type_params = owner_tps.clone();
                             }
                         }
@@ -1116,6 +1164,7 @@ impl<'a> LoweringContext<'a> {
             traits: self.traits,
             impl_methods: self.impl_methods,
             impls: self.impls,
+            ambiguous_methods: self.ambiguous_methods,
             symbols: self.symbols,
             interner: self.interner,
             main: self.main,
