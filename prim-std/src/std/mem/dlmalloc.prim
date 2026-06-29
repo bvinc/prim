@@ -891,3 +891,16 @@ fn dealloc[T](p: *mut T) {
 fn alloc_array[T](count: usize) -> *mut T {
     return alloc_bytes[T](count * size_of[T]())
 }
+
+// Resize a `T` allocation: allocate `new_count` elements, copy the first
+// `keep_count` from the old buffer, free the old pointer, and return the new
+// one. `keep_count` is the number of live elements to preserve (not the old
+// capacity). A null `ptr` (keep_count 0) is fine — `dealloc` ignores it.
+fn realloc[T](ptr: *mut T, keep_count: usize, new_count: usize) -> *mut T {
+    let new_ptr = alloc_array[T](new_count)
+    if keep_count > 0usize {
+        copy_bytes[T](new_ptr, ptr, keep_count * size_of[T]())
+    }
+    dealloc[T](ptr)
+    return new_ptr
+}

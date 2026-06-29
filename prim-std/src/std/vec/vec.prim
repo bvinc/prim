@@ -1,9 +1,6 @@
 mod vec
 
-import std.mem.alloc_array
-import std.mem.dealloc
-import std.mem.copy_bytes
-import std.mem.size_of
+import std.mem.realloc
 import std.ptr.null
 import std.ptr.add
 import std.sys.panic
@@ -31,12 +28,7 @@ fn push[T](edit v: Vec[T], take value: T) {
         if v.cap != 0usize {
             new_cap = v.cap * 2usize
         }
-        let new_ptr = alloc_array[T](new_cap)
-        if v.len > 0usize {
-            copy_bytes[T](new_ptr, v.ptr, v.len * size_of[T]())
-        }
-        dealloc[T](v.ptr)
-        v.ptr = new_ptr
+        v.ptr = realloc[T](v.ptr, v.len, new_cap)
         v.cap = new_cap
     }
     *add[T](v.ptr, v.len) = value
