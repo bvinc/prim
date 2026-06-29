@@ -67,19 +67,16 @@ later feature).
 
 ## Deferred design
 
-- **Debug derive — structs only; enums and generics pending; dead `__println_*`
-  not yet removed.** `Debug` is auto-derived for non-generic structs whose
-  fields are all `Debug` (a derivability fixpoint; non-`Debug`-field structs are
-  skipped). `@dbg` routes through `Debug` now, so it prints structs. Remaining:
+- **Debug derive — structs only; enums and generics pending.** `Debug` is
+  auto-derived for non-generic structs whose fields are all `Debug` (a
+  derivability fixpoint; non-`Debug`-field structs are skipped). `@dbg` routes
+  through `Debug` and prints structs; the old hand-written `__println_*` builtins
+  + `@dbg` scratch map are deleted (formatting now lives in `std.fmt`). Remaining:
   (1) **enums** — a derived enum `fmt` must read payloads out of a `view self`
   match, which needs borrowing-out-of-match (lifetimes) for non-`Copy` payloads;
   (2) **generics** (`Option`/`Result`/`Vec`) — need conditional impl bounds
   (`impl[T: Debug] Debug for Pair[T]`); (3) **wider coverage** — `Debug` for
-  pointers/`Vec` (the user's "make more types Debug"); (4) the hand-written
-  `__println_*` builtins are now **dead** (only `@dbg` used them) but not yet
-  removed — deleting them cascades through `builtins.rs`, the `lib.rs` function-
-  index renumbering, the `emit.rs` `DbgSite`/`dbg_sites` machinery, the
-  `walks.rs` prefix collection, and the `layout.rs` low-memory scratch map.
+  pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
 - **Expression-scoped borrows (non-storable places).** TODO: a `place T` value
   usable only *within the expression that produces it* — never bound to a `let`
