@@ -39,6 +39,21 @@ pub fn monomorphize(program: &mut Program) {
             pass.substitute_and_rewrite(FuncId(fid as u32), &[]);
         }
     }
+
+    // Generic structs/enums are never concrete codegen types; their trait-impl
+    // entries point at un-monomorphized methods (no wasm function). Each
+    // instantiation got its own concrete entry during the pass, so drop the
+    // generic originals — otherwise codegen's vtable/drop tables choke on them.
+    let stale: Vec<_> = pass
+        .program
+        .impls
+        .keys()
+        .filter(|(_, owner)| pass.is_generic_owner(owner))
+        .cloned()
+        .collect();
+    for key in stale {
+        pass.program.impls.remove(&key);
+    }
 }
 
 struct Mono<'a> {
@@ -358,6 +373,11 @@ impl Mono<'_> {
         }
         clone.fields = new_fields;
         self.program.structs.push(clone);
+        self.propagate_impls(
+            super::MethodOwner::Struct(orig),
+            super::MethodOwner::Struct(new_sid),
+            &type_args,
+        );
         new_sid
     }
 
@@ -378,7 +398,61 @@ impl Mono<'_> {
             }
         }
         self.program.enums.push(clone);
+        self.propagate_impls(
+            super::MethodOwner::Enum(orig),
+            super::MethodOwner::Enum(new_eid),
+            &type_args,
+        );
         new_eid
+    }
+
+    /// When a generic struct/enum is monomorphized, specialize its trait-impl
+    /// methods for the concrete type args and register them under the new
+    /// owner, so `Drop`/`Debug`/etc. resolve on the instantiation. The generic
+    /// owner's entries (which point at un-monomorphized methods) are removed
+    /// after the pass by `monomorphize`.
+    fn propagate_impls(
+        &mut self,
+        orig_owner: super::MethodOwner,
+        new_owner: super::MethodOwner,
+        type_args: &[Type],
+    ) {
+        let generic: Vec<(super::TraitId, Vec<FuncId>)> = self
+            .program
+            .impls
+            .iter()
+            .filter(|((_, o), _)| *o == orig_owner)
+            .map(|((t, _), fids)| (*t, fids.clone()))
+            .collect();
+        for (trait_id, fids) in generic {
+            let mono_fids: Vec<FuncId> = fids
+                .iter()
+                .map(|&fid| {
+                    if fid.0 == u32::MAX {
+                        fid
+                    } else {
+                        self.instantiate_function(fid, type_args.to_vec())
+                    }
+                })
+                .collect();
+            self.program.impls.insert((trait_id, new_owner), mono_fids);
+        }
+    }
+
+    fn is_generic_owner(&self, owner: &super::MethodOwner) -> bool {
+        match owner {
+            super::MethodOwner::Struct(sid) => self
+                .program
+                .structs
+                .get(sid.0 as usize)
+                .is_some_and(|s| !s.type_params.is_empty()),
+            super::MethodOwner::Enum(eid) => self
+                .program
+                .enums
+                .get(eid.0 as usize)
+                .is_some_and(|e| !e.type_params.is_empty()),
+            _ => false,
+        }
     }
 
     /// Replace `Type::Param(i)` with `subst[i]` and recursively
