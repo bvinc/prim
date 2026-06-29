@@ -1,6 +1,7 @@
 mod vec
 
 import std.mem.realloc
+import std.mem.dealloc
 import std.ptr.null
 import std.ptr.add
 import std.sys.panic
@@ -12,6 +13,17 @@ struct Vec[T] {
     ptr: *mut T,
     len: usize,
     cap: usize,
+}
+
+// Free the backing buffer at scope end. This reclaims the array allocation,
+// which is complete for elements with no destructor (the common case). NOTE:
+// it does not yet run destructors on the live elements, so a `Vec` of a type
+// that owns a resource (e.g. `String`) still leaks each element — that needs a
+// drop-in-place primitive. A null `ptr` (empty Vec) is fine; `dealloc` ignores it.
+impl Drop for Vec {
+    fn drop(edit self) {
+        dealloc[T](self.ptr)
+    }
 }
 
 fn new[T]() -> Vec[T] {

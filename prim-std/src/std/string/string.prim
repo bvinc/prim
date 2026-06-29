@@ -1,6 +1,7 @@
 mod string
 
 import std.vec.Vec
+import std.ptr.null
 
 @repr("C")
 struct String {
@@ -9,12 +10,11 @@ struct String {
     cap: usize,
 }
 
-// Build a String from a byte vector. The buffer is handed over as-is, so this
-// is how dynamic text is assembled: push bytes into a Vec[u8], then wrap it.
+// Build a String from a byte vector. The buffer is handed over as-is (no copy):
+// the String takes ownership of it, and the source Vec's pointer is nulled so
+// its `Drop` won't free the buffer the String now owns.
 fn from_vec(take bytes: Vec[u8]) -> String {
-    return String {
-        data = bytes.ptr,
-        len = bytes.len,
-        cap = bytes.cap,
-    }
+    let p = bytes.ptr
+    bytes.ptr = null[u8]()
+    return String { data = p, len = bytes.len, cap = bytes.cap }
 }

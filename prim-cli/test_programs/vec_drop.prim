@@ -1,0 +1,21 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.get
+
+// Each iteration creates a Vec, grows it (realloc), and drops it at the loop
+// body's end — freeing the buffer so memory is reused. A double-free or
+// use-after-free here would crash; a leak would (eventually) OOM.
+fn main() {
+    let mut total = 0i32
+    let mut iter = 0usize
+    while iter < 2000usize {
+        let mut v = new[i32]()
+        push(edit v, take 10i32)
+        push(edit v, take 20i32)
+        push(edit v, take 30i32)
+        total = total + get(v, 2usize)
+        iter = iter + 1usize
+    }
+    println(total)
+}
