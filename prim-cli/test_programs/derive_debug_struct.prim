@@ -1,0 +1,15 @@
+import std.io.println
+import std.fmt.debug_string
+
+// Debug is auto-derived for non-generic structs whose fields are all Debug.
+// Nested structs work via a fixpoint (Point is derived before Line), and a
+// struct with a non-Debug field (a raw pointer) simply isn't derived.
+struct Point { x: i32, y: i32 }
+struct Line { a: Point, b: Point }
+struct Empty {}
+
+fn main() {
+    println(debug_string(Point { x = 1, y = 2 }))
+    println(debug_string(Line { a = Point { x = 1, y = 2 }, b = Point { x = 3, y = 4 } }))
+    println(debug_string(Empty {}))
+}

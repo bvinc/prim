@@ -4,7 +4,7 @@ use crate::hir::{
 };
 use crate::program::{Program, ResSymbolId, ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
-use prim_parse::{Expr, ExprKind, Span, Stmt, Type};
+use prim_parse::{Expr, ExprKind, PassMode, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -205,6 +205,7 @@ pub fn lower_to_hir(
     let mut ctx = LoweringContext::new(program, module_scopes, source_map);
     ctx.declare_modules_and_items();
     ctx.populate_items();
+    ctx.derive_debug();
     if ctx.errors.is_empty() {
         Ok(ctx.finish())
     } else {
@@ -321,6 +322,11 @@ struct LoweringContext<'a> {
     /// The `@builtin type Array[T, const N]` stub's struct id — the nominal home
     /// for array type params and the `impl Array[T, N]` methods.
     array_builtin_struct: Option<StructId>,
+    /// `std.fmt` items the `Debug` auto-derive depends on, captured by id during
+    /// declaration so the derive needs no name lookups.
+    debug_trait: Option<hir::TraitId>,
+    formatter_struct: Option<StructId>,
+    write_debug_fn: Option<FuncId>,
     local_scope: LocalScope,
     errors: Vec<LoweringError>,
 }
@@ -361,6 +367,9 @@ impl<'a> LoweringContext<'a> {
             impls: HashMap::new(),
             stdlib_string_struct: None,
             array_builtin_struct: None,
+            debug_trait: None,
+            formatter_struct: None,
+            write_debug_fn: None,
             local_scope: LocalScope::new(),
             errors: Vec::new(),
         }
@@ -398,6 +407,9 @@ impl<'a> LoweringContext<'a> {
                     if s.is_builtin && name == "Array" {
                         self.array_builtin_struct = Some(sid);
                     }
+                    if is_std_fmt(&module.name) && name == "Formatter" {
+                        self.formatter_struct = Some(sid);
+                    }
                     let span = self.span_id(s.span, file.file_id);
                     self.structs.push(Struct {
                         id: sid,
@@ -421,6 +433,9 @@ impl<'a> LoweringContext<'a> {
                         .or_insert_with(|| FuncId(self.functions.len() as u32));
                     if f.is_entry {
                         self.entry = Some(fid);
+                    }
+                    if is_std_fmt(&module.name) && name == "write_debug" {
+                        self.write_debug_fn = Some(fid);
                     }
                     let span = self.span_id(f.span, file.file_id);
                     let runtime = f.runtime_binding.as_deref().and_then(|binding| {
@@ -474,6 +489,9 @@ impl<'a> LoweringContext<'a> {
                         .trait_ids
                         .entry(res_id)
                         .or_insert_with(|| hir::TraitId(self.traits.len() as u32));
+                    if is_std_fmt(&module.name) && name == "Debug" {
+                        self.debug_trait = Some(tid);
+                    }
                     let span = self.span_id(t.span, file.file_id);
                     self.traits.push(hir::Trait {
                         id: tid,
@@ -1151,6 +1169,163 @@ impl<'a> LoweringContext<'a> {
                 });
                 None
             }
+        }
+    }
+
+    /// Auto-derive `Debug` for every non-generic struct whose fields are all
+    /// themselves `Debug`. Synthesizes a `Debug::fmt` that writes
+    /// `Name { field: <debug>, ... }` via the formatter, calling `write_debug`
+    /// per field. Generic types and non-`Debug` field types are skipped (no
+    /// derive), so this never breaks compilation.
+    fn derive_debug(&mut self) {
+        let (Some(debug_tid), Some(write_debug_fid), Some(formatter_sid), Some(string_sid)) = (
+            self.debug_trait,
+            self.write_debug_fn,
+            self.formatter_struct,
+            self.stdlib_string_struct,
+        ) else {
+            return;
+        };
+        let string_ty = hir::Type::Struct(string_sid, Vec::new());
+        let write_str_sym = self.interner.get_or_intern("write_str");
+
+        // Owners that already have a `Debug` impl (primitives, String, manual).
+        let mut has_debug: std::collections::HashSet<hir::MethodOwner> = self
+            .impls
+            .keys()
+            .filter(|(t, _)| *t == debug_tid)
+            .map(|(_, o)| *o)
+            .collect();
+
+        // A field type is Debug-able if its owner has a Debug impl and it is
+        // not a generic instantiation (those need conditional impl bounds).
+        fn ty_ok(ty: &hir::Type, has: &std::collections::HashSet<hir::MethodOwner>) -> bool {
+            match ty {
+                hir::Type::Struct(_, a) | hir::Type::Enum(_, a) if !a.is_empty() => false,
+                other => hir::MethodOwner::of_type(other).is_some_and(|o| has.contains(&o)),
+            }
+        }
+
+        // Fixpoint: a non-generic struct becomes derivable once all its fields
+        // are Debug-able (which may depend on other structs derived this round).
+        let mut derived: Vec<StructId> = Vec::new();
+        loop {
+            let mut changed = false;
+            for s in &self.structs {
+                let owner = hir::MethodOwner::Struct(s.id);
+                if has_debug.contains(&owner) || !s.type_params.is_empty() {
+                    continue;
+                }
+                if s.fields.iter().all(|fld| ty_ok(&fld.ty, &has_debug)) {
+                    has_debug.insert(owner);
+                    derived.push(s.id);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for sid in derived {
+            let s = self.structs[sid.0 as usize].clone();
+            let span = s.span;
+            let module = self.symbols[s.name.0 as usize].module;
+            let name = self
+                .interner
+                .resolve(&self.symbols[s.name.0 as usize].name)
+                .to_string();
+            let self_sym = self.insert_symbol(
+                module,
+                self.interner.get_or_intern("self"),
+                SymbolKind::Param,
+            );
+            let f_sym =
+                self.insert_symbol(module, self.interner.get_or_intern("f"), SymbolKind::Param);
+
+            let mut stmts: Vec<hir::Stmt> = Vec::new();
+            if s.fields.is_empty() {
+                stmts.push(debug_write_str(
+                    f_sym,
+                    write_str_sym,
+                    name,
+                    string_ty.clone(),
+                    span,
+                ));
+            } else {
+                stmts.push(debug_write_str(
+                    f_sym,
+                    write_str_sym,
+                    format!("{name} {{ "),
+                    string_ty.clone(),
+                    span,
+                ));
+                for (i, fld) in s.fields.iter().enumerate() {
+                    if i > 0 {
+                        stmts.push(debug_write_str(
+                            f_sym,
+                            write_str_sym,
+                            ", ".into(),
+                            string_ty.clone(),
+                            span,
+                        ));
+                    }
+                    let fname = self.interner.resolve(&fld.name).to_string();
+                    stmts.push(debug_write_str(
+                        f_sym,
+                        write_str_sym,
+                        format!("{fname}: "),
+                        string_ty.clone(),
+                        span,
+                    ));
+                    stmts.push(debug_write_field(
+                        write_debug_fid,
+                        f_sym,
+                        self_sym,
+                        fld.name,
+                        span,
+                    ));
+                }
+                stmts.push(debug_write_str(
+                    f_sym,
+                    write_str_sym,
+                    " }".into(),
+                    string_ty.clone(),
+                    span,
+                ));
+            }
+
+            let fid = FuncId(self.functions.len() as u32);
+            let fmt_sym = self.insert_symbol(
+                module,
+                self.interner.get_or_intern("fmt"),
+                SymbolKind::Param,
+            );
+            self.functions.push(Function {
+                id: fid,
+                name: fmt_sym,
+                type_params: Vec::new(),
+                params: vec![
+                    Param {
+                        name: self_sym,
+                        ty: hir::Type::Struct(sid, Vec::new()),
+                        mode: PassMode::View,
+                        span,
+                    },
+                    Param {
+                        name: f_sym,
+                        ty: hir::Type::Struct(formatter_sid, Vec::new()),
+                        mode: PassMode::Edit,
+                        span,
+                    },
+                ],
+                ret: None,
+                body: hir::Block { stmts, expr: None },
+                span,
+                runtime: None,
+            });
+            self.impls
+                .insert((debug_tid, hir::MethodOwner::Struct(sid)), vec![fid]);
         }
     }
 
@@ -2686,4 +2861,70 @@ impl<'a> LoweringContext<'a> {
             ResSymbolKind::Module => SymbolKind::Module,
         }
     }
+}
+
+/// Whether a module path is `std.fmt`, where the `Debug` derive's helpers live.
+fn is_std_fmt(module_name: &[String]) -> bool {
+    module_name.len() == 2 && module_name[0] == "std" && module_name[1] == "fmt"
+}
+
+/// A synthesized (untyped) HIR expression for a derived `Debug` body.
+fn debug_undet(kind: hir::ExprKind, span: SpanId) -> hir::Expr {
+    hir::Expr {
+        kind,
+        ty: hir::Type::Undetermined,
+        span,
+    }
+}
+
+/// `f.write_str("<lit>")` as a statement.
+fn debug_write_str(
+    f_sym: SymbolId,
+    write_str_sym: InternSymbol,
+    lit: String,
+    string_ty: hir::Type,
+    span: SpanId,
+) -> hir::Stmt {
+    // `Str` is the one literal typecheck trusts rather than infers, so it must
+    // carry its `String` type already.
+    let str_lit = hir::Expr {
+        kind: hir::ExprKind::Str(lit),
+        ty: string_ty,
+        span,
+    };
+    hir::Stmt::Expr(debug_undet(
+        hir::ExprKind::MethodCall {
+            receiver: Box::new(debug_undet(hir::ExprKind::Ident(f_sym), span)),
+            method: write_str_sym,
+            args: vec![str_lit],
+            arg_modes: vec![PassMode::View],
+        },
+        span,
+    ))
+}
+
+/// `write_debug(edit f, self.<field>)` as a statement.
+fn debug_write_field(
+    write_debug_fid: FuncId,
+    f_sym: SymbolId,
+    self_sym: SymbolId,
+    field: InternSymbol,
+    span: SpanId,
+) -> hir::Stmt {
+    let field_access = debug_undet(
+        hir::ExprKind::Field {
+            base: Box::new(debug_undet(hir::ExprKind::Ident(self_sym), span)),
+            field,
+        },
+        span,
+    );
+    hir::Stmt::Expr(debug_undet(
+        hir::ExprKind::Call {
+            func: write_debug_fid,
+            type_args: Vec::new(),
+            args: vec![debug_undet(hir::ExprKind::Ident(f_sym), span), field_access],
+            arg_modes: vec![PassMode::Edit, PassMode::View],
+        },
+        span,
+    ))
 }
