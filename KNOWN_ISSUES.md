@@ -147,14 +147,10 @@ later feature).
   *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
   all paths or none).
 
-- **Drop/RAII — `Vec` frees its buffer, but not its elements.** `Vec` now
-  implements `Drop` and frees its backing buffer at scope end (and `from_vec`
-  was fixed to hand off ownership, closing that use-after-free). This is complete
-  for elements with no destructor (`Vec[i32]`, POD — the common case). What
-  remains: a `Vec` of a resource-owning type (`Vec[String]`, `Vec[Vec[_]]`,
-  `Vec` of a `Drop` type) still **leaks each element**, because dropping the
-  elements means running `T`'s destructor on each buffer slot — and there's no
-  way to express that yet (`take *ptr` doesn't parse, so elements can't be moved
-  out to drop). Needs a `drop_in_place[T](ptr)` intrinsic (call the synthesized
-  `drop_T` on a value in place). `String` has the same single-buffer shape but no
-  element destructors, so a `String` `Drop` is the simpler twin of this.
+- **Drop/RAII — `String` still leaks its buffer.** `Vec` now has full RAII: its
+  `Drop` runs each live element's destructor (via `ptr.drop_in_place`) and frees
+  the buffer, so `Vec[Res]`/`Vec[String]`/`Vec[Vec[_]]` no longer leak; `from_vec`
+  hands off ownership (no use-after-free). `String` is the remaining easy twin —
+  it owns a `*mut u8` buffer with no element destructors, so a one-line
+  `impl Drop for String { dealloc(self.data) }` would close its leak (mind the
+  `from_vec` handoff: the `String` owns the buffer the source `Vec` gave up).
