@@ -22,11 +22,12 @@ impl Array[T, N] {
         return N
     }
 
-    // A pointer to element `i`, or `None` if `i` is out of bounds — no panic.
-    // The returned `*mut T` is a place: dereference it to read or write.
-    fn get(view self, i: usize) -> Option[*mut T] {
+    // A borrow of element `i`, or `None` if `i` is out of bounds — no panic.
+    // The returned `view T` is tracked against the array (not a raw pointer).
+    fn get(view self, i: usize) -> Option[view T] {
         if i < N {
-            return Option.Some(add[T](ptr(self), i))
+            let r = view *add[T](ptr(self), i)
+            return Option.Some(r)
         }
         return Option.None
     }

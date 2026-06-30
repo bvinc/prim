@@ -404,6 +404,9 @@ impl<'a> Checker<'a> {
         span: SpanId,
     ) -> Result<(), TypeCheckError> {
         match ty {
+            // A borrow satisfies a bound iff the borrowed type does (you can
+            // render/compare a `view T` exactly when you can a `T`).
+            Type::Ref { inner, .. } => self.check_type_arg_bound(inner, bound, mode, span),
             _ if crate::hir::MethodOwner::of_type(ty)
                 .is_some_and(|owner| self.program.impls.contains_key(&(bound, owner))) =>
             {

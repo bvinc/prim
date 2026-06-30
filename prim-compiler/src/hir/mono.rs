@@ -288,10 +288,15 @@ impl Mono<'_> {
                 for a in args.iter_mut() {
                     self.rewrite_expr(a, subst);
                 }
-                let concrete = subst
+                let mut concrete = subst
                     .get(type_param.0 as usize)
                     .cloned()
                     .unwrap_or_else(|| panic!("unsubstituted type parameter in TraitBoundCall"));
+                // A borrow dispatches through the borrowed type's impl: `view T`
+                // calls `T`'s method (the value is the same handle).
+                while let Type::Ref { inner, .. } = concrete {
+                    concrete = *inner;
+                }
                 let owner = super::MethodOwner::of_type(&concrete).unwrap_or_else(|| {
                     panic!(
                         "TraitBoundCall substituted to non-impl type: {:?}",

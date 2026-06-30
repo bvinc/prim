@@ -1,0 +1,15 @@
+import std.io.println
+import std.option.Option
+
+// Tier B: Array.get returns Option[view T] — a borrow stored inside an
+// aggregate. The borrow is extracted by match; the loan is tracked against the
+// array while the Option is live.
+fn main() {
+    let a: Array[i32, 2] = [11i32, 22i32]
+    let o = a.get(1usize)
+    match o {
+        Option.Some(r) => println(r),    // 22 (the borrowed element)
+        Option.None => println(0i32),
+    }
+    println(a.get(9usize).is_none())     // true
+}

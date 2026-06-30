@@ -135,6 +135,33 @@ struct Loan {
     kind: RefKind,
 }
 
+/// The borrow kind a type carries, if any: a `Ref` directly, or nested inside an
+/// aggregate (`Option[view T]`). `edit` wins over `view` when both appear.
+fn type_ref_kind(ty: &super::Type) -> Option<RefKind> {
+    use super::Type;
+    let mut kind = None;
+    let mut note = |k: RefKind| {
+        if k == RefKind::Mut || kind.is_none() {
+            kind = Some(k);
+        }
+    };
+    fn walk(ty: &Type, note: &mut impl FnMut(RefKind)) {
+        match ty {
+            Type::Ref { kind, inner } => {
+                note(*kind);
+                walk(inner, note);
+            }
+            Type::Struct(_, args) | Type::Enum(_, args) => args.iter().for_each(|t| walk(t, note)),
+            Type::Tuple(elems) => elems.iter().for_each(|t| walk(t, note)),
+            Type::Array(elem, _) => walk(elem, note),
+            Type::Pointer { pointee, .. } => walk(pointee, note),
+            _ => {}
+        }
+    }
+    walk(ty, &mut note);
+    kind
+}
+
 impl Checker<'_> {
     fn emit(&mut self, span_id: SpanId, kind: MoveErrorKind) {
         let (file, span) = self
@@ -406,10 +433,9 @@ impl Checker<'_> {
     /// borrowed parameter — that needs explicit `from`, a later extension).
     fn borrow_provenance(&self, func: FuncId) -> Option<(usize, RefKind)> {
         let f = self.program.functions.get(func.0 as usize)?;
-        let ret_kind = match &f.ret {
-            Some(super::Type::Ref { kind, .. }) => *kind,
-            _ => return None,
-        };
+        // The return is a borrow if it *contains* a `Ref` anywhere — directly
+        // (`-> view T`) or inside an aggregate (`-> Option[view T]`, Tier B).
+        let ret_kind = type_ref_kind(f.ret.as_ref()?)?;
         let mut borrowed = f
             .params
             .iter()
