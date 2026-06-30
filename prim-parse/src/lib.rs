@@ -72,7 +72,7 @@ pub enum Type {
 }
 
 /// The kind of borrow a `view`/`edit` type denotes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefKind {
     /// `view T` — shared read borrow.
     Shared,

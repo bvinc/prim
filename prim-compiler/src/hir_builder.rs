@@ -2813,11 +2813,14 @@ impl<'a> LoweringContext<'a> {
                 mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, module_scope)),
             },
-            // Borrow types are transparent in HIR for now: a parameter's
-            // `view`/`edit` is already captured as its `PassMode`, and no value
-            // yet carries a tracked reference type. (Tier A makes `Ref` a real
-            // HIR type.)
-            Type::Ref { inner, .. } => self.lower_type(inner, module_scope),
+            // A borrow type in a value position (return type, `let`
+            // annotation): a real, tracked `Ref`. Parameters are still unwrapped
+            // to `(PassMode, inner)` by the parser, so this only fires for
+            // non-parameter positions.
+            Type::Ref { kind, inner } => hir::Type::Ref {
+                kind: *kind,
+                inner: Box::new(self.lower_type(inner, module_scope)),
+            },
             Type::SelfType => self
                 .current_self_type
                 .clone()

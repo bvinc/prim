@@ -19,7 +19,8 @@
 //!     ownership checker uses (with and without back-edges) for use-after-move.
 
 use super::{
-    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, SpanId, Stmt, SymbolId, Type,
+    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, RefKind, SpanId, Stmt,
+    SymbolId, Type,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -629,6 +630,9 @@ pub fn is_copy(ty: &Type) -> bool {
             | Type::IntVar
             | Type::FloatVar
             | Type::Undetermined
+            // A shared `view` borrow copies freely (like `&T`); an exclusive
+            // `edit` borrow is unique and does not.
+            | Type::Ref { kind: RefKind::Shared, .. }
     )
 }
 

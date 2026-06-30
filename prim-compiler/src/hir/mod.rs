@@ -1,4 +1,4 @@
-pub use prim_parse::{BinaryOp, InternSymbol, Interner, PassMode};
+pub use prim_parse::{BinaryOp, InternSymbol, Interner, PassMode, RefKind};
 pub use prim_tok::{FileId, ModuleId, Span};
 use std::fmt;
 use std::sync::Arc;
@@ -843,6 +843,16 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
+    /// A borrow: `view T` (shared) or `edit T` (exclusive). Representationally
+    /// transparent — a borrow of an aggregate is its handle, a borrow of a Copy
+    /// scalar is a copy, so `Ref` is laid out, sized, and loaded exactly as its
+    /// inner type. The borrow-ness is a compile-time property enforced by the
+    /// loan checker; the one place `Ref` differs from `inner` is drop — a borrow
+    /// never owns, so it is never dropped.
+    Ref {
+        kind: RefKind,
+        inner: Box<Type>,
+    },
     /// An anonymous product type, `(A, B, ...)`. Structural: two tuples with
     /// the same element types are the same type. Boxed on the heap like a
     /// struct, with positional fields.
@@ -877,6 +887,8 @@ impl Type {
             Type::Bool | Type::I8 | Type::U8 => 1,
             Type::I16 | Type::U16 => 2,
             Type::I64 | Type::U64 | Type::F64 | Type::FloatVar => 8,
+            // A borrow is represented exactly as its inner type.
+            Type::Ref { inner, .. } => inner.size_bytes(),
             _ => 4,
         }
     }
@@ -946,6 +958,13 @@ impl fmt::Display for Type {
                 } else {
                     write!(f, "*const {pointee}")
                 }
+            }
+            Type::Ref { kind, inner } => {
+                let k = match kind {
+                    RefKind::Shared => "view",
+                    RefKind::Mut => "edit",
+                };
+                write!(f, "{k} {inner}")
             }
             Type::Unit => write!(f, "()"),
             Type::IntVar => write!(f, "{{integer}}"),
