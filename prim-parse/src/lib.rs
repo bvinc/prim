@@ -56,11 +56,28 @@ pub enum Type {
     },
     /// An anonymous product type, `(A, B, ...)` with two or more elements.
     Tuple(Vec<Type>),
+    /// A borrow type: `view T` (shared) or `edit T` (exclusive). In a
+    /// parameter position this is unwrapped during lowering into the inner
+    /// type plus a `PassMode`; it carries the borrow as part of the type so the
+    /// same notation works in return and (later) field positions.
+    Ref {
+        kind: RefKind,
+        inner: Box<Type>,
+    },
     /// `Self` (and a bare `self` parameter): the type an `impl`/`trait` is
     /// for. Resolved to the concrete target (in an impl) or the trait type
     /// (in a trait declaration) during HIR lowering.
     SelfType,
     Undetermined, // Type not yet determined during parsing
+}
+
+/// The kind of borrow a `view`/`edit` type denotes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    /// `view T` — shared read borrow.
+    Shared,
+    /// `edit T` — exclusive mutable borrow.
+    Mut,
 }
 
 /// An expression with its span and type.

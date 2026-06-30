@@ -101,7 +101,7 @@ fn park_on_write(fd: i32) {
 // layout (48 bytes): userdata@0, eventtype@8, then the variant — clock is
 // id@16/timeout@24/precision@32/flags@40; fd read/write is fd@16. Called only
 // when no task is currently runnable.
-fn poll_parked(edit kind: Vec[i32], deadline: Vec[u64], fd: Vec[i32]) {
+fn poll_parked(kind: edit Vec[i32], deadline: view Vec[u64], fd: view Vec[i32]) {
     let n = task_count()
     let mut nsubs = 0usize
     let mut i = 0usize

@@ -5,7 +5,7 @@ impl Drop for R {
     fn drop(edit self) { println(self.id) }
 }
 
-fn sink(take r: R) {}
+fn sink(r: R) {}
 
 fn main() {
     let r = R { id = 1 }

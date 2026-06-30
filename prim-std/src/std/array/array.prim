@@ -14,7 +14,7 @@ import std.option.Option
 
 // A pointer to the array's first element. No-op reinterpret at the wasm level.
 @runtime("prim_rt_array_ptr")
-fn ptr[T, const N: usize](view a: Array[T, N]) -> *mut T;
+fn ptr[T, const N: usize](a: view Array[T, N]) -> *mut T;
 
 impl Array[T, N] {
     // The number of elements (a compile-time constant).

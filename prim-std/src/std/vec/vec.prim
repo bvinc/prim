@@ -35,11 +35,11 @@ fn new[T]() -> Vec[T] {
     return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
 }
 
-fn len[T](view v: Vec[T]) -> usize {
+fn len[T](v: view Vec[T]) -> usize {
     return v.len
 }
 
-fn push[T](edit v: Vec[T], take value: T) {
+fn push[T](v: edit Vec[T], value: T) {
     if v.len == v.cap {
         let mut new_cap = 4usize
         if v.cap != 0usize {
@@ -52,14 +52,14 @@ fn push[T](edit v: Vec[T], take value: T) {
     v.len = v.len + 1
 }
 
-fn get[T](view v: Vec[T], i: usize) -> T {
+fn get[T](v: view Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
     return *add[T](v.ptr, i)
 }
 
-fn set[T](edit v: Vec[T], i: usize, take value: T) {
+fn set[T](v: edit Vec[T], i: usize, value: T) {
     if i >= v.len {
         panic("Vec.set: index out of bounds")
     }

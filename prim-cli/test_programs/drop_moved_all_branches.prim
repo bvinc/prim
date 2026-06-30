@@ -5,9 +5,9 @@ impl Drop for R {
     fn drop(edit self) { println(self.id) }
 }
 
-fn sink(take r: R) {}
+fn sink(r: R) {}
 
-fn route(c: bool, take r: R) {
+fn route(c: bool, r: R) {
     if c {
         sink(take r)
     } else {

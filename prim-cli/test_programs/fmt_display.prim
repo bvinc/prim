@@ -8,7 +8,7 @@ import std.fmt.Formatter
 struct Pair { a: u64, b: u64 }
 
 impl Display for Pair {
-    fn fmt(view self, edit f: Formatter) {
+    fn fmt(view self, f: edit Formatter) {
         f.write_str("(")
         f.write_u64(self.a)
         f.write_str(", ")

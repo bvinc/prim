@@ -7,7 +7,7 @@ impl Drop for R {
 
 // A resource moved (`take`) into a callee is dropped by the callee, not the
 // caller — exactly once.
-fn consume(take r: R) {
+fn consume(r: R) {
     println(9i32)
 }
 

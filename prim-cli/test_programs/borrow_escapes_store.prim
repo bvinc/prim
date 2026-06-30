@@ -1,7 +1,7 @@
 struct S { n: i32 }
 struct Box { s: S }
 
-fn stash(view s: S) -> Box {
+fn stash(s: view S) -> Box {
     return Box { s = s }
 }
 

@@ -403,9 +403,14 @@ impl BorrowWalk<'_, '_> {
                     }
                 }
             }
-            // Rule 7: non-Copy params must be passed with the declared mode.
-            if let Some((decl_mode, copy)) = param_modes.get(i).copied() {
-                if !copy && mode != decl_mode {
+            // Rule 7: a non-Copy *place* argument must be passed with the
+            // parameter's declared mode — so an owned (`take`) parameter forces
+            // an explicit `take` at the call, and a borrow forces `view`/`edit`.
+            // Copy arguments ignore modes (keyed on the argument's actual type).
+            // A temporary (rvalue — literal, constructor or call result) has no
+            // place to move from, so any mode is fine.
+            if let Some((decl_mode, _)) = param_modes.get(i).copied() {
+                if root_symbol(arg).is_some() && !is_copy(&arg.ty) && mode != decl_mode {
                     self.chk.emit(arg.span, MoveErrorKind::ModeMismatch);
                 }
             }

@@ -6,7 +6,7 @@ impl Drop for R {
 }
 
 // A `view` borrow does not drop the resource; only its owner does, once.
-fn inspect(view r: R) -> i32 {
+fn inspect(r: view R) -> i32 {
     return r.id
 }
 

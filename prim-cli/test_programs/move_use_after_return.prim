@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn f(take s: S) -> S {
+fn f(s: S) -> S {
     let take r = s
     return s
 }

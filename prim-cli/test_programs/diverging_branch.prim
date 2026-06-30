@@ -2,11 +2,11 @@ import std.io.println
 
 struct S { n: i32 }
 
-fn sink(take s: S) -> i32 { return s.n }
+fn sink(s: S) -> i32 { return s.n }
 
 // A branch that always returns doesn't contribute its move to the join, so
 // the value is still live on the path that continues.
-fn pick(take a: S, cond: bool) -> i32 {
+fn pick(a: S, cond: bool) -> i32 {
     if cond {
         return sink(take a)
     }

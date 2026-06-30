@@ -9,7 +9,7 @@ struct Inner { id: i32 }
 impl Drop for Inner { fn drop(edit self) { println(self.id) } }
 struct Outer { inner: Inner, tag: i32 }
 
-fn take_inner(take o: Outer) -> Inner {
+fn take_inner(o: Outer) -> Inner {
     let take r = o.inner
     return r
 }

@@ -36,7 +36,7 @@ impl Option {
     }
 
     // Extract the value, or return `default` if there is none.
-    fn unwrap_or(take self, take default: T) -> T {
+    fn unwrap_or(take self, default: T) -> T {
         return match self {
             Option.Some(take v) => v,
             Option.None => default,

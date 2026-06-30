@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
     BinaryOp, Block, ConstArg, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
-    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, Severity, Span,
-    Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
+    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, RefKind,
+    Severity, Span, Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -1425,17 +1425,29 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
-        // Optional leading passing mode: `edit v: Vec[T]`. The keyword precedes
-        // the parameter name; a bare parameter defaults to `View`.
-        let mode = self.parse_pass_mode();
-
         let name_span = self
             .consume(TokenKind::Identifier, "Expected parameter name")?
             .span;
         let name = self.ident(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
-        let type_annotation = self.parse_type()?;
+        let ty = self.parse_type()?;
+
+        // The passing mode is part of the type: `v: view Vec[T]` borrows,
+        // `v: edit Vec[T]` mutably borrows, a bare `v: Vec[T]` is owned (moved
+        // in). The borrow is unwrapped here so the rest of the pipeline keeps
+        // seeing `{ mode, inner type }`.
+        let (mode, type_annotation) = match ty {
+            Type::Ref {
+                kind: RefKind::Shared,
+                inner,
+            } => (PassMode::View, *inner),
+            Type::Ref {
+                kind: RefKind::Mut,
+                inner,
+            } => (PassMode::Edit, *inner),
+            other => (PassMode::Take, other),
+        };
 
         Ok(Parameter {
             name,
@@ -1448,6 +1460,21 @@ impl<'a> Parser<'a> {
         let kind = self.peek_kind().ok_or(ParseError::UnexpectedEof {
             span: self.current_span(),
         })?;
+
+        // Borrow types: `view T` (shared) / `edit T` (exclusive). `take` is not
+        // a type — it's the move operator at call sites.
+        if let Some(rk) = match kind {
+            TokenKind::View => Some(RefKind::Shared),
+            TokenKind::Edit => Some(RefKind::Mut),
+            _ => None,
+        } {
+            self.advance();
+            let inner = self.parse_type()?;
+            return Ok(Type::Ref {
+                kind: rk,
+                inner: Box::new(inner),
+            });
+        }
 
         // Handle primitive types with a simple lookup
         if let Some(ty) = token_to_primitive_type(kind) {

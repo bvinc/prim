@@ -3,7 +3,7 @@ import std.io.println
 struct S { n: i32 }
 
 // A `view` borrow may read the value repeatedly; the caller keeps ownership.
-fn read_twice(view s: S) -> i32 {
+fn read_twice(s: view S) -> i32 {
     return s.n + s.n
 }
 

@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn two(edit x: S, edit y: S) {
+fn two(x: edit S, y: edit S) {
     x.n = 1i32
     y.n = 2i32
 }

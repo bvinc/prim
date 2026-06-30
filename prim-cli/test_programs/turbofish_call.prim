@@ -3,7 +3,7 @@ import std.io.println
 // Explicit type arguments on a call (turbofish) for an ordinary generic
 // function — the same f[T](args) syntax used by size_of, here pinning T
 // directly instead of relying on inference.
-fn identity[T](take x: T) -> T {
+fn identity[T](x: T) -> T {
     return x
 }
 

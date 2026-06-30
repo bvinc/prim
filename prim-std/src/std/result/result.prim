@@ -38,7 +38,7 @@ impl Result {
     }
 
     // Extract the success value, or return `default` if it is an `Err`.
-    fn unwrap_or(take self, take default: T) -> T {
+    fn unwrap_or(take self, default: T) -> T {
         return match self {
             Result.Ok(take v) => v,
             Result.Err(_) => default,

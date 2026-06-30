@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn leak(view s: S) -> S {
+fn leak(s: view S) -> S {
     return s
 }
 
