@@ -73,23 +73,28 @@ later feature).
   `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
   `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
-- **Borrows — Tier A done; Tier B (refs in aggregates) remains.** `view T` /
-  `edit T` are real, tracked reference types: borrow expressions (`view place` /
-  `edit place`), a function may *return* a borrow (provenance by elision — the
-  sole borrowed parameter), and a **lexical loan checker** enforces
-  shared-xor-mutable (can't mutate or re-borrow a value while it's borrowed;
-  release a borrow with an inner `{ }`). `Vec.at(v,i) -> view T` /
-  `at_mut -> edit T` return a tracked borrow into the buffer instead of a raw
-  `*mut T`. Remaining (Tier B and polish):
-  - **Refs in aggregates** — `Option[view T]`, a struct/Vec field of `view T`.
-    This is the lifetime-parameterized-types jump; it's what `Array.get` needs to
-    return `Option[view T]` (it still returns `Option[*mut T]` today).
-  - **Auto-deref in value contexts** — `view i32` doesn't yet act as `i32` in
-    arithmetic/args, so `Vec.get` still returns a copy rather than a borrow;
-    field *assignment* through an `edit` borrow (`at_mut(v,i).f = x`) isn't wired
-    (only field *reads* auto-deref).
-  - **NLL** — borrows are lexical (live to scope end); non-lexical liveness is a
-    strict, backward-compatible upgrade on the same checker.
+- **Borrows — Tier A + lexical Tier B done; full lifetime-parameterized types
+  remain.** `view T` / `edit T` are real, tracked reference types: borrow
+  expressions (`view place` / `edit place`), a function may *return* a borrow
+  (provenance by elision — the sole borrowed parameter, detected even when the
+  `Ref` is nested in the return type), a borrow may live **inside an aggregate**
+  (`Option[view T]` constructs/matches/reads), and a **lexical loan checker**
+  enforces shared-xor-mutable (can't mutate or re-borrow a value while it's
+  borrowed; the loan lasts the holder's scope; release with an inner `{ }`).
+  `Vec.at`/`at_mut` and `Array.get -> Option[view T]` return tracked borrows
+  instead of raw `*mut T`. A borrowed value is usable where the borrowed type's
+  bound is needed (`view i32` satisfies/dispatches `Display`). Remaining:
+  - **Escaping/long-lived holders** — a borrow stored in a container that
+    *outlives its source* (a returned struct-with-ref, a `Vec[view T]` that
+    escapes) needs lifetime *parameters* on the type. The lexical loan covers
+    holders that don't outlive the source; this is the genuine larger stage.
+  - **Polish** — `view i32` in *arithmetic* (`a + view_i32`) isn't coerced yet
+    (so `Vec.get` still returns a copy); field *assignment* through an `edit`
+    borrow (`at_mut(v,i).f = x`); an inline borrow expr in constructor position
+    (`Some(view x)` parses `view` as an arg mode — bind to a local first);
+    aggregate *array* elements (inline stride) in `Array.get`.
+  - **NLL** — borrows are lexical; non-lexical liveness is a strict,
+    backward-compatible upgrade on the same checker.
   - **Multiple borrowed params** — elision is single-source; more than one needs
     explicit `view from <param>` provenance.
 
