@@ -358,6 +358,7 @@ impl Insert<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
+            ExprKind::Borrow { place, .. } => self.expr(place),
             ExprKind::Coerce { value, .. } => self.expr(value),
             ExprKind::Int(_)
             | ExprKind::Float(_)
@@ -525,6 +526,7 @@ impl Filter<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
+            ExprKind::Borrow { place, .. } => self.expr(place),
             ExprKind::Coerce { value, .. } => self.expr(value),
             ExprKind::MethodCall { receiver, args, .. }
             | ExprKind::TraitBoundCall { receiver, args, .. } => {

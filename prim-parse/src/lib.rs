@@ -152,6 +152,12 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
+    /// A borrow expression: `view place` (shared) or `edit place` (exclusive).
+    /// Produces a `view T` / `edit T` value tracked by the loan checker.
+    Borrow {
+        kind: RefKind,
+        place: Box<Expr>,
+    },
     /// A tuple literal, `(a, b, ...)` with two or more elements.
     Tuple(Vec<Expr>),
     /// Positional tuple access, `tuple.0`.

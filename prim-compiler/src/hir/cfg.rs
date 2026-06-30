@@ -571,6 +571,7 @@ impl Builder<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.read(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.read(e),
+            ExprKind::Borrow { place, .. } => self.read(place),
             ExprKind::Coerce { value, .. } => self.read(value),
             // Typecheck rewrites every `MethodCall` to `Call`/`DynCall`/
             // `TraitBoundCall` before either consumer runs; handle the leftover

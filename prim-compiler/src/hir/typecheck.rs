@@ -1318,6 +1318,16 @@ impl<'a> Checker<'a> {
                 *ty = Type::Usize;
                 Ok(Type::Usize)
             }
+            // `view place` / `edit place` — borrow a place, yielding `Ref<inner>`.
+            ExprKind::Borrow { kind, place } => {
+                let inner = self.check_expr(place, locals)?;
+                let ref_ty = Type::Ref {
+                    kind: *kind,
+                    inner: Box::new(inner),
+                };
+                *ty = ref_ty.clone();
+                Ok(ref_ty)
+            }
             // `spawn(f)` yields the new task's handle.
             ExprKind::Spawn { .. } => {
                 *ty = Type::Usize;
@@ -1935,6 +1945,12 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Field { base, field } => {
                 let base_ty = self.check_expr(base, locals)?;
+                // Auto-deref a borrow: `r.field` on a `view T`/`edit T` reads the
+                // field of `T` (a borrow is transparent for member access).
+                let base_ty = match base_ty {
+                    Type::Ref { inner, .. } => *inner,
+                    t => t,
+                };
                 let (struct_id, base_type_args) = match base_ty {
                     Type::Struct(id, args) => (id, args),
                     // A field access on a non-struct value is a type error. It

@@ -287,6 +287,24 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::Ident(self.ident(span)),
             });
         }
+        // Borrow expressions: `view place` / `edit place`.
+        if let Some(rk) = match self.peek_kind() {
+            Some(TokenKind::View) => Some(RefKind::Shared),
+            Some(TokenKind::Edit) => Some(RefKind::Mut),
+            _ => None,
+        } {
+            let kw = self.advance().span;
+            let place = self.parse_prefix()?;
+            let span = kw.cover(place.span);
+            return Ok(Expr {
+                span,
+                ty: Type::Undetermined,
+                kind: ExprKind::Borrow {
+                    kind: rk,
+                    place: Box::new(place),
+                },
+            });
+        }
         match self.peek_kind() {
             Some(TokenKind::IntLiteral) => {
                 let span = self.advance().span;

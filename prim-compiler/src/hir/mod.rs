@@ -676,6 +676,14 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
+    /// A borrow of a place: `view place` / `edit place`. Yields a `Type::Ref`.
+    /// Representationally it is just the place's value (the handle for an
+    /// aggregate, a copy for a scalar); its purpose is to carry borrow
+    /// provenance to the loan checker.
+    Borrow {
+        kind: RefKind,
+        place: Box<Expr>,
+    },
     /// A tuple literal, `(a, b, ...)`.
     TupleLit(Vec<Expr>),
     /// Positional tuple access, `tuple.index`.

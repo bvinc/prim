@@ -587,6 +587,9 @@ fn scalar_disqualify_expr(
         hir::ExprKind::Deref(e) | hir::ExprKind::BitNot(e) | hir::ExprKind::Neg(e) => {
             scalar_disqualify_expr(e, scalar_abi, ret_scalar, disq)
         }
+        hir::ExprKind::Borrow { place, .. } => {
+            scalar_disqualify_expr(place, scalar_abi, ret_scalar, disq)
+        }
         hir::ExprKind::Coerce { value, .. } => {
             scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq)
         }
@@ -999,7 +1002,13 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 f.instruction(&Instruction::LocalGet(local));
             } else {
                 emit_expr(f, base, ctx)?;
-                let struct_id = match &base.ty {
+                // A borrow is represented as its inner handle, so field access
+                // sees through it.
+                let base_ty = match &base.ty {
+                    hir::Type::Ref { inner, .. } => inner.as_ref(),
+                    t => t,
+                };
+                let struct_id = match base_ty {
                     hir::Type::Struct(id, _) => *id,
                     _ => {
                         return Err(WasmError::Internal(
@@ -1216,6 +1225,12 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                     ));
                 }
             }
+        }
+        // A borrow is representationally transparent: emit the place's value
+        // (the handle for an aggregate, a copy for a scalar). The borrow-ness is
+        // a compile-time property the loan checker enforced earlier.
+        hir::ExprKind::Borrow { place, .. } => {
+            emit_expr(f, place, ctx)?;
         }
         hir::ExprKind::Neg(operand) => {
             // Floats have a dedicated negate; integers have none, so subtract

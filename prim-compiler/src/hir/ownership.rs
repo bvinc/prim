@@ -552,6 +552,7 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
         }
         ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => v.visit_expr(base),
         ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => v.visit_expr(e),
+        ExprKind::Borrow { place, .. } => v.visit_expr(place),
         ExprKind::Coerce { value, .. } => v.visit_expr(value),
         ExprKind::Match { scrutinee, arms } => {
             v.visit_expr(scrutinee);

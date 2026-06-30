@@ -2347,6 +2347,20 @@ impl<'a> LoweringContext<'a> {
                 ))),
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::Borrow { kind, place } => {
+                let lowered = self.lower_expr(place, module, file_id, ast, module_scope);
+                let inner = lowered.ty.clone();
+                (
+                    hir::ExprKind::Borrow {
+                        kind: *kind,
+                        place: Box::new(lowered),
+                    },
+                    hir::Type::Ref {
+                        kind: *kind,
+                        inner: Box::new(inner),
+                    },
+                )
+            }
             ExprKind::Array(elements) => (
                 hir::ExprKind::ArrayLit(
                     elements
