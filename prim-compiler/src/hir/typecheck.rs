@@ -342,6 +342,10 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params(t, pins))
                     .collect(),
             ),
+            Type::Ref { kind, inner } => Type::Ref {
+                kind: *kind,
+                inner: Box::new(Self::substitute_params(inner, pins)),
+            },
             _ => ty.clone(),
         }
     }
@@ -377,6 +381,10 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params_with_slice(t, args))
                     .collect(),
             ),
+            Type::Ref { kind, inner } => Type::Ref {
+                kind: *kind,
+                inner: Box::new(Self::substitute_params_with_slice(inner, args)),
+            },
             _ => ty.clone(),
         }
     }

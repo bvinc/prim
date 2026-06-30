@@ -59,6 +59,23 @@ fn get[T](v: view Vec[T], i: usize) -> T {
     return *add[T](v.ptr, i)
 }
 
+// Borrow element i in place: `at` for a shared view, `at_mut` for exclusive
+// mutation. The returned borrow is tracked against the vector, so the vector
+// cannot be mutated (e.g. pushed) while the borrow is live.
+fn at[T](v: view Vec[T], i: usize) -> view T {
+    if i >= v.len {
+        panic("Vec.at: index out of bounds")
+    }
+    return view *add[T](v.ptr, i)
+}
+
+fn at_mut[T](v: edit Vec[T], i: usize) -> edit T {
+    if i >= v.len {
+        panic("Vec.at_mut: index out of bounds")
+    }
+    return edit *add[T](v.ptr, i)
+}
+
 fn set[T](v: edit Vec[T], i: usize, value: T) {
     if i >= v.len {
         panic("Vec.set: index out of bounds")

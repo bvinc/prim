@@ -1,0 +1,16 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.at
+
+// Holding a borrow into the vector forbids mutating the vector (which could
+// reallocate and dangle the borrow).
+struct Item { v: i32 }
+
+fn main() {
+    let mut items = new[Item]()
+    push(edit items, take Item { v = 7i32 })
+    let r = at(items, 0usize)
+    push(edit items, take Item { v = 9i32 })
+    println(r.v)
+}

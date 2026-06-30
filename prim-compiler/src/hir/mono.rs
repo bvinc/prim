@@ -468,6 +468,10 @@ impl Mono<'_> {
                 mutable: *mutable,
                 pointee: Box::new(self.substitute_type(pointee, subst)),
             },
+            Type::Ref { kind, inner } => Type::Ref {
+                kind: *kind,
+                inner: Box::new(self.substitute_type(inner, subst)),
+            },
             Type::Array(elem, n) => Type::Array(
                 Box::new(self.substitute_type(elem, subst)),
                 Box::new(self.substitute_type(n, subst)),

@@ -291,10 +291,23 @@ impl Checker<'_> {
         match stmt {
             Stmt::Let { value, .. } => {
                 self.loans_expr(value, active);
-                if let ExprKind::Borrow { kind, place } = &value.kind {
-                    if let Some(root) = root_symbol(place) {
-                        active.push(Loan { root, kind: *kind });
+                match &value.kind {
+                    // A direct borrow of a place opens a loan of that place.
+                    ExprKind::Borrow { kind, place } => {
+                        if let Some(root) = root_symbol(place) {
+                            active.push(Loan { root, kind: *kind });
+                        }
                     }
+                    // A call that returns a borrow opens a loan of the argument
+                    // the borrow comes from (elision: the sole borrowed param).
+                    ExprKind::Call { func, args, .. } => {
+                        if let Some((idx, kind)) = self.borrow_provenance(*func) {
+                            if let Some(root) = args.get(idx).and_then(root_symbol) {
+                                active.push(Loan { root, kind });
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Stmt::Assign { target, value, .. } => {
@@ -384,6 +397,29 @@ impl Checker<'_> {
             // literals, dyn/trait calls) carry no held borrows in Tier A.
             _ => {}
         }
+    }
+
+    /// Where a borrow-returning function's result comes from (elision). If the
+    /// return type is a `Ref`, the provenance is the sole borrowed (`view`/
+    /// `edit`) parameter; the loan kind is the return borrow's kind. `None` if
+    /// the function doesn't return a borrow, or it's ambiguous (more than one
+    /// borrowed parameter — that needs explicit `from`, a later extension).
+    fn borrow_provenance(&self, func: FuncId) -> Option<(usize, RefKind)> {
+        let f = self.program.functions.get(func.0 as usize)?;
+        let ret_kind = match &f.ret {
+            Some(super::Type::Ref { kind, .. }) => *kind,
+            _ => return None,
+        };
+        let mut borrowed = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(p.mode, PassMode::View | PassMode::Edit));
+        let (idx, _) = borrowed.next()?;
+        if borrowed.next().is_some() {
+            return None;
+        }
+        Some((idx, ret_kind))
     }
 
     fn check_mutate(&mut self, root: SymbolId, span: SpanId, active: &[Loan]) {
