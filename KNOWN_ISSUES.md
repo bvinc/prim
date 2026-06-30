@@ -73,16 +73,25 @@ later feature).
   `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
   `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
-- **Expression-scoped borrows (non-storable places).** TODO: a `place T` value
-  usable only *within the expression that produces it* — never bound to a `let`
-  or stored in a field. Because it can't escape, dereferencing it is safe
-  *without lifetimes and without exposing raw pointers* — the return-position
-  dual of `view`/`edit` (which are call-scoped *parameter* borrows). This is the
-  intended safe form of accessors like `Array.get(i) -> place T` / a future
-  `Option[place T]`, replacing the raw `*mut T` they return today (which can
-  dangle — same hole as the `from_vec` issue). A first-class, *storable*
-  borrow-checked reference is the larger lifetimes stage; this is the smaller,
-  escape-free subset.
+- **Borrows — Tier A done; Tier B (refs in aggregates) remains.** `view T` /
+  `edit T` are real, tracked reference types: borrow expressions (`view place` /
+  `edit place`), a function may *return* a borrow (provenance by elision — the
+  sole borrowed parameter), and a **lexical loan checker** enforces
+  shared-xor-mutable (can't mutate or re-borrow a value while it's borrowed;
+  release a borrow with an inner `{ }`). `Vec.at(v,i) -> view T` /
+  `at_mut -> edit T` return a tracked borrow into the buffer instead of a raw
+  `*mut T`. Remaining (Tier B and polish):
+  - **Refs in aggregates** — `Option[view T]`, a struct/Vec field of `view T`.
+    This is the lifetime-parameterized-types jump; it's what `Array.get` needs to
+    return `Option[view T]` (it still returns `Option[*mut T]` today).
+  - **Auto-deref in value contexts** — `view i32` doesn't yet act as `i32` in
+    arithmetic/args, so `Vec.get` still returns a copy rather than a borrow;
+    field *assignment* through an `edit` borrow (`at_mut(v,i).f = x`) isn't wired
+    (only field *reads* auto-deref).
+  - **NLL** — borrows are lexical (live to scope end); non-lexical liveness is a
+    strict, backward-compatible upgrade on the same checker.
+  - **Multiple borrowed params** — elision is single-source; more than one needs
+    explicit `view from <param>` provenance.
 
 - **By-value aggregates — a direct struct/tuple literal at a scalar-ABI
   boundary still boxes.** Small POD aggregates cross parameter and return
