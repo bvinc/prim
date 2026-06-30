@@ -24,7 +24,9 @@
 //! Modes are erased after this pass; mono/codegen ignore them.
 
 use super::cfg::{self, Action, Effect, effect, is_copy, root_symbol};
-use super::{Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId};
+use super::{
+    Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, RefKind, SpanId, Stmt, SymbolId,
+};
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -59,6 +61,12 @@ pub enum MoveErrorKind {
     /// explicit (`take`); borrowing it out (`view`/`edit`) awaits lifetimes.
     /// Ignore it with `_` to neither.
     BindWithoutTake,
+    /// A place was mutated (assigned, field-assigned, or passed `edit`/`take`)
+    /// while a borrow of it was still live.
+    MutateWhileBorrowed,
+    /// A place was borrowed while it was already exclusively (`edit`) borrowed,
+    /// or `edit`-borrowed while any borrow of it was live.
+    BorrowConflict,
 }
 
 impl std::fmt::Display for MoveError {
@@ -81,6 +89,12 @@ impl std::fmt::Display for MoveError {
                 "cannot bind a non-Copy value out of a place without `take`; \
                  use `take` to move it out, or `_` to ignore it"
             ),
+            MoveErrorKind::MutateWhileBorrowed => {
+                write!(f, "cannot mutate a value while it is borrowed")
+            }
+            MoveErrorKind::BorrowConflict => {
+                write!(f, "cannot borrow a value that is already borrowed")
+            }
         }
     }
 }
@@ -97,6 +111,7 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
         checker.check_moves(func);
         checker.check_borrows(func);
         checker.check_take_modes(func);
+        checker.check_loans(func);
         errors.append(&mut checker.errors);
     }
     // Report deterministically: earliest span first.
@@ -110,6 +125,14 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
 struct Checker<'a> {
     program: &'a Program,
     errors: Vec<MoveError>,
+}
+
+/// A live borrow: the root place it borrows and whether it is shared or
+/// exclusive. Held on a stack that mirrors lexical scope nesting.
+#[derive(Clone, Copy)]
+struct Loan {
+    root: SymbolId,
+    kind: RefKind,
 }
 
 impl Checker<'_> {
@@ -237,6 +260,147 @@ impl Checker<'_> {
             view_params,
         }
         .visit_block(&func.body);
+    }
+
+    // ---- lexical loan checker (Tier A borrows) ------------------------------
+
+    /// Enforce shared-xor-mutable for borrows held in locals. A `let r = view x`
+    /// / `let r = edit x` opens a loan of `x` that lives to the end of its
+    /// enclosing block; while it is live, `x` may not be mutated (assigned,
+    /// field-assigned, or passed `edit`/`take`), and an `edit` loan additionally
+    /// forbids any further borrow of `x`. Lexical, so the active loans are just
+    /// the stack of not-yet-closed scopes — no dataflow.
+    fn check_loans(&mut self, func: &super::Function) {
+        let mut active: Vec<Loan> = Vec::new();
+        self.loans_block(&func.body, &mut active);
+    }
+
+    fn loans_block(&mut self, block: &Block, active: &mut Vec<Loan>) {
+        let base = active.len();
+        for stmt in &block.stmts {
+            self.loans_stmt(stmt, active);
+        }
+        if let Some(e) = &block.expr {
+            self.loans_expr(e, active);
+        }
+        // Loans opened in this block close at its end.
+        active.truncate(base);
+    }
+
+    fn loans_stmt(&mut self, stmt: &Stmt, active: &mut Vec<Loan>) {
+        match stmt {
+            Stmt::Let { value, .. } => {
+                self.loans_expr(value, active);
+                if let ExprKind::Borrow { kind, place } = &value.kind {
+                    if let Some(root) = root_symbol(place) {
+                        active.push(Loan { root, kind: *kind });
+                    }
+                }
+            }
+            Stmt::Assign { target, value, .. } => {
+                self.loans_expr(value, active);
+                self.check_mutate(*target, value.span, active);
+            }
+            Stmt::FieldAssign { object, value, .. } => {
+                self.loans_expr(value, active);
+                self.loans_expr(object, active);
+                if let Some(root) = root_symbol(object) {
+                    self.check_mutate(root, object.span, active);
+                }
+            }
+            Stmt::DerefAssign { ptr, value, .. } => {
+                self.loans_expr(ptr, active);
+                self.loans_expr(value, active);
+            }
+            Stmt::Expr(e) => self.loans_expr(e, active),
+            Stmt::Return { value: Some(e), .. } => self.loans_expr(e, active),
+            Stmt::Loop { body, .. } => self.loans_block(body, active),
+            Stmt::While {
+                condition, body, ..
+            } => {
+                self.loans_expr(condition, active);
+                self.loans_block(body, active);
+            }
+            Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
+        }
+    }
+
+    fn loans_expr(&mut self, expr: &Expr, active: &mut Vec<Loan>) {
+        match &expr.kind {
+            ExprKind::Borrow { kind, place } => {
+                if let Some(root) = root_symbol(place) {
+                    self.check_borrow(root, *kind, expr.span, active);
+                }
+                self.loans_expr(place, active);
+            }
+            ExprKind::Call {
+                args, arg_modes, ..
+            } => {
+                for (i, a) in args.iter().enumerate() {
+                    let mode = arg_modes.get(i).copied().unwrap_or(PassMode::View);
+                    if matches!(mode, PassMode::Edit | PassMode::Take) {
+                        if let Some(root) = root_symbol(a) {
+                            self.check_mutate(root, a.span, active);
+                        }
+                    }
+                    self.loans_expr(a, active);
+                }
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.loans_expr(condition, active);
+                self.loans_block(then_branch, active);
+                if let Some(b) = else_branch {
+                    self.loans_block(b, active);
+                }
+            }
+            ExprKind::Block(b) => self.loans_block(b, active),
+            ExprKind::Match { scrutinee, arms } => {
+                self.loans_expr(scrutinee, active);
+                for arm in arms {
+                    self.loans_expr(&arm.body, active);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.loans_expr(left, active);
+                self.loans_expr(right, active);
+            }
+            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
+                self.loans_expr(base, active)
+            }
+            ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => {
+                self.loans_expr(e, active)
+            }
+            ExprKind::Coerce { value, .. } => self.loans_expr(value, active),
+            ExprKind::TupleLit(es) | ExprKind::ArrayLit(es) => {
+                for e in es {
+                    self.loans_expr(e, active);
+                }
+            }
+            // Leaves and Tier-B shapes (literals, idents, struct/variant
+            // literals, dyn/trait calls) carry no held borrows in Tier A.
+            _ => {}
+        }
+    }
+
+    fn check_mutate(&mut self, root: SymbolId, span: SpanId, active: &[Loan]) {
+        if active.iter().any(|l| l.root == root) {
+            self.emit(span, MoveErrorKind::MutateWhileBorrowed);
+        }
+    }
+
+    fn check_borrow(&mut self, root: SymbolId, kind: RefKind, span: SpanId, active: &[Loan]) {
+        // An `edit` loan is exclusive (any further borrow conflicts); a new
+        // `edit` borrow conflicts with any existing loan of the same place.
+        let conflict = active
+            .iter()
+            .any(|l| l.root == root && (l.kind == RefKind::Mut || kind == RefKind::Mut));
+        if conflict {
+            self.emit(span, MoveErrorKind::BorrowConflict);
+        }
     }
 
     fn func_param_modes(&self, func: FuncId) -> Vec<(PassMode, bool)> {

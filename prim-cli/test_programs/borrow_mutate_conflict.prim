@@ -1,0 +1,7 @@
+struct P { x: i32 }
+fn main() {
+    let mut p = P { x = 5i32 }
+    let r = view p
+    p.x = 10i32
+    let z = r.x
+}
