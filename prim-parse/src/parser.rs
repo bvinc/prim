@@ -925,6 +925,20 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Optional provenance clause: `-> T from param` names the parameter a
+        // returned borrow is derived from.
+        let provenance = if self.consume_optional(TokenKind::From) {
+            let span = self
+                .consume(
+                    TokenKind::Identifier,
+                    "Expected parameter name after `from`",
+                )?
+                .span;
+            Some(self.ident(span))
+        } else {
+            None
+        };
+
         // Validate attributes on function
         if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
@@ -968,6 +982,7 @@ impl<'a> Parser<'a> {
             type_params,
             parameters,
             return_type,
+            provenance,
             body,
             runtime_binding: runtime,
             is_entry,
@@ -1263,6 +1278,17 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            let provenance = if self.consume_optional(TokenKind::From) {
+                let span = self
+                    .consume(
+                        TokenKind::Identifier,
+                        "Expected parameter name after `from`",
+                    )?
+                    .span;
+                Some(self.ident(span))
+            } else {
+                None
+            };
             // `@runtime` methods are bodyless declarations terminated by `;`;
             // everything else uses parse_block so trailing expressions are
             // preserved (same as regular function bodies).
@@ -1293,6 +1319,7 @@ impl<'a> Parser<'a> {
                 name: mname,
                 parameters,
                 return_type,
+                provenance,
                 body,
                 runtime,
             });

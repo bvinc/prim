@@ -50,6 +50,9 @@ pub enum TokenKind {
     /// from the `read` access keyword: `view` classifies a type as holding a
     /// borrow, `read` is a shared-borrow mode.
     View,
+    /// The `from` provenance clause on a return type: `-> T from param` names
+    /// the parameter a returned borrow is derived from.
+    From,
 
     // Types
     U8,
@@ -556,6 +559,7 @@ impl<'a> Tokenizer<'a> {
             "read" => TokenKind::Read,
             "take" => TokenKind::Take,
             "view" => TokenKind::View,
+            "from" => TokenKind::From,
             "u8" => TokenKind::U8,
             "i8" => TokenKind::I8,
             "u16" => TokenKind::U16,

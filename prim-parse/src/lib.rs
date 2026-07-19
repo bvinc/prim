@@ -428,6 +428,11 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
+    /// The parameter a returned borrow is derived from, named by a trailing
+    /// `from <param>` clause (`-> read T from v`). `None` uses elision (the sole
+    /// borrowed parameter). Provenance lets a returned view be tracked against
+    /// its source in the caller.
+    pub provenance: Option<Ident>,
     pub body: Block,
     pub runtime_binding: Option<String>,
     /// `@entry`: this function is the program's wasm entry point (`_start`).
@@ -582,6 +587,8 @@ pub struct ImplMethod {
     pub name: Ident,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
+    /// A `from <param>` provenance clause (see [`Function::provenance`]).
+    pub provenance: Option<Ident>,
     pub body: Block,
     /// `@runtime("...")` symbol for an intrinsic associated function with no
     /// body (e.g. the primitive conversions). `None` for an ordinary method.

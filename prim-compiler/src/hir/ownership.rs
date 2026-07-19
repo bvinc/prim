@@ -18,8 +18,9 @@
 //!    call-site/declaration mode match, and `mut`-of-a-`read`-parameter.
 //!  - **Kind rules** (`check_view_markers`, `check_view_escapes`): the
 //!    `data`/`view` kind system — a struct/enum holding a borrow must be
-//!    declared `view` (`cfg::is_view`), and a nominal `view` value may not be
-//!    returned (the four bans; escape past the frame it borrows from).
+//!    declared `view` (`cfg::is_view`), and a nominal `view` value may be
+//!    returned only with provenance (a `from <param>` clause or an elided sole
+//!    borrowed parameter); otherwise it would escape the frame it borrows from.
 //!
 //! Both read-only walks (`check_borrows` and the `collect_tracked` helper) share
 //! one structural recursion via the [`Visitor`] trait at the bottom of the file,
@@ -246,12 +247,15 @@ impl Checker<'_> {
     }
 
     /// Ban 4 (partial): a view-kinded *nominal* value — a `view` struct/enum —
-    /// may not be returned. Its borrow is hidden behind the type name, so Stage
-    /// 1 can't derive the provenance the caller would need to keep the source
-    /// pinned (that derivation is the next stage). A bare `read T` / `Option[read
-    /// T]` return is fine: the borrow is visible in the return type, and the loan
-    /// checker's elision already pins the source.
+    /// may not be returned *unless* the function has provenance (a `from <param>`
+    /// clause, or an elided sole borrowed parameter) for the caller to pin the
+    /// source against. Without provenance the borrow would dangle. A visible
+    /// `read T` / `Option[read T]` return is always fine — its provenance is
+    /// handled by the loan checker directly.
     fn check_view_escapes(&mut self, func: &super::Function) {
+        if self.borrow_provenance(func.id).is_some() {
+            return;
+        }
         ViewEscapeWalk { chk: self }.visit_block(&func.body);
         // The body's tail expression is the implicit return.
         if let Some(e) = &func.body.expr
@@ -512,26 +516,41 @@ impl Checker<'_> {
         }
     }
 
-    /// Where a borrow-returning function's result comes from (elision). If the
-    /// return type is a `Ref`, the provenance is the sole borrowed (`read`/
-    /// `mut`) parameter; the loan kind is the return borrow's kind. `None` if
-    /// the function doesn't return a borrow, or it's ambiguous (more than one
-    /// borrowed parameter — that needs explicit `from`, a later extension).
+    /// Where a borrow-returning function's result comes from: the `(parameter
+    /// index, loan kind)` a returned view is derived from. The return carries a
+    /// borrow if it is view-kinded — a visible `Ref` (`-> read T`,
+    /// `-> Option[read T]`) or a nominal `view` struct/enum (`-> Parser`). The
+    /// provenance parameter is an explicit `from <param>` clause, else elision
+    /// (the sole borrowed parameter). The loan kind is the return's own borrow
+    /// kind when visible, otherwise the provenance parameter's kind (a `mut`
+    /// parameter yields an exclusive loan). `None` if the return holds no borrow,
+    /// or provenance is ambiguous (many borrowed parameters, no `from`).
     fn borrow_provenance(&self, func: FuncId) -> Option<(usize, RefKind)> {
         let f = self.program.functions.get(func.0 as usize)?;
-        // The return is a borrow if it *contains* a `Ref` anywhere — directly
-        // (`-> read T`) or inside an aggregate (`-> Option[read T]`, Tier B).
-        let ret_kind = type_ref_kind(f.ret.as_ref()?)?;
-        let mut borrowed = f
-            .params
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| matches!(p.mode, PassMode::Read | PassMode::Mut));
-        let (idx, _) = borrowed.next()?;
-        if borrowed.next().is_some() {
+        let ret = f.ret.as_ref()?;
+        if !cfg::is_view(ret, &self.program.structs, &self.program.enums) {
             return None;
         }
-        Some((idx, ret_kind))
+        let idx = match f.provenance {
+            Some(i) => i,
+            None => {
+                let mut borrowed = f
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| matches!(p.mode, PassMode::Read | PassMode::Mut));
+                let (i, _) = borrowed.next()?;
+                if borrowed.next().is_some() {
+                    return None;
+                }
+                i
+            }
+        };
+        let kind = type_ref_kind(ret).unwrap_or_else(|| match f.params.get(idx).map(|p| p.mode) {
+            Some(PassMode::Mut) => RefKind::Mut,
+            _ => RefKind::Read,
+        });
+        Some((idx, kind))
     }
 
     fn check_mutate(&mut self, root: SymbolId, span: SpanId, active: &[Loan]) {

@@ -466,6 +466,7 @@ impl<'a> LoweringContext<'a> {
                         type_params: Vec::new(),
                         params: Vec::new(),
                         ret: None,
+                        provenance: None,
                         body: hir::Block {
                             stmts: Vec::new(),
                             expr: None,
@@ -606,6 +607,7 @@ impl<'a> LoweringContext<'a> {
                             type_params: Vec::new(),
                             params: Vec::new(),
                             ret: None,
+                            provenance: None,
                             body: hir::Block {
                                 stmts: Vec::new(),
                                 expr: None,
@@ -1016,10 +1018,13 @@ impl<'a> LoweringContext<'a> {
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
+                    let provenance =
+                        self.resolve_provenance(f.provenance.as_ref(), &f.parameters, file.file_id);
                     if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                         hir_func.type_params = type_params;
                         hir_func.params = params;
                         hir_func.ret = ret;
+                        hir_func.provenance = provenance;
                         hir_func.body = body;
                         hir_func.span = span;
                     }
@@ -1136,9 +1141,15 @@ impl<'a> LoweringContext<'a> {
                         let body =
                             self.lower_block(&m.body, module_id, file.file_id, ast, module_scope);
                         let span = self.span_id(m.name.span, file.file_id);
+                        let provenance = self.resolve_provenance(
+                            m.provenance.as_ref(),
+                            &m.parameters,
+                            file.file_id,
+                        );
                         if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                             hir_func.params = params;
                             hir_func.ret = ret;
+                            hir_func.provenance = provenance;
                             hir_func.body = body;
                             hir_func.span = span;
                             // Only a `self`-method is generic over the owner's
@@ -1156,6 +1167,26 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
+    }
+
+    /// Resolve a `from <param>` provenance clause to the index of the named
+    /// parameter. An unknown name is a lowering error.
+    fn resolve_provenance(
+        &mut self,
+        provenance: Option<&prim_parse::Ident>,
+        parameters: &[prim_parse::Parameter],
+        file: FileId,
+    ) -> Option<usize> {
+        let prov = provenance?;
+        let idx = parameters.iter().position(|p| p.name.sym == prov.sym);
+        if idx.is_none() {
+            self.errors.push(LoweringError::UnknownName {
+                name: self.interner.resolve(&prov.sym).to_string(),
+                file,
+                span: prov.span,
+            });
+        }
+        idx
     }
 
     /// Validate a global's initializer expression. Wasm globals can only
@@ -1332,6 +1363,7 @@ impl<'a> LoweringContext<'a> {
                     },
                 ],
                 ret: None,
+                provenance: None,
                 body: hir::Block { stmts, expr: None },
                 span,
                 runtime: None,

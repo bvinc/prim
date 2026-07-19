@@ -1,0 +1,18 @@
+import std.io.println
+
+// With more than one borrowed parameter, elision is ambiguous, so the source of
+// the returned view is named explicitly: `-> Sel from x`. Provenance is `x`.
+struct Point { x: i32 }
+
+struct view Sel { p: read Point }
+
+fn choose(x: read Point, y: read Point) -> Sel from x {
+    return Sel { p = read x }
+}
+
+fn main() {
+    let a = Point { x = 7 }
+    let b = Point { x = 9 }
+    let s = choose(read a, read b)
+    println(s.p.x)     // 7
+}

@@ -90,14 +90,25 @@ later feature).
   view-kinded field must be declared `struct view` / `enum view` (mandatory
   acknowledgment, checked at the definition — "nothing silently assigned"). A
   `view` struct/enum is first-class **within its frame** (construct, read fields,
-  pass by `read`/`mut`) but may not escape it — returning a nominal `view` value
-  is a `ViewEscapes` error. Remaining:
-  - **Derivation for escaping view types** — a `view` struct/enum *returned* or
-    stored in a container that outlives its source needs `from` / `from origin`
-    provenance in the signature (memory-model §6) so the caller can pin the
-    source. The nominal-view return ban is the conservative stand-in until then;
-    the `Ref`/`Option[read T]` elision path already returns visible borrows.
-    This is the genuine larger stage.
+  pass by `read`/`mut`).
+
+  A view **may be returned** when the signature carries **provenance**: a
+  trailing `from <param>` clause names the source, or elision infers it (the sole
+  borrowed parameter). The caller then pins the named argument for the returned
+  view's lifetime — `let w = make(read pt); pt = ...` while `w` is live is
+  rejected. Returning a nominal `view` value with no provenance (built from a
+  local, or ambiguous with several borrowed parameters and no `from`) is a
+  `ViewEscapes` error. Remaining:
+  - **Derivation, deeper** — `from origin(p)` (a composite view yielding views of
+    its sources, for iterators) and the type-position placement form
+    (`-> read(self) T`, multi-view returns) are not done; provenance is currently
+    a single trailing `from <param>` plus elision. And the **callee obligation**
+    isn't verified — a returned view is trusted to actually borrow the named
+    parameter (returning `read local` under a decoy borrowed param would slip
+    through, as it already does for `Ref` returns).
+  - **Escaping into long-lived storage** — a view stored in a container that
+    outlives its source (a `Vec[read T]` that escapes) still needs the
+    return-provenance story extended to stored fields.
   - **Generic-param views** — `kind()` treats `Type::Param` as data pre-mono, so
     a generic that stores a borrow *through* a type parameter isn't yet caught
     (no current program constructs one; per-instantiation kinds want a post-mono

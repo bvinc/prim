@@ -1,0 +1,19 @@
+import std.io.println
+
+// The payoff of provenance: a returned view is tracked against its source
+// across the call boundary. `w` derives from `pt`, so mutating `pt` while `w`
+// is still live is rejected — the borrow the returned view holds is honored.
+struct Point { x: i32, y: i32 }
+
+struct view Window { p: read Point }
+
+fn make(pt: read Point) -> Window {
+    return Window { p = read pt }
+}
+
+fn main() {
+    let mut pt = Point { x = 5, y = 8 }
+    let w = make(read pt)
+    pt = Point { x = 0, y = 0 }
+    println(w.p.x)
+}

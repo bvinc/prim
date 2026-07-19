@@ -1,0 +1,19 @@
+import std.io.println
+
+// A view struct built from a borrowed parameter *can* be returned: the caller
+// derives the returned view's provenance from the argument (elision — the sole
+// borrowed parameter) and pins it for the view's lifetime.
+struct Point { x: i32, y: i32 }
+
+struct view Window { p: read Point }
+
+fn make(pt: read Point) -> Window {
+    return Window { p = read pt }
+}
+
+fn main() {
+    let pt = Point { x = 5, y = 8 }
+    let w = make(read pt)
+    println(w.p.x)     // 5
+    println(w.p.y)     // 8
+}

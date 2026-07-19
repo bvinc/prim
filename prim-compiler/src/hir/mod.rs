@@ -160,6 +160,10 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
+    /// Index into `params` of the parameter a returned borrow is derived from
+    /// (a `from <param>` clause). Resolved from the parameter name at lowering.
+    /// `None` falls back to elision (the sole borrowed parameter).
+    pub provenance: Option<usize>,
     pub body: Block,
     pub span: SpanId,
     pub runtime: Option<RuntimeAbi>,
