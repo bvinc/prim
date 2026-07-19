@@ -7,8 +7,8 @@ import std.string.from_vec
 // `to_string`'s `from_vec(take f.buf)`.
 fn main() {
     let buf = new[u8]()
-    push(edit buf, take 72u8)
-    push(edit buf, take 73u8)
+    push(mut buf, take 72u8)
+    push(mut buf, take 73u8)
     let s = from_vec(take buf)
     println(s)
 }

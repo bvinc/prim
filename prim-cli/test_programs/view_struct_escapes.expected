@@ -1,0 +1,1 @@
+ERROR: a view cannot escape the frame it borrows from

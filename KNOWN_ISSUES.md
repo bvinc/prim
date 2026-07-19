@@ -73,30 +73,44 @@ later feature).
   `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
   `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
-- **Borrows — Tier A + lexical Tier B done; full lifetime-parameterized types
-  remain.** `view T` / `edit T` are real, tracked reference types: borrow
-  expressions (`view place` / `edit place`), a function may *return* a borrow
-  (provenance by elision — the sole borrowed parameter, detected even when the
-  `Ref` is nested in the return type), a borrow may live **inside an aggregate**
-  (`Option[view T]` constructs/matches/reads), and a **lexical loan checker**
-  enforces shared-xor-mutable (can't mutate or re-borrow a value while it's
-  borrowed; the loan lasts the holder's scope; release with an inner `{ }`).
-  `Vec.at`/`at_mut` and `Array.get -> Option[view T]` return tracked borrows
+- **Borrows — Tier A/B + the `data`/`view` kind system done; derivation for
+  escaping view types remains.** `read T` / `mut T` are real, tracked reference
+  types: borrow expressions (`read place` / `mut place`), a function may *return*
+  a borrow (provenance by elision — the sole borrowed parameter, detected even
+  when the `Ref` is nested in the return type), a borrow may live **inside an
+  aggregate** (`Option[read T]` constructs/matches/reads), and a **lexical loan
+  checker** enforces shared-xor-mutable (can't mutate or re-borrow a value while
+  it's borrowed; the loan lasts the holder's scope; release with an inner `{ }`).
+  `Vec.at`/`at_mut` and `Array.get -> Option[read T]` return tracked borrows
   instead of raw `*mut T`. A borrowed value is usable where the borrowed type's
-  bound is needed (`view i32` satisfies/dispatches `Display`). Remaining:
-  - **Escaping/long-lived holders** — a borrow stored in a container that
-    *outlives its source* (a returned struct-with-ref, a `Vec[view T]` that
-    escapes) needs lifetime *parameters* on the type. The lexical loan covers
-    holders that don't outlive the source; this is the genuine larger stage.
-  - **Polish** — `view i32` in *arithmetic* (`a + view_i32`) isn't coerced yet
-    (so `Vec.get` still returns a copy); field *assignment* through an `edit`
+  bound is needed (`read i32` satisfies/dispatches `Display`).
+
+  The **kind system** classifies every type `data` or `view` (`cfg::is_view`): a
+  type is view-kinded iff it transitively holds a borrow. A struct/enum with a
+  view-kinded field must be declared `struct view` / `enum view` (mandatory
+  acknowledgment, checked at the definition — "nothing silently assigned"). A
+  `view` struct/enum is first-class **within its frame** (construct, read fields,
+  pass by `read`/`mut`) but may not escape it — returning a nominal `view` value
+  is a `ViewEscapes` error. Remaining:
+  - **Derivation for escaping view types** — a `view` struct/enum *returned* or
+    stored in a container that outlives its source needs `from` / `from origin`
+    provenance in the signature (memory-model §6) so the caller can pin the
+    source. The nominal-view return ban is the conservative stand-in until then;
+    the `Ref`/`Option[read T]` elision path already returns visible borrows.
+    This is the genuine larger stage.
+  - **Generic-param views** — `kind()` treats `Type::Param` as data pre-mono, so
+    a generic that stores a borrow *through* a type parameter isn't yet caught
+    (no current program constructs one; per-instantiation kinds want a post-mono
+    re-check).
+  - **Polish** — `read i32` in *arithmetic* (`a + read_i32`) isn't coerced yet
+    (so `Vec.get` still returns a copy); field *assignment* through a `mut`
     borrow (`at_mut(v,i).f = x`); an inline borrow expr in constructor position
-    (`Some(view x)` parses `view` as an arg mode — bind to a local first);
+    (`Some(read x)` parses `read` as an arg mode — bind to a local first);
     aggregate *array* elements (inline stride) in `Array.get`.
   - **NLL** — borrows are lexical; non-lexical liveness is a strict,
     backward-compatible upgrade on the same checker.
   - **Multiple borrowed params** — elision is single-source; more than one needs
-    explicit `view from <param>` provenance.
+    explicit `read from <param>` provenance.
 
 - **By-value aggregates — a direct struct/tuple literal at a scalar-ABI
   boundary still boxes.** Small POD aggregates cross parameter and return

@@ -8,7 +8,7 @@ import std.io.println
 // must be updated. The point: 7 is ABSENT (leak), never duplicated (no
 // double-free). See KNOWN_ISSUES.md "Enums and arrays are not yet recursed".
 struct Res { id: i32 }
-impl Drop for Res { fn drop(edit self) { println(self.id) } }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
 enum Opt { None, Some { r: Res } }
 
 fn main() {

@@ -292,7 +292,7 @@ impl Mono<'_> {
                     .get(type_param.0 as usize)
                     .cloned()
                     .unwrap_or_else(|| panic!("unsubstituted type parameter in TraitBoundCall"));
-                // A borrow dispatches through the borrowed type's impl: `view T`
+                // A borrow dispatches through the borrowed type's impl: `read T`
                 // calls `T`'s method (the value is the same handle).
                 while let Type::Ref { inner, .. } = concrete {
                     concrete = *inner;
@@ -327,7 +327,7 @@ impl Mono<'_> {
                 // Modes are already checked and erased by this point; keep a
                 // parallel placeholder vec so the `arg_modes`/`args` length
                 // invariant holds for any later consumer.
-                let arg_modes = vec![PassMode::View; new_args.len()];
+                let arg_modes = vec![PassMode::Read; new_args.len()];
                 expr.kind = ExprKind::Call {
                     func: impl_fid,
                     type_args: Vec::new(),

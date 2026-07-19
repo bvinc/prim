@@ -182,8 +182,8 @@ fn test_parse_take_pattern() {
         other => panic!("expected take binding, got {:?}", other),
     }
     match &fields[1].pattern {
-        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::View),
-        other => panic!("expected view binding, got {:?}", other),
+        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::Read),
+        other => panic!("expected read binding, got {:?}", other),
     }
     // Arm 1: `take rest` binds the whole scrutinee by move.
     match &arms[1].pattern {

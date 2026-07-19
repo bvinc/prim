@@ -5,14 +5,14 @@ enum Option[T] {
     Some { value: T },
 }
 
-fn unwrap_i32(x: view Option[i32]) -> i32 {
+fn unwrap_i32(x: read Option[i32]) -> i32 {
     return match x {
         Option.Some { value } => value,
         Option.None => 0i32,
     }
 }
 
-fn unwrap_i64(x: view Option[i64]) -> i64 {
+fn unwrap_i64(x: read Option[i64]) -> i64 {
     return match x {
         Option.Some { value } => value,
         Option.None => 0i64,

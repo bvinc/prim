@@ -9,13 +9,13 @@ fn main() {
     let v = new[i32]()
     let mut i = 0i32
     while i < 10 {
-        push(edit v, take i * i)            // forces regrowth 0 -> 4 -> 8 -> 16
+        push(mut v, take i * i)            // forces regrowth 0 -> 4 -> 8 -> 16
         i = i + 1
     }
     println(len(v))         // 10
     println(get(v, 0usize))   // 0
     println(get(v, 3usize))   // 9
     println(get(v, 9usize))   // 81
-    set(edit v, 3usize, take 999)
+    set(mut v, 3usize, take 999)
     println(get(v, 3usize))   // 999
 }

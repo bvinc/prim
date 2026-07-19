@@ -10,7 +10,7 @@ enum Option[T] {
 
 trait Opt {
     fn unwrap_or(o: Option[i32], fallback: i32) -> i32;
-    fn is_some(o: view Option[i32]) -> i32;
+    fn is_some(o: read Option[i32]) -> i32;
 }
 
 impl Opt for Option {
@@ -20,7 +20,7 @@ impl Opt for Option {
             Option.None => fallback,
         }
     }
-    fn is_some(o: view Option[i32]) -> i32 {
+    fn is_some(o: read Option[i32]) -> i32 {
         return match o {
             Option.Some { value } => 1,
             Option.None => 0,

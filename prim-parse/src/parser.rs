@@ -287,10 +287,10 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::Ident(self.ident(span)),
             });
         }
-        // Borrow expressions: `view place` / `edit place`.
+        // Borrow expressions: `read place` / `mut place`.
         if let Some(rk) = match self.peek_kind() {
-            Some(TokenKind::View) => Some(RefKind::Shared),
-            Some(TokenKind::Edit) => Some(RefKind::Mut),
+            Some(TokenKind::Read) => Some(RefKind::Read),
+            Some(TokenKind::Mut) => Some(RefKind::Mut),
             _ => None,
         } {
             let kw = self.advance().span;
@@ -842,7 +842,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a comma-separated argument list, each argument optionally prefixed
-    /// by a passing mode (`edit v`, `take x`); a bare argument is `View`. The
+    /// by a passing mode (`mut v`, `take x`); a bare argument is `View`. The
     /// returned mode vec is parallel to (same length as) the args vec.
     fn parse_argument_list(&mut self) -> Result<(Vec<Expr>, Vec<PassMode>), ParseError> {
         let mut args = Vec::new();
@@ -866,23 +866,23 @@ impl<'a> Parser<'a> {
         Ok((args, modes))
     }
 
-    /// Consume an optional leading `view`/`edit`/`take` mode keyword (on a call
+    /// Consume an optional leading `read`/`mut`/`take` mode keyword (on a call
     /// argument or a parameter name), defaulting to `View`.
     fn parse_pass_mode(&mut self) -> PassMode {
         match self.peek_kind() {
-            Some(TokenKind::View) => {
+            Some(TokenKind::Read) => {
                 self.advance();
-                PassMode::View
+                PassMode::Read
             }
-            Some(TokenKind::Edit) => {
+            Some(TokenKind::Mut) => {
                 self.advance();
-                PassMode::Edit
+                PassMode::Mut
             }
             Some(TokenKind::Take) => {
                 self.advance();
                 PassMode::Take
             }
-            _ => PassMode::View,
+            _ => PassMode::Read,
         }
     }
 
@@ -987,6 +987,10 @@ impl<'a> Parser<'a> {
             .span
             .start();
 
+        // Optional view-kind modifier: `struct view Name { ... }`, sitting
+        // between the keyword and the name like `mut` in `let mut x`.
+        let is_view = self.consume_optional(TokenKind::View);
+
         // Parse struct name
         let name_span = self
             .consume(TokenKind::Identifier, "Expected struct name")?
@@ -1015,6 +1019,7 @@ impl<'a> Parser<'a> {
             fields,
             repr_c,
             is_builtin: false,
+            is_view,
             span: full_span,
         })
     }
@@ -1053,6 +1058,7 @@ impl<'a> Parser<'a> {
             fields: Vec::new(),
             repr_c: false,
             is_builtin: true,
+            is_view: false,
             span: full_span,
         })
     }
@@ -1062,6 +1068,7 @@ impl<'a> Parser<'a> {
             .consume(TokenKind::Enum, "Expected 'enum'")?
             .span
             .start();
+        let is_view = self.consume_optional(TokenKind::View);
         let name_span = self
             .consume(TokenKind::Identifier, "Expected enum name")?
             .span;
@@ -1094,6 +1101,7 @@ impl<'a> Parser<'a> {
             name,
             type_params,
             variants,
+            is_view,
             span,
         })
     }
@@ -1405,10 +1413,10 @@ impl<'a> Parser<'a> {
             return Ok(parameters);
         }
 
-        // A receiver is `self` optionally prefixed by a mode (`edit self`).
+        // A receiver is `self` optionally prefixed by a mode (`mut self`).
         // Detect by looking past an optional leading mode keyword.
         let self_offset = match self.peek_kind() {
-            Some(TokenKind::View | TokenKind::Edit | TokenKind::Take) => 1,
+            Some(TokenKind::Read | TokenKind::Mut | TokenKind::Take) => 1,
             _ => 0,
         };
         let leading_self = matches!(self.peek_kind_at(self_offset), Some(TokenKind::Identifier))
@@ -1451,19 +1459,19 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
         let ty = self.parse_type()?;
 
-        // The passing mode is part of the type: `v: view Vec[T]` borrows,
-        // `v: edit Vec[T]` mutably borrows, a bare `v: Vec[T]` is owned (moved
+        // The passing mode is part of the type: `v: read Vec[T]` borrows,
+        // `v: mut Vec[T]` mutably borrows, a bare `v: Vec[T]` is owned (moved
         // in). The borrow is unwrapped here so the rest of the pipeline keeps
         // seeing `{ mode, inner type }`.
         let (mode, type_annotation) = match ty {
             Type::Ref {
-                kind: RefKind::Shared,
+                kind: RefKind::Read,
                 inner,
-            } => (PassMode::View, *inner),
+            } => (PassMode::Read, *inner),
             Type::Ref {
                 kind: RefKind::Mut,
                 inner,
-            } => (PassMode::Edit, *inner),
+            } => (PassMode::Mut, *inner),
             other => (PassMode::Take, other),
         };
 
@@ -1479,11 +1487,11 @@ impl<'a> Parser<'a> {
             span: self.current_span(),
         })?;
 
-        // Borrow types: `view T` (shared) / `edit T` (exclusive). `take` is not
+        // Borrow types: `read T` (shared) / `mut T` (exclusive). `take` is not
         // a type — it's the move operator at call sites.
         if let Some(rk) = match kind {
-            TokenKind::View => Some(RefKind::Shared),
-            TokenKind::Edit => Some(RefKind::Mut),
+            TokenKind::Read => Some(RefKind::Read),
+            TokenKind::Mut => Some(RefKind::Mut),
             _ => None,
         } {
             self.advance();
@@ -2034,7 +2042,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable: true,
-                mode: crate::PassMode::View,
+                mode: crate::PassMode::Read,
                 span: mut_span.cover(name_span),
             });
         }
@@ -2116,7 +2124,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable: false,
-                mode: crate::PassMode::View,
+                mode: crate::PassMode::Read,
                 span: first_span,
             });
         }
@@ -2219,7 +2227,7 @@ impl<'a> Parser<'a> {
                     mode: if take {
                         crate::PassMode::Take
                     } else {
-                        crate::PassMode::View
+                        crate::PassMode::Read
                     },
                     span,
                 },
@@ -2239,7 +2247,7 @@ impl<'a> Parser<'a> {
             crate::Pattern::Binding {
                 name: field,
                 mutable: false,
-                mode: crate::PassMode::View,
+                mode: crate::PassMode::Read,
                 span: field_span,
             }
         };
@@ -2257,6 +2265,16 @@ impl<'a> Parser<'a> {
             None => Err(ParseError::UnexpectedEof {
                 span: self.current_span(),
             }),
+        }
+    }
+
+    /// Consume the next token iff it is `kind`, reporting whether it was there.
+    fn consume_optional(&mut self, kind: TokenKind) -> bool {
+        if self.peek_kind() == Some(kind) {
+            self.advance();
+            true
+        } else {
+            false
         }
     }
 

@@ -405,7 +405,7 @@ impl<'a> Checker<'a> {
     ) -> Result<(), TypeCheckError> {
         match ty {
             // A borrow satisfies a bound iff the borrowed type does (you can
-            // render/compare a `view T` exactly when you can a `T`).
+            // render/compare a `read T` exactly when you can a `T`).
             Type::Ref { inner, .. } => self.check_type_arg_bound(inner, bound, mode, span),
             _ if crate::hir::MethodOwner::of_type(ty)
                 .is_some_and(|owner| self.program.impls.contains_key(&(bound, owner))) =>
@@ -1329,7 +1329,7 @@ impl<'a> Checker<'a> {
                 *ty = Type::Usize;
                 Ok(Type::Usize)
             }
-            // `view place` / `edit place` — borrow a place, yielding `Ref<inner>`.
+            // `read place` / `mut place` — borrow a place, yielding `Ref<inner>`.
             ExprKind::Borrow { kind, place } => {
                 let inner = self.check_expr(place, locals)?;
                 let ref_ty = Type::Ref {
@@ -1956,7 +1956,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Field { base, field } => {
                 let base_ty = self.check_expr(base, locals)?;
-                // Auto-deref a borrow: `r.field` on a `view T`/`edit T` reads the
+                // Auto-deref a borrow: `r.field` on a `read T`/`mut T` reads the
                 // field of `T` (a borrow is transparent for member access).
                 let base_ty = match base_ty {
                     Type::Ref { inner, .. } => *inner,

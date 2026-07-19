@@ -421,6 +421,7 @@ impl<'a> LoweringContext<'a> {
                         name: SymbolId(res_id.0),
                         type_params: Vec::new(),
                         fields: Vec::new(),
+                        is_view: s.is_view,
                         span,
                     });
                 }
@@ -525,6 +526,7 @@ impl<'a> LoweringContext<'a> {
                         type_params: Vec::new(),
                         variants: Vec::new(),
                         variant_idx: HashMap::new(),
+                        is_view: e.is_view,
                         span,
                     });
                 }
@@ -1319,13 +1321,13 @@ impl<'a> LoweringContext<'a> {
                     Param {
                         name: self_sym,
                         ty: hir::Type::Struct(sid, Vec::new()),
-                        mode: PassMode::View,
+                        mode: PassMode::Read,
                         span,
                     },
                     Param {
                         name: f_sym,
                         ty: hir::Type::Struct(formatter_sid, Vec::new()),
-                        mode: PassMode::Edit,
+                        mode: PassMode::Mut,
                         span,
                     },
                 ],
@@ -1616,7 +1618,7 @@ impl<'a> LoweringContext<'a> {
                     pattern: hir::Pattern::Binding {
                         symbol: loop_sym,
                         ty: hir::Type::Undetermined,
-                        mode: hir::PassMode::View,
+                        mode: hir::PassMode::Read,
                         span: span_id,
                     },
                     ty: hir::Type::Undetermined,
@@ -1627,7 +1629,7 @@ impl<'a> LoweringContext<'a> {
                     pattern: hir::Pattern::Binding {
                         symbol: end_sym,
                         ty: hir::Type::Undetermined,
-                        mode: hir::PassMode::View,
+                        mode: hir::PassMode::Read,
                         span: span_id,
                     },
                     ty: hir::Type::Undetermined,
@@ -2450,7 +2452,7 @@ impl<'a> LoweringContext<'a> {
                         func: dbg_fid,
                         type_args: Vec::new(),
                         args: vec![prefix_lit, lowered_inner],
-                        arg_modes: vec![PassMode::View, PassMode::Take],
+                        arg_modes: vec![PassMode::Read, PassMode::Take],
                     },
                     dbg_ty,
                 )
@@ -2949,13 +2951,13 @@ fn debug_write_str(
             receiver: Box::new(debug_undet(hir::ExprKind::Ident(f_sym), span)),
             method: write_str_sym,
             args: vec![str_lit],
-            arg_modes: vec![PassMode::View],
+            arg_modes: vec![PassMode::Read],
         },
         span,
     ))
 }
 
-/// `write_debug(edit f, self.<field>)` as a statement.
+/// `write_debug(mut f, self.<field>)` as a statement.
 fn debug_write_field(
     write_debug_fid: FuncId,
     f_sym: SymbolId,
@@ -2975,7 +2977,7 @@ fn debug_write_field(
             func: write_debug_fid,
             type_args: Vec::new(),
             args: vec![debug_undet(hir::ExprKind::Ident(f_sym), span), field_access],
-            arg_modes: vec![PassMode::Edit, PassMode::View],
+            arg_modes: vec![PassMode::Mut, PassMode::Read],
         },
         span,
     ))

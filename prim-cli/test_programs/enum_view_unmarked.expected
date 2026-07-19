@@ -1,0 +1,1 @@
+ERROR: a struct or enum holding a borrow must be declared `view`

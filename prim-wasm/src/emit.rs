@@ -306,8 +306,8 @@ fn scalarizable_locals(
 
 /// Which of a function's parameters use the by-value scalar ABI (phase 3): each
 /// is passed as one wasm value per leaf field rather than a heap pointer. A
-/// parameter qualifies when it is a flat scalar aggregate, *not* `edit` (an
-/// edit borrow needs a pointer to write through), and used only by field reads
+/// parameter qualifies when it is a flat scalar aggregate, *not* `mut` (an
+/// mut borrow needs a pointer to write through), and used only by field reads
 /// in the body (so it can stay scalarized — never materialized). This is the
 /// single source of truth shared by signature registration and call sites.
 pub(crate) fn scalar_abi_params(
@@ -324,7 +324,7 @@ pub(crate) fn scalar_abi_params(
     func.params
         .iter()
         .map(|p| {
-            p.mode != hir::PassMode::Edit
+            p.mode != hir::PassMode::Mut
                 && !disq.contains(&p.name)
                 && flat_scalar_fields(&p.ty, program, policy).is_some()
         })

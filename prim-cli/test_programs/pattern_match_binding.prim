@@ -6,7 +6,7 @@ enum MaybeI32 {
 }
 
 // Field sub-patterns: `value: x` renames the binding, `value: _` discards it.
-fn describe(m: view MaybeI32) -> i32 {
+fn describe(m: read MaybeI32) -> i32 {
     return match m {
         MaybeI32.Some { value: x } => x,
         MaybeI32.None => 0i32,

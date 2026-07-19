@@ -3,11 +3,11 @@ import std.io.println
 // A Drop impl on a generic struct now monomorphizes per instantiation. Each
 // Holder drops, and a Holder containing a Drop field recurses into it.
 struct Res { id: i32 }
-impl Drop for Res { fn drop(edit self) { println(self.id) } }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
 
 struct Holder[T] { x: T }
 impl Drop for Holder {
-    fn drop(edit self) { println(100i32) }
+    fn drop(mut self) { println(100i32) }
 }
 
 fn main() {

@@ -2,7 +2,7 @@ import std.io.println
 
 struct Inner { id: i32 }
 impl Drop for Inner {
-    fn drop(edit self) { println(self.id) }
+    fn drop(mut self) { println(self.id) }
 }
 
 // Outer does NOT implement Drop, but owns a field that does. Dropping Outer

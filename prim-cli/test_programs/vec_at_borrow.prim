@@ -5,13 +5,13 @@ import std.vec.at
 import std.vec.at_mut
 
 // `at` / `at_mut` return a borrow into the vector (no raw `*mut`). The borrow is
-// tracked: reading through it works, and mutating the element via `edit` is
+// tracked: reading through it works, and mutating the element via `mut` is
 // visible.
 struct Item { v: i32 }
 
 fn main() {
     let mut items = new[Item]()
-    push(edit items, take Item { v = 7i32 })
+    push(mut items, take Item { v = 7i32 })
     let r = at(items, 0usize)
     println(r.v)            // 7
 }

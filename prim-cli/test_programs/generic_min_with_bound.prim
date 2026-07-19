@@ -3,11 +3,11 @@ import std.io.println
 struct Value { n: i32 }
 
 trait Ord {
-    fn lt(self, other: view Ord) -> bool;
+    fn lt(self, other: read Ord) -> bool;
 }
 
 impl Ord for Value {
-    fn lt(self, other: view Value) -> bool {
+    fn lt(self, other: read Value) -> bool {
         return self.n < other.n
     }
 }

@@ -13,7 +13,7 @@ impl Greeter for Counter {
 // A struct that holds a trait-typed field.
 struct Holder { g: Greeter }
 
-fn unpack(h: view Holder) -> i32 {
+fn unpack(h: read Holder) -> i32 {
     return h.g.greet()
 }
 

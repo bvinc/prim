@@ -5,17 +5,21 @@
 //! is `args[0]` of a rewritten `Call`) and generic bodies are checked once with
 //! `Type::Param` treated as a non-`Copy` (owned) type.
 //!
-//! The pass is split in two, sharing one notion of "what is a move" with drop
-//! elaboration via [`cfg::build`]:
+//! The pass is split across a few checks, sharing one notion of "what is a move"
+//! with drop elaboration via [`cfg::build`]:
 //!
 //!  - **Move dataflow** (`check_moves`): lower the body to a CFG and run a
 //!    forward may-moved dataflow. A `Use`/`Move` of a may-moved local is a
 //!    use-after-move; running the dataflow with and without loop back-edges
 //!    tells a loop-carried move (`MoveInLoop`) from a straight-line one
-//!    (`UseAfterMove`). Moving a `view`/`edit` parameter is a borrow escape.
+//!    (`UseAfterMove`). Moving a `read`/`mut` parameter is a borrow escape.
 //!  - **Borrow rules** (`check_borrows`): a syntactic walk over call sites for
-//!    the per-call rules that don't depend on control flow — `edit` exclusivity,
-//!    call-site/declaration mode match, and `edit`-of-a-`view`-parameter.
+//!    the per-call rules that don't depend on control flow — `mut` exclusivity,
+//!    call-site/declaration mode match, and `mut`-of-a-`read`-parameter.
+//!  - **Kind rules** (`check_view_markers`, `check_view_escapes`): the
+//!    `data`/`view` kind system — a struct/enum holding a borrow must be
+//!    declared `view` (`cfg::is_view`), and a nominal `view` value may not be
+//!    returned (the four bans; escape past the frame it borrows from).
 //!
 //! Both read-only walks (`check_borrows` and the `collect_tracked` helper) share
 //! one structural recursion via the [`Visitor`] trait at the bottom of the file,
@@ -41,32 +45,40 @@ pub struct MoveError {
 pub enum MoveErrorKind {
     /// Use (read, call, or re-move) of a value already moved at `moved_at`.
     UseAfterMove { moved_at: Span },
-    /// Moving a non-`Copy` field/payload out of a borrowed (`view`/`edit`) value.
+    /// Moving a non-`Copy` field/payload out of a borrowed (`read`/`mut`) value.
     MoveOutOfBorrow,
     /// A value moved in a loop body would be moved again on the next iteration.
     MoveInLoop,
-    /// A `view`/`edit` parameter was moved out of the function.
+    /// A `read`/`mut` parameter was moved out of the function.
     BorrowEscapes,
-    /// The same place was `edit`-borrowed more than once in a single call.
-    EditAlias,
+    /// The same place was `mut`-borrowed more than once in a single call.
+    MutAlias,
     /// A call-site mode that doesn't match the callee parameter's declared mode.
     ModeMismatch,
-    /// `edit`-borrowing a value reachable only through a `view` parameter.
-    EditOfView,
+    /// `mut`-borrowing a value reachable only through a `read` parameter.
+    MutOfRead,
     /// A value that implements `Drop` is moved on some paths but not others, so
     /// the compiler can't statically decide whether to drop it at scope exit.
     ConditionalDrop,
     /// A `let` or `match` binds a non-`Copy` value out of a named place without
     /// `take`. Moving an owned value out of something that still holds it must be
-    /// explicit (`take`); borrowing it out (`view`/`edit`) awaits lifetimes.
+    /// explicit (`take`); borrowing it out (`read`/`mut`) awaits lifetimes.
     /// Ignore it with `_` to neither.
     BindWithoutTake,
-    /// A place was mutated (assigned, field-assigned, or passed `edit`/`take`)
+    /// A place was mutated (assigned, field-assigned, or passed `mut`/`take`)
     /// while a borrow of it was still live.
     MutateWhileBorrowed,
-    /// A place was borrowed while it was already exclusively (`edit`) borrowed,
-    /// or `edit`-borrowed while any borrow of it was live.
+    /// A place was borrowed while it was already exclusively (`mut`) borrowed,
+    /// or `mut`-borrowed while any borrow of it was live.
     BorrowConflict,
+    /// A struct/enum's `view` marker doesn't match its fields: `declared` is what
+    /// the source said (`struct view` vs plain `struct`), which disagrees with
+    /// whether a field is actually view-kinded.
+    ViewMarker { declared: bool },
+    /// A view-kinded value (one holding a borrow) escapes the frame it borrows
+    /// from — returned as a non-view type, or stored into a data-kinded place
+    /// that outlives it (the four bans).
+    ViewEscapes,
 }
 
 impl std::fmt::Display for MoveError {
@@ -76,9 +88,9 @@ impl std::fmt::Display for MoveError {
             MoveErrorKind::MoveOutOfBorrow => write!(f, "cannot move out of a borrow"),
             MoveErrorKind::MoveInLoop => write!(f, "use of value moved in previous loop iteration"),
             MoveErrorKind::BorrowEscapes => write!(f, "borrow cannot escape the function"),
-            MoveErrorKind::EditAlias => write!(f, "cannot edit-borrow the same value twice"),
+            MoveErrorKind::MutAlias => write!(f, "cannot mutably borrow the same value twice"),
             MoveErrorKind::ModeMismatch => write!(f, "wrong passing mode for argument"),
-            MoveErrorKind::EditOfView => write!(f, "cannot edit-borrow a view parameter"),
+            MoveErrorKind::MutOfRead => write!(f, "cannot mutably borrow a read parameter"),
             MoveErrorKind::ConditionalDrop => write!(
                 f,
                 "value may be moved on only some paths; a value that implements \
@@ -95,6 +107,19 @@ impl std::fmt::Display for MoveError {
             MoveErrorKind::BorrowConflict => {
                 write!(f, "cannot borrow a value that is already borrowed")
             }
+            MoveErrorKind::ViewMarker { declared } => {
+                if declared {
+                    write!(f, "`view` is only for a struct or enum that holds a borrow")
+                } else {
+                    write!(
+                        f,
+                        "a struct or enum holding a borrow must be declared `view`"
+                    )
+                }
+            }
+            MoveErrorKind::ViewEscapes => {
+                write!(f, "a view cannot escape the frame it borrows from")
+            }
         }
     }
 }
@@ -103,6 +128,13 @@ impl std::error::Error for MoveError {}
 
 pub fn check(program: &Program) -> Result<(), MoveError> {
     let mut errors = Vec::new();
+    // Type definitions: the `view` marker must match the fields.
+    let mut def_checker = Checker {
+        program,
+        errors: Vec::new(),
+    };
+    def_checker.check_view_markers();
+    errors.append(&mut def_checker.errors);
     for func in &program.functions {
         let mut checker = Checker {
             program,
@@ -112,6 +144,7 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
         checker.check_borrows(func);
         checker.check_take_modes(func);
         checker.check_loans(func);
+        checker.check_view_escapes(func);
         errors.append(&mut checker.errors);
     }
     // Report deterministically: earliest span first.
@@ -136,7 +169,7 @@ struct Loan {
 }
 
 /// The borrow kind a type carries, if any: a `Ref` directly, or nested inside an
-/// aggregate (`Option[view T]`). `edit` wins over `view` when both appear.
+/// aggregate (`Option[read T]`). `mut` wins over `read` when both appear.
 fn type_ref_kind(ty: &super::Type) -> Option<RefKind> {
     use super::Type;
     let mut kind = None;
@@ -182,20 +215,73 @@ impl Checker<'_> {
             .1
     }
 
+    // ---- type-definition rules ----------------------------------------------
+
+    /// A struct/enum must be declared `view` exactly when it holds a view-kinded
+    /// field (§7, "nothing silently assigned"): the marker makes the kind — and
+    /// so the escape restriction — visible at the declaration.
+    fn check_view_markers(&mut self) {
+        let structs = &self.program.structs;
+        let enums = &self.program.enums;
+        let mut wrong: Vec<(SpanId, bool)> = Vec::new();
+        for s in structs {
+            let holds = s.fields.iter().any(|f| cfg::is_view(&f.ty, structs, enums));
+            if holds != s.is_view {
+                wrong.push((s.span, s.is_view));
+            }
+        }
+        for e in enums {
+            let holds = e
+                .variants
+                .iter()
+                .flat_map(|v| &v.fields)
+                .any(|f| cfg::is_view(&f.ty, structs, enums));
+            if holds != e.is_view {
+                wrong.push((e.span, e.is_view));
+            }
+        }
+        for (span, declared) in wrong {
+            self.emit(span, MoveErrorKind::ViewMarker { declared });
+        }
+    }
+
+    /// Ban 4 (partial): a view-kinded *nominal* value — a `view` struct/enum —
+    /// may not be returned. Its borrow is hidden behind the type name, so Stage
+    /// 1 can't derive the provenance the caller would need to keep the source
+    /// pinned (that derivation is the next stage). A bare `read T` / `Option[read
+    /// T]` return is fine: the borrow is visible in the return type, and the loan
+    /// checker's elision already pins the source.
+    fn check_view_escapes(&mut self, func: &super::Function) {
+        ViewEscapeWalk { chk: self }.visit_block(&func.body);
+        // The body's tail expression is the implicit return.
+        if let Some(e) = &func.body.expr
+            && self.is_nominal_view(&e.ty)
+        {
+            self.emit(e.span, MoveErrorKind::ViewEscapes);
+        }
+    }
+
+    /// A value that is view-kinded, but whose borrow is *not* visible as a `Ref`
+    /// in the type (so elision can't reach it) — i.e. a nominal `view`
+    /// struct/enum. These are the returns Stage 1 rejects.
+    fn is_nominal_view(&self, ty: &super::Type) -> bool {
+        cfg::is_view(ty, &self.program.structs, &self.program.enums) && type_ref_kind(ty).is_none()
+    }
+
     // ---- move dataflow ------------------------------------------------------
 
     /// Use-after-move, move-in-loop, and borrow-escape via a forward may-moved
     /// dataflow over the shared CFG.
     fn check_moves(&mut self, func: &super::Function) {
         // Track every non-`Copy` local: parameters plus all `let`/`match`
-        // bindings. `take` params are owned (movable); `view`/`edit` params are
+        // bindings. `take` params are owned (movable); `read`/`mut` params are
         // borrows that may not be moved out.
         let mut tracked: HashSet<SymbolId> = HashSet::new();
         let mut borrow_params: HashSet<SymbolId> = HashSet::new();
         for p in &func.params {
             match effect(p.mode, &p.ty) {
                 // Copy params aren't tracked; `take` params are owned (movable);
-                // `view`/`edit` params are borrows that may not be moved out.
+                // `read`/`mut` params are borrows that may not be moved out.
                 Effect::Copy => {}
                 Effect::Move => {
                     tracked.insert(p.name);
@@ -279,7 +365,7 @@ impl Checker<'_> {
         let view_params: HashSet<SymbolId> = func
             .params
             .iter()
-            .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::View))
+            .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::Read))
             .map(|p| p.name)
             .collect();
         BorrowWalk {
@@ -291,10 +377,10 @@ impl Checker<'_> {
 
     // ---- lexical loan checker (Tier A borrows) ------------------------------
 
-    /// Enforce shared-xor-mutable for borrows held in locals. A `let r = view x`
-    /// / `let r = edit x` opens a loan of `x` that lives to the end of its
+    /// Enforce shared-xor-mutable for borrows held in locals. A `let r = read x`
+    /// / `let r = mut x` opens a loan of `x` that lives to the end of its
     /// enclosing block; while it is live, `x` may not be mutated (assigned,
-    /// field-assigned, or passed `edit`/`take`), and an `edit` loan additionally
+    /// field-assigned, or passed `mut`/`take`), and an `mut` loan additionally
     /// forbids any further borrow of `x`. Lexical, so the active loans are just
     /// the stack of not-yet-closed scopes — no dataflow.
     fn check_loans(&mut self, func: &super::Function) {
@@ -377,8 +463,8 @@ impl Checker<'_> {
                 args, arg_modes, ..
             } => {
                 for (i, a) in args.iter().enumerate() {
-                    let mode = arg_modes.get(i).copied().unwrap_or(PassMode::View);
-                    if matches!(mode, PassMode::Edit | PassMode::Take) {
+                    let mode = arg_modes.get(i).copied().unwrap_or(PassMode::Read);
+                    if matches!(mode, PassMode::Mut | PassMode::Take) {
                         if let Some(root) = root_symbol(a) {
                             self.check_mutate(root, a.span, active);
                         }
@@ -427,20 +513,20 @@ impl Checker<'_> {
     }
 
     /// Where a borrow-returning function's result comes from (elision). If the
-    /// return type is a `Ref`, the provenance is the sole borrowed (`view`/
-    /// `edit`) parameter; the loan kind is the return borrow's kind. `None` if
+    /// return type is a `Ref`, the provenance is the sole borrowed (`read`/
+    /// `mut`) parameter; the loan kind is the return borrow's kind. `None` if
     /// the function doesn't return a borrow, or it's ambiguous (more than one
     /// borrowed parameter — that needs explicit `from`, a later extension).
     fn borrow_provenance(&self, func: FuncId) -> Option<(usize, RefKind)> {
         let f = self.program.functions.get(func.0 as usize)?;
         // The return is a borrow if it *contains* a `Ref` anywhere — directly
-        // (`-> view T`) or inside an aggregate (`-> Option[view T]`, Tier B).
+        // (`-> read T`) or inside an aggregate (`-> Option[read T]`, Tier B).
         let ret_kind = type_ref_kind(f.ret.as_ref()?)?;
         let mut borrowed = f
             .params
             .iter()
             .enumerate()
-            .filter(|(_, p)| matches!(p.mode, PassMode::View | PassMode::Edit));
+            .filter(|(_, p)| matches!(p.mode, PassMode::Read | PassMode::Mut));
         let (idx, _) = borrowed.next()?;
         if borrowed.next().is_some() {
             return None;
@@ -455,8 +541,8 @@ impl Checker<'_> {
     }
 
     fn check_borrow(&mut self, root: SymbolId, kind: RefKind, span: SpanId, active: &[Loan]) {
-        // An `edit` loan is exclusive (any further borrow conflicts); a new
-        // `edit` borrow conflicts with any existing loan of the same place.
+        // An `mut` loan is exclusive (any further borrow conflicts); a new
+        // `mut` borrow conflicts with any existing loan of the same place.
         let conflict = active
             .iter()
             .any(|l| l.root == root && (l.kind == RefKind::Mut || kind == RefKind::Mut));
@@ -517,7 +603,7 @@ impl Visitor for TakeModeWalk<'_, '_> {
 fn check_binding_modes(chk: &mut Checker, pattern: &Pattern) {
     match pattern {
         Pattern::Binding { ty, mode, span, .. } => {
-            // A non-`Copy` binding that would borrow (`view`/`edit`, or an
+            // A non-`Copy` binding that would borrow (`read`/`mut`, or an
             // unwritten mode) instead of move is rejected: borrows out of a
             // place await lifetimes, so the only legal mode here is `take`.
             if effect(*mode, ty) == Effect::Borrow {
@@ -535,6 +621,24 @@ fn check_binding_modes(chk: &mut Checker, pattern: &Pattern) {
             }
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
+    }
+}
+
+/// Flags each explicit `return e` of a nominal `view` value (see
+/// [`Checker::check_view_escapes`]). The function-tail expression is checked
+/// separately, so this only overrides `visit_stmt`.
+struct ViewEscapeWalk<'a, 'p> {
+    chk: &'a mut Checker<'p>,
+}
+
+impl Visitor for ViewEscapeWalk<'_, '_> {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        if let Stmt::Return { value: Some(e), .. } = stmt
+            && self.chk.is_nominal_view(&e.ty)
+        {
+            self.chk.emit(e.span, MoveErrorKind::ViewEscapes);
+        }
+        walk_stmt(self, stmt);
     }
 }
 
@@ -617,21 +721,21 @@ impl BorrowWalk<'_, '_> {
         arg_modes: &[PassMode],
         param_modes: &[(PassMode, bool)],
     ) {
-        // Rule 5: the same root place may not be `edit`-borrowed twice, nor
-        // `edit` together with any other mode.
+        // Rule 5: the same root place may not be `mut`-borrowed twice, nor
+        // `mut` together with any other mode.
         let mut seen: HashMap<SymbolId, PassMode> = HashMap::new();
         for (i, arg) in args.iter().enumerate() {
-            let mode = arg_modes.get(i).copied().unwrap_or(PassMode::View);
+            let mode = arg_modes.get(i).copied().unwrap_or(PassMode::Read);
             if let Some(root) = root_symbol(arg) {
                 if let Some(prev) = seen.insert(root, mode) {
-                    if prev == PassMode::Edit || mode == PassMode::Edit {
-                        self.chk.emit(arg.span, MoveErrorKind::EditAlias);
+                    if prev == PassMode::Mut || mode == PassMode::Mut {
+                        self.chk.emit(arg.span, MoveErrorKind::MutAlias);
                     }
                 }
             }
             // Rule 7: a non-Copy *place* argument must be passed with the
             // parameter's declared mode — so an owned (`take`) parameter forces
-            // an explicit `take` at the call, and a borrow forces `view`/`edit`.
+            // an explicit `take` at the call, and a borrow forces `read`/`mut`.
             // Copy arguments ignore modes (keyed on the argument's actual type).
             // A temporary (rvalue — literal, constructor or call result) has no
             // place to move from, so any mode is fine.
@@ -640,11 +744,11 @@ impl BorrowWalk<'_, '_> {
                     self.chk.emit(arg.span, MoveErrorKind::ModeMismatch);
                 }
             }
-            // Rule 4: `edit`-borrowing through a `view` parameter is illegal.
-            if mode == PassMode::Edit {
+            // Rule 4: `mut`-borrowing through a `read` parameter is illegal.
+            if mode == PassMode::Mut {
                 if let Some(root) = root_symbol(arg) {
                     if self.view_params.contains(&root) {
-                        self.chk.emit(arg.span, MoveErrorKind::EditOfView);
+                        self.chk.emit(arg.span, MoveErrorKind::MutOfRead);
                     }
                 }
             }

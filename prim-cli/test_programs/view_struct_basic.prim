@@ -1,0 +1,20 @@
+import std.io.println
+
+// A `struct view` holds a borrow, so it is view-kinded: first-class within the
+// frame that created it (construct, read fields, pass by `read`), but it may
+// not escape that frame (see view_struct_escapes).
+struct Point { x: i32, y: i32 }
+
+struct view Window { p: read Point }
+
+fn width(w: read Window) -> i32 {
+    return w.p.x
+}
+
+fn main() {
+    let pt = Point { x = 3, y = 7 }
+    let w = Window { p = read pt }
+    println(w.p.x)          // 3
+    println(w.p.y)          // 7
+    println(width(read w))  // 3
+}

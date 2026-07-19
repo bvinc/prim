@@ -2,7 +2,7 @@ import std.io.println
 
 struct R { id: i32 }
 impl Drop for R {
-    fn drop(edit self) { println(self.id) }
+    fn drop(mut self) { println(self.id) }
 }
 
 // A resource declared in an inner block drops at the end of that block.

@@ -1,7 +1,7 @@
 import std.io.println
 
 // Array[T, N] element access as methods on the builtin array. `get` returns
-// Option[view T] — a tracked borrow of the element, or None when out of bounds
+// Option[read T] — a tracked borrow of the element, or None when out of bounds
 // (no panic). Reading auto-derefs through the borrow; no raw `*mut`.
 fn main() {
     let a: Array[i32, 4] = [10i32, 20i32, 30i32, 40i32]

@@ -1,10 +1,10 @@
 struct S { n: i32 }
 
-fn leak(s: view S) -> S {
+fn leak(s: read S) -> S {
     return s
 }
 
 fn main() {
     let a = S { n = 1 }
-    let r = leak(view a)
+    let r = leak(read a)
 }

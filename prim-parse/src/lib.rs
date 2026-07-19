@@ -56,7 +56,7 @@ pub enum Type {
     },
     /// An anonymous product type, `(A, B, ...)` with two or more elements.
     Tuple(Vec<Type>),
-    /// A borrow type: `view T` (shared) or `edit T` (exclusive). In a
+    /// A borrow type: `read T` (shared) or `mut T` (exclusive). In a
     /// parameter position this is unwrapped during lowering into the inner
     /// type plus a `PassMode`; it carries the borrow as part of the type so the
     /// same notation works in return and (later) field positions.
@@ -71,12 +71,12 @@ pub enum Type {
     Undetermined, // Type not yet determined during parsing
 }
 
-/// The kind of borrow a `view`/`edit` type denotes.
+/// The kind of borrow a `read`/`mut` type denotes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefKind {
-    /// `view T` — shared read borrow.
-    Shared,
-    /// `edit T` — exclusive mutable borrow.
+    /// `read T` — shared read borrow.
+    Read,
+    /// `mut T` — exclusive mutable borrow.
     Mut,
 }
 
@@ -152,8 +152,8 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
-    /// A borrow expression: `view place` (shared) or `edit place` (exclusive).
-    /// Produces a `view T` / `edit T` value tracked by the loan checker.
+    /// A borrow expression: `read place` (shared) or `mut place` (exclusive).
+    /// Produces a `read T` / `mut T` value tracked by the loan checker.
     Borrow {
         kind: RefKind,
         place: Box<Expr>,
@@ -305,6 +305,11 @@ pub struct StructDefinition {
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
+    /// `true` when declared `struct view Name { ... }`: the type is view-kinded
+    /// (holds a borrow) and so may not escape the frame it is created in. The
+    /// modifier is mandatory when — and only when — a field is itself
+    /// view-kinded; the ownership pass checks that acknowledgment.
+    pub is_view: bool,
     /// `true` for an `@builtin type Name[...]` stub: a fieldless nominal entry
     /// whose representation is intrinsic (e.g. `Array[T, N]`). It exists to give
     /// the built-in type a home for type parameters and impls.
@@ -323,6 +328,9 @@ pub struct EnumDefinition {
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<VariantDefinition>,
+    /// `true` when declared `enum view Name { ... }`. See
+    /// [`StructDefinition::is_view`].
+    pub is_view: bool,
     pub span: Span,
 }
 
@@ -455,12 +463,12 @@ pub enum ConstArg {
 ///   mutate in place (visible to the caller via aliasing).
 /// - `Take` — ownership transfer (move); the caller loses access.
 ///
-/// `View` is the default at both declaration and call sites.
+/// `Read` is the default at both declaration and call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PassMode {
     #[default]
-    View,
-    Edit,
+    Read,
+    Mut,
     Take,
 }
 
@@ -469,7 +477,7 @@ pub struct Parameter {
     pub name: Ident,
     pub type_annotation: Type,
     /// How this parameter is passed. The keyword precedes the parameter name
-    /// (`edit v: Vec[T]`); a bare parameter defaults to `View`.
+    /// (`mut v: Vec[T]`); a bare parameter defaults to `View`.
     pub mode: PassMode,
 }
 

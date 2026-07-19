@@ -56,7 +56,7 @@ fn poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize;
 
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.
-fn panic(msg: view String) {
+fn panic(msg: read String) {
     write_raw(1, msg.data, msg.len)
     let nl = "\n"
     write_raw(1, nl.data, nl.len)
@@ -72,7 +72,7 @@ fn panic(msg: view String) {
 // Like `panic`, but usable where a value of any type `T` is expected (e.g. a
 // `match` arm), since it never returns. The trailing `trap()` is unreachable
 // (`panic` already aborts) but proves divergence to the return checker.
-fn panic_value[T](msg: view String) -> T {
+fn panic_value[T](msg: read String) -> T {
     panic(msg)
     trap()
 }

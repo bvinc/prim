@@ -4,7 +4,7 @@ import std.io.println
 // builds all N elements; dropping it recurses into each element's drop (which
 // previously leaked). Expect 0, then each element's id as it drops.
 struct Res { id: i32 }
-impl Drop for Res { fn drop(edit self) { println(self.id) } }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
 
 fn main() {
     let a: Array[Res, 3] = [Res { id = 1 }, Res { id = 2 }, Res { id = 3 }]

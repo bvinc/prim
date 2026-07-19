@@ -9,7 +9,7 @@ import std.vec.push
 fn main() {
     let g = File.open("definitely_missing_file.txt")
     let mut buf = new[u8]()
-    push(edit buf, take 0u8)
-    let n = g.read(edit buf)
+    push(mut buf, take 0u8)
+    let n = g.read_into(mut buf)
     println(n)
 }

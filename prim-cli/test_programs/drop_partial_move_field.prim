@@ -6,7 +6,7 @@ import std.io.println
 // `inner`(5) must drop EXACTLY once — printed once, never twice (a double-free
 // would print 5 twice or corrupt the heap).
 struct Inner { id: i32 }
-impl Drop for Inner { fn drop(edit self) { println(self.id) } }
+impl Drop for Inner { fn drop(mut self) { println(self.id) } }
 struct Outer { inner: Inner, tag: i32 }
 
 fn take_inner(o: Outer) -> Inner {

@@ -11,8 +11,8 @@ enum Option[T] {
 // Methods are generic over the enum's `T`, inferred from the receiver: a call
 // `o.unwrap()` on an `Option[i32]` monomorphizes the method with `T = i32`.
 impl Option {
-    // Whether this is a `Some`. Borrows the value (`view self`).
-    fn is_some(view self) -> bool {
+    // Whether this is a `Some`. Borrows the value (`read self`).
+    fn is_some(read self) -> bool {
         return match self {
             Option.Some(_) => true,
             Option.None => false,
@@ -20,7 +20,7 @@ impl Option {
     }
 
     // Whether this is a `None`.
-    fn is_none(view self) -> bool {
+    fn is_none(read self) -> bool {
         return match self {
             Option.Some(_) => false,
             Option.None => true,

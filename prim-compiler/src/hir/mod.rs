@@ -401,6 +401,9 @@ pub struct Struct {
     pub name: SymbolId,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<Field>,
+    /// Declared `struct view Name`: the type is view-kinded (holds a borrow)
+    /// and may not escape its frame. See `cfg::is_view`.
+    pub is_view: bool,
     pub span: SpanId,
 }
 
@@ -416,6 +419,8 @@ pub struct Enum {
     /// Variant name → position in `variants`. O(1) lookup at typecheck
     /// and pattern-match time.
     pub variant_idx: std::collections::HashMap<InternSymbol, u32>,
+    /// Declared `enum view Name`. See [`Struct::is_view`].
+    pub is_view: bool,
     pub span: SpanId,
 }
 
@@ -482,7 +487,7 @@ pub enum GlobalInit {
 pub struct Param {
     pub name: SymbolId,
     pub ty: Type,
-    /// How the parameter is passed (`view`/`edit`/`take`). Checked by the
+    /// How the parameter is passed (`read`/`mut`/`take`). Checked by the
     /// ownership pass, then ignored by mono/codegen.
     pub mode: PassMode,
     pub span: SpanId,
@@ -676,7 +681,7 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
-    /// A borrow of a place: `view place` / `edit place`. Yields a `Type::Ref`.
+    /// A borrow of a place: `read place` / `mut place`. Yields a `Type::Ref`.
     /// Representationally it is just the place's value (the handle for an
     /// aggregate, a copy for a scalar); its purpose is to carry borrow
     /// provenance to the loan checker.
@@ -851,7 +856,7 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
-    /// A borrow: `view T` (shared) or `edit T` (exclusive). Representationally
+    /// A borrow: `read T` (shared) or `mut T` (exclusive). Representationally
     /// transparent — a borrow of an aggregate is its handle, a borrow of a Copy
     /// scalar is a copy, so `Ref` is laid out, sized, and loaded exactly as its
     /// inner type. The borrow-ness is a compile-time property enforced by the
@@ -969,8 +974,8 @@ impl fmt::Display for Type {
             }
             Type::Ref { kind, inner } => {
                 let k = match kind {
-                    RefKind::Shared => "view",
-                    RefKind::Mut => "edit",
+                    RefKind::Read => "read",
+                    RefKind::Mut => "mut",
                 };
                 write!(f, "{k} {inner}")
             }

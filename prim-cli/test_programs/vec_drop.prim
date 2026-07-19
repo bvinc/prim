@@ -11,9 +11,9 @@ fn main() {
     let mut iter = 0usize
     while iter < 2000usize {
         let mut v = new[i32]()
-        push(edit v, take 10i32)
-        push(edit v, take 20i32)
-        push(edit v, take 30i32)
+        push(mut v, take 10i32)
+        push(mut v, take 20i32)
+        push(mut v, take 30i32)
         total = total + get(v, 2usize)
         iter = iter + 1usize
     }

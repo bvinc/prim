@@ -5,8 +5,8 @@ import std.io.println
 struct Point { x: i32, y: i32 }
 struct Vec3 { a: i32, b: i32, c: i32 }
 
-fn dist_sq(p: view Point) -> i32 { return p.x * p.x + p.y * p.y }
-fn sum3(v: view Vec3) -> i32 { return v.a + v.b + v.c }
+fn dist_sq(p: read Point) -> i32 { return p.x * p.x + p.y * p.y }
+fn sum3(v: read Vec3) -> i32 { return v.a + v.b + v.c }
 
 fn main() {
     let p = Point { x = 6, y = 8 }

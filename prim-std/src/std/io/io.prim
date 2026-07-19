@@ -19,12 +19,12 @@ import std.fmt.debug_string
 // A sink for bytes. I/O is byte-oriented; text is just bytes (see the
 // `Display` helpers below, which format into a byte buffer).
 trait Writer {
-    fn write(self, bytes: view Vec[u8]) -> usize;
+    fn write(self, bytes: read Vec[u8]) -> usize;
 }
 
 // A source of bytes.
 trait Reader {
-    fn read(self, buf: edit Vec[u8]) -> usize;
+    fn read_into(self, buf: mut Vec[u8]) -> usize;
 }
 
 // The standard streams are distinct, zero-sized handles whose descriptors
@@ -46,7 +46,7 @@ struct File {
 // Open `path` under the first preopened directory (fd 3, the cwd granted by
 // `prim run --dir .`) with the given WASI open flags. `rights` requests the
 // read/write/seek/stat capabilities a regular file needs.
-fn open_flags(path: view String, oflags: i32) -> File {
+fn open_flags(path: read String, oflags: i32) -> File {
     let out = alloc(4usize)
     let slot = at[i32](out, 0usize)
     // -1 if path_open fails (it leaves the slot untouched), so a failed open's
@@ -61,18 +61,18 @@ fn open_flags(path: view String, oflags: i32) -> File {
 
 impl File {
     // Create or truncate a file for writing (O_CREAT | O_TRUNC).
-    fn create(path: view String) -> File {
+    fn create(path: read String) -> File {
         return open_flags(path, 9i32)
     }
 
     // Open an existing file for reading.
-    fn open(path: view String) -> File {
+    fn open(path: read String) -> File {
         return open_flags(path, 0i32)
     }
 }
 
 impl Drop for File {
-    fn drop(edit self) {
+    fn drop(mut self) {
         close_fd(self.fd)
     }
 }
@@ -80,12 +80,12 @@ impl Drop for File {
 // Shared fd-level I/O. Both park the task until the fd is ready, so a slow peer
 // blocks only this task, not the whole scheduler. `read_fd` sets the buffer's
 // length to the number of bytes read (0 at end of input).
-fn write_fd(fd: i32, bytes: view Vec[u8]) -> usize {
+fn write_fd(fd: i32, bytes: read Vec[u8]) -> usize {
     park_on_write(fd)
     return write_raw(fd, bytes.ptr, bytes.len)
 }
 
-fn read_fd(fd: i32, buf: edit Vec[u8]) -> usize {
+fn read_fd(fd: i32, buf: mut Vec[u8]) -> usize {
     park_on_read(fd)
     let n = read_raw(fd, buf.ptr, buf.cap)
     buf.len = n
@@ -93,27 +93,27 @@ fn read_fd(fd: i32, buf: edit Vec[u8]) -> usize {
 }
 
 impl Writer for Stdout {
-    fn write(self, bytes: view Vec[u8]) -> usize { return write_fd(1i32, bytes) }
+    fn write(self, bytes: read Vec[u8]) -> usize { return write_fd(1i32, bytes) }
 }
 impl Writer for Stderr {
-    fn write(self, bytes: view Vec[u8]) -> usize { return write_fd(2i32, bytes) }
+    fn write(self, bytes: read Vec[u8]) -> usize { return write_fd(2i32, bytes) }
 }
 impl Writer for File {
-    fn write(self, bytes: view Vec[u8]) -> usize { return write_fd(self.fd, bytes) }
+    fn write(self, bytes: read Vec[u8]) -> usize { return write_fd(self.fd, bytes) }
 }
 impl Reader for Stdin {
-    fn read(self, buf: edit Vec[u8]) -> usize { return read_fd(0i32, edit buf) }
+    fn read_into(self, buf: mut Vec[u8]) -> usize { return read_fd(0i32, mut buf) }
 }
 impl Reader for File {
-    fn read(self, buf: edit Vec[u8]) -> usize { return read_fd(self.fd, edit buf) }
+    fn read_into(self, buf: mut Vec[u8]) -> usize { return read_fd(self.fd, mut buf) }
 }
 
 // Render a `Display` value into a byte buffer and write it to any `Writer`,
 // optionally followed by a newline. The `Formatter` accumulates a `Vec[u8]`, so
 // the bytes go straight to the writer with no intermediate `String`.
-fn write_display[W: Writer, T: Display](w: view W, x: view T, newline: bool) {
+fn write_display[W: Writer, T: Display](w: read W, x: read T, newline: bool) {
     let f = new_formatter()
-    x.fmt(edit f)
+    x.fmt(mut f)
     if newline {
         f.write_byte(10)
     }
@@ -123,29 +123,29 @@ fn write_display[W: Writer, T: Display](w: view W, x: view T, newline: bool) {
 }
 
 // Render a `Display` value to stdout.
-fn print[T: Display](x: view T) {
+fn print[T: Display](x: read T) {
     write_display(stdout(), x, false)
 }
 
 // Render a `Display` value to stdout, followed by a newline.
-fn println[T: Display](x: view T) {
+fn println[T: Display](x: read T) {
     write_display(stdout(), x, true)
 }
 
 // Render a `Display` value to stderr.
-fn eprint[T: Display](x: view T) {
+fn eprint[T: Display](x: read T) {
     write_display(stderr(), x, false)
 }
 
 // Render a `Display` value to stderr, followed by a newline.
-fn eprintln[T: Display](x: view T) {
+fn eprintln[T: Display](x: read T) {
     write_display(stderr(), x, true)
 }
 
 // Backs the `@dbg` expression: print the `[file:line] expr = ` prefix and the
 // value's `Debug` form (with a trailing newline), then return the value so
 // `@dbg e` still evaluates to `e`.
-fn dbg[T: Debug](prefix: view String, x: T) -> T {
+fn dbg[T: Debug](prefix: read String, x: T) -> T {
     print(prefix)
     println(debug_string(x))
     return x

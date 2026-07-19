@@ -1,11 +1,11 @@
 struct S { n: i32 }
 struct Box { s: S }
 
-fn stash(s: view S) -> Box {
+fn stash(s: read S) -> Box {
     return Box { s = s }
 }
 
 fn main() {
     let a = S { n = 1 }
-    let b = stash(view a)
+    let b = stash(read a)
 }

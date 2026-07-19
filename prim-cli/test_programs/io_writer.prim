@@ -7,8 +7,8 @@ import std.vec.push
 // File handle. (Writer.write returns the byte count; discarded with `;`.)
 fn main() {
     let v = new[u8]()
-    push[u8](edit v, take 72u8)
-    push[u8](edit v, take 105u8)
-    push[u8](edit v, take 10u8)
+    push[u8](mut v, take 72u8)
+    push[u8](mut v, take 105u8)
+    push[u8](mut v, take 10u8)
     stdout().write(v);
 }

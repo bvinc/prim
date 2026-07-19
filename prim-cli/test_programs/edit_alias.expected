@@ -1,1 +1,1 @@
-ERROR: cannot edit-borrow the same value twice
+ERROR: cannot mutably borrow the same value twice

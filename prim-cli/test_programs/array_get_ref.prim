@@ -1,7 +1,7 @@
 import std.io.println
 import std.option.Option
 
-// Tier B: Array.get returns Option[view T] — a borrow stored inside an
+// Tier B: Array.get returns Option[read T] — a borrow stored inside an
 // aggregate. The borrow is extracted by match; the loan is tracked against the
 // array while the Option is live.
 fn main() {

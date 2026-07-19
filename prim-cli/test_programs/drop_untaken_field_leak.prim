@@ -6,7 +6,7 @@ import std.io.println
 // never runs. Expected output OMITS 2. The point: 2 is ABSENT (leak), never
 // duplicated (no double-free).
 struct Res { id: i32 }
-impl Drop for Res { fn drop(edit self) { println(self.id) } }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
 struct Pair { a: Res, b: Res }
 
 fn main() {

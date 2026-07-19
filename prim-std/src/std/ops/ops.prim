@@ -3,9 +3,9 @@ mod ops
 // `Drop` lets a type define cleanup that runs automatically when one of its
 // values goes out of scope (RAII). The compiler calls `drop` on an owned value
 // at the end of its scope (and on early return/break), before freeing the
-// value's heap box and recursively dropping its fields. `drop` takes an `edit`
+// value's heap box and recursively dropping its fields. `drop` takes an `mut`
 // borrow — it cleans up in place and does not consume `self`, so it is never
 // re-entered on the same value.
 trait Drop {
-    fn drop(edit self);
+    fn drop(mut self);
 }

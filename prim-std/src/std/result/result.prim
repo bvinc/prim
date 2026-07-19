@@ -13,7 +13,7 @@ enum Result[T, E] {
 // `r.unwrap()` on a `Result[i32, E]` monomorphizes with `T = i32`.
 impl Result {
     // Whether this is an `Ok`.
-    fn is_ok(view self) -> bool {
+    fn is_ok(read self) -> bool {
         return match self {
             Result.Ok(_) => true,
             Result.Err(_) => false,
@@ -21,7 +21,7 @@ impl Result {
     }
 
     // Whether this is an `Err`.
-    fn is_err(view self) -> bool {
+    fn is_err(read self) -> bool {
         return match self {
             Result.Ok(_) => false,
             Result.Err(_) => true,

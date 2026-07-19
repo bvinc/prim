@@ -19,8 +19,8 @@
 //!     ownership checker uses (with and without back-edges) for use-after-move.
 
 use super::{
-    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, RefKind, SpanId, Stmt,
-    SymbolId, Type,
+    Block as HirBlock, Enum, Expr, ExprKind, MatchArm, PassMode, Pattern, RefKind, SpanId, Stmt,
+    Struct, SymbolId, Type,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -597,7 +597,7 @@ impl Builder<'_> {
     /// else (borrows, copies) is a read.
     fn read_args(&mut self, args: &[Expr], arg_modes: &[PassMode]) {
         for (i, a) in args.iter().enumerate() {
-            let mode = arg_modes.get(i).copied().unwrap_or(PassMode::View);
+            let mode = arg_modes.get(i).copied().unwrap_or(PassMode::Read);
             if effect(mode, &a.ty) == Effect::Move {
                 self.moved(a);
             } else {
@@ -631,10 +631,37 @@ pub fn is_copy(ty: &Type) -> bool {
             | Type::IntVar
             | Type::FloatVar
             | Type::Undetermined
-            // A shared `view` borrow copies freely (like `&T`); an exclusive
-            // `edit` borrow is unique and does not.
-            | Type::Ref { kind: RefKind::Shared, .. }
+            // A shared `read` borrow copies freely (like `&T`); an exclusive
+            // `mut` borrow is unique and does not.
+            | Type::Ref { kind: RefKind::Read, .. }
     )
+}
+
+/// Whether a type is *view-kinded*: it transitively holds a borrow, so a value
+/// of this type may not escape the frame it was created in (the four bans in
+/// `ownership.rs`). A borrow (`Ref`) is view-kinded axiomatically; a struct or
+/// enum is view-kinded when it is declared `view` or any of its generic
+/// arguments is (per-instantiation, so `Wrapper[read T]` is view even when
+/// `Wrapper` isn't); a composite is view-kinded when any component is.
+///
+/// `Param` is treated as data here: pre-monomorphization we don't know its
+/// instantiation, and the only way a concrete borrow enters a `Param` slot is a
+/// borrow expression whose own type is a `Ref` — caught at that site. The
+/// remaining case (a generic that stores a borrow *through* a type parameter)
+/// is deferred; no current program constructs it.
+pub fn is_view(ty: &Type, structs: &[Struct], enums: &[Enum]) -> bool {
+    match ty {
+        Type::Ref { .. } => true,
+        Type::Struct(id, args) => {
+            structs[id.0 as usize].is_view || args.iter().any(|a| is_view(a, structs, enums))
+        }
+        Type::Enum(id, args) => {
+            enums[id.0 as usize].is_view || args.iter().any(|a| is_view(a, structs, enums))
+        }
+        Type::Tuple(elems) => elems.iter().any(|e| is_view(e, structs, enums)),
+        Type::Array(elem, _) => is_view(elem, structs, enums),
+        _ => false,
+    }
 }
 
 /// What a binding (parameter, `let`, or `match` arm) or call argument does to
@@ -647,12 +674,12 @@ pub enum Effect {
     Copy,
     /// A `take` of a non-`Copy` value: ownership moves out, the source dies.
     Move,
-    /// A `view`/`edit` of a non-`Copy` value: the source is borrowed and kept.
+    /// A `read`/`mut` of a non-`Copy` value: the source is borrowed and kept.
     Borrow,
 }
 
 /// Classify a moded binding/argument by its effect on the source. `Copy` types
-/// ignore the mode; otherwise `take` moves and `view`/`edit` borrow.
+/// ignore the mode; otherwise `take` moves and `read`/`mut` borrow.
 pub fn effect(mode: PassMode, ty: &Type) -> Effect {
     if is_copy(ty) {
         Effect::Copy

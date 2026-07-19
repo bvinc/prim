@@ -31,7 +31,7 @@ fn make_large() -> Large {
     }
 }
 
-fn sum_large(s: view Large) -> i32 {
+fn sum_large(s: read Large) -> i32 {
     return s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i + s.j
 }
 

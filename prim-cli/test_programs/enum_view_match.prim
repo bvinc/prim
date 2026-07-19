@@ -1,0 +1,16 @@
+import std.io.println
+
+// A view-kinded enum: a variant carries a borrow, so the enum is `enum view`.
+struct Point { x: i32, y: i32 }
+
+enum view Tok { Ref(read Point), Eof }
+
+fn main() {
+    let pt = Point { x = 9, y = 4 }
+    let b = read pt
+    let t = Tok.Ref(b)
+    match t {
+        Tok.Ref(r) => println(r.x),   // 9
+        Tok.Eof => println(0i32),
+    }
+}

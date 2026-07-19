@@ -21,7 +21,7 @@ struct Vec[T] {
 // with `drop_in_place` — a no-op for elements with no destructor. A null `ptr`
 // (empty Vec) is fine; the loop runs zero times and `dealloc` ignores null.
 impl Drop for Vec {
-    fn drop(edit self) {
+    fn drop(mut self) {
         let mut i = 0usize
         while i < self.len {
             drop_in_place[T](add[T](self.ptr, i))
@@ -35,11 +35,11 @@ fn new[T]() -> Vec[T] {
     return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
 }
 
-fn len[T](v: view Vec[T]) -> usize {
+fn len[T](v: read Vec[T]) -> usize {
     return v.len
 }
 
-fn push[T](v: edit Vec[T], value: T) {
+fn push[T](v: mut Vec[T], value: T) {
     if v.len == v.cap {
         let mut new_cap = 4usize
         if v.cap != 0usize {
@@ -52,31 +52,31 @@ fn push[T](v: edit Vec[T], value: T) {
     v.len = v.len + 1
 }
 
-fn get[T](v: view Vec[T], i: usize) -> T {
+fn get[T](v: read Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
     return *add[T](v.ptr, i)
 }
 
-// Borrow element i in place: `at` for a shared view, `at_mut` for exclusive
+// Borrow element i in place: `at` for a shared read, `at_mut` for exclusive
 // mutation. The returned borrow is tracked against the vector, so the vector
 // cannot be mutated (e.g. pushed) while the borrow is live.
-fn at[T](v: view Vec[T], i: usize) -> view T {
+fn at[T](v: read Vec[T], i: usize) -> read T {
     if i >= v.len {
         panic("Vec.at: index out of bounds")
     }
-    return view *add[T](v.ptr, i)
+    return read *add[T](v.ptr, i)
 }
 
-fn at_mut[T](v: edit Vec[T], i: usize) -> edit T {
+fn at_mut[T](v: mut Vec[T], i: usize) -> mut T {
     if i >= v.len {
         panic("Vec.at_mut: index out of bounds")
     }
-    return edit *add[T](v.ptr, i)
+    return mut *add[T](v.ptr, i)
 }
 
-fn set[T](v: edit Vec[T], i: usize, value: T) {
+fn set[T](v: mut Vec[T], i: usize, value: T) {
     if i >= v.len {
         panic("Vec.set: index out of bounds")
     }

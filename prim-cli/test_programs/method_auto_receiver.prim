@@ -3,11 +3,11 @@ import std.io.println
 struct Counter { n: i32 }
 
 impl Counter {
-    fn bump(edit self) { self.n = self.n + 1i32 }
-    fn get(view self) -> i32 { return self.n }
+    fn bump(mut self) { self.n = self.n + 1i32 }
+    fn get(read self) -> i32 { return self.n }
 }
 
-// The receiver's declared mode (`edit`/`view`) is applied automatically at the
+// The receiver's declared mode (`mut`/`read`) is applied automatically at the
 // call site.
 fn main() {
     let c = Counter { n = 41 }

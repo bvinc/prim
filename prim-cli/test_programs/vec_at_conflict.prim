@@ -9,8 +9,8 @@ struct Item { v: i32 }
 
 fn main() {
     let mut items = new[Item]()
-    push(edit items, take Item { v = 7i32 })
+    push(mut items, take Item { v = 7i32 })
     let r = at(items, 0usize)
-    push(edit items, take Item { v = 9i32 })
+    push(mut items, take Item { v = 9i32 })
     println(r.v)
 }

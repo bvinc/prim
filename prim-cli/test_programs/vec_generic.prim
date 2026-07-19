@@ -8,15 +8,15 @@ struct Point { x: i32, y: i32 }
 fn main() {
     // Vec[u64] — 8-byte elements (exercises size_of scaling)
     let nums = new[u64]()
-    push(edit nums, take 1000000000000u64)
-    push(edit nums, take 2000000000000u64)
+    push(mut nums, take 1000000000000u64)
+    push(mut nums, take 2000000000000u64)
     println(get(nums, 0usize))   // 1000000000000
     println(get(nums, 1usize))   // 2000000000000
 
     // Vec[Point] — struct (reference) elements
     let pts = new[Point]()
-    push(edit pts, take Point { x = 1, y = 2 })
-    push(edit pts, take Point { x = 3, y = 4 })
+    push(mut pts, take Point { x = 1, y = 2 })
+    push(mut pts, take Point { x = 3, y = 4 })
     let p = get(pts, 1usize)
     println(p.x)                 // 3
     println(p.y)                 // 4

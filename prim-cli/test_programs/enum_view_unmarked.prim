@@ -1,0 +1,11 @@
+import std.io.println
+
+// The acknowledgment rule applies to enums too: a variant carrying a borrow
+// makes the enum view-kinded, which must be declared.
+struct Point { x: i32 }
+
+enum Tok { Ref(read Point), Eof }
+
+fn main() {
+    println(1i32)
+}
