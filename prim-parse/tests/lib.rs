@@ -161,10 +161,10 @@ fn test_parse_struct_pattern() {
 }
 
 #[test]
-fn test_parse_take_pattern() {
-    // `take` on a field shorthand and on a whole-value binding sets the binding
-    // mode to Take; a plain field binding stays View.
-    let source = "fn f() { let r = match v { E.V { take x, y } => x, take rest => rest } }";
+fn test_parse_own_pattern() {
+    // `own` on a field shorthand and on a whole-value binding sets the binding
+    // mode to Own; a plain field binding stays Read.
+    let source = "fn f() { let r = match v { E.V { own x, y } => x, own rest => rest } }";
     let (program, interner) = parse_ok(source);
     let Stmt::Let { value, .. } = &program.functions[0].body.stmts[0] else {
         panic!("expected let");
@@ -178,8 +178,8 @@ fn test_parse_take_pattern() {
     };
     assert_eq!(interner.resolve(&fields[0].field.sym), "x");
     match &fields[0].pattern {
-        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::Take),
-        other => panic!("expected take binding, got {:?}", other),
+        Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::Own),
+        other => panic!("expected own binding, got {:?}", other),
     }
     match &fields[1].pattern {
         Pattern::Binding { mode, .. } => assert_eq!(*mode, PassMode::Read),
@@ -189,9 +189,9 @@ fn test_parse_take_pattern() {
     match &arms[1].pattern {
         Pattern::Binding { name, mode, .. } => {
             assert_eq!(interner.resolve(&name.sym), "rest");
-            assert_eq!(*mode, PassMode::Take);
+            assert_eq!(*mode, PassMode::Own);
         }
-        other => panic!("expected take binding, got {:?}", other),
+        other => panic!("expected own binding, got {:?}", other),
     }
 }
 

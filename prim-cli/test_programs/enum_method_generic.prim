@@ -9,12 +9,12 @@ enum Option[T] {
 }
 
 trait Opt {
-    fn unwrap_or(o: Option[i32], fallback: i32) -> i32;
+    fn unwrap_or(o: own Option[i32], fallback: i32) -> i32;
     fn is_some(o: read Option[i32]) -> i32;
 }
 
 impl Opt for Option {
-    fn unwrap_or(o: Option[i32], fallback: i32) -> i32 {
+    fn unwrap_or(o: own Option[i32], fallback: i32) -> i32 {
         return match o {
             Option.Some { value } => value,
             Option.None => fallback,
@@ -33,7 +33,7 @@ fn main() {
     let b: Option[i32] = Option.None
     println(Option.unwrap_or(Option.Some { value = 42i32 }, 7))   // 42
     let bb: Option[i32] = Option.None
-    println(Option.unwrap_or(take bb, 7))   // 7
+    println(Option.unwrap_or(own bb, 7))   // 7
     println(Option.is_some(a))      // 1
     println(Option.is_some(b))      // 0
 }

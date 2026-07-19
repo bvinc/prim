@@ -2,7 +2,7 @@ import std.io.println
 
 struct S { n: i32 }
 
-fn sink(s: S) -> i32 { return s.n }
+fn sink(s: own S) -> i32 { return s.n }
 
 // A move inside a nested scope doesn't affect an outer-scope binding.
 fn main() {
@@ -10,7 +10,7 @@ fn main() {
     let mut k = 0i32
     if true {
         let b = S { n = 7 }
-        k = sink(take b)
+        k = sink(own b)
     }
     println(a.n)
 }

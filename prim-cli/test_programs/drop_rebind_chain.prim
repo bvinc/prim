@@ -9,7 +9,7 @@ impl Drop for R {
 // value drops exactly once despite three bindings naming it.
 fn main() {
     let a = R { id = 7 }
-    let take b = a
-    let take c = b
+    let own b = a
+    let own c = b
     println(0i32)
 }

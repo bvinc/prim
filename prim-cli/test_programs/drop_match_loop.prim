@@ -18,7 +18,7 @@ fn main() {
     while i < 3i32 {
         let o = Opt.Some { r = Res { id = i } }
         match o {
-            Opt.Some { take r } => println(100i32),
+            Opt.Some { own r } => println(100i32),
             Opt.None => println(200i32),
         }
         i = i + 1i32

@@ -2,7 +2,7 @@ import std.io.println
 
 struct S { n: i32 }
 
-fn sink(s: S) -> i32 { return s.n }
+fn sink(s: own S) -> i32 { return s.n }
 
 // Moving inside a loop is fine when the binding is reassigned before the
 // back-edge, so the next iteration sees a live value.
@@ -10,7 +10,7 @@ fn main() {
     let mut a = S { n = 0 }
     let mut i = 0i32
     while i < 3i32 {
-        let x = sink(take a)
+        let x = sink(own a)
         a = S { n = i }
         i = i + 1i32
     }

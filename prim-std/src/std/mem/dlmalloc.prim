@@ -72,7 +72,7 @@ fn clz(x: usize) -> usize;
 // ============================================================================
 
 // Root of the allocator state: the address of malloc_state, or 0 before the
-// first allocation initializes it. Must be a usize (globals take a literal
+// first allocation initializes it. Must be a usize (globals own a literal
 // initializer and there is no pointer literal); from_addr recovers the
 // pointer.
 let mut GM: usize = 0usize;
@@ -779,7 +779,7 @@ fn alloc(nbytes: usize) -> *mut u8 {
         }
         if nb > dvsize() {
             if smallbits != 0usize {
-                // A larger smallbin is non-empty: take its first chunk, split.
+                // A larger smallbin is non-empty: own its first chunk, split.
                 let leftbits = smallmap() & !((1usize << idx) - 1usize)
                 let i = ctz(leftbits)
                 let b = smallbin_at(i)

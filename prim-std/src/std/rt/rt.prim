@@ -147,7 +147,7 @@ fn poll_parked(kind: mut Vec[i32], deadline: read Vec[u64], fd: read Vec[i32]) {
     let mut e = 0usize
     while e < nready {
         let h = usize.from_u64_wrapping(*at[u64](events, e * 32usize))
-        set[i32](mut kind, h, take 0i32)
+        set[i32](mut kind, h, own 0i32)
         e = e + 1usize
     }
     free(subs)
@@ -170,18 +170,18 @@ fn schedule() {
         let mut i = 0usize
         while i < task_count() {
             while len[i32](kind) <= i {
-                push[i32](mut kind, take 0i32)
-                push[u64](mut deadline, take 0u64)
-                push[i32](mut fd, take 0i32)
+                push[i32](mut kind, own 0i32)
+                push[u64](mut deadline, own 0u64)
+                push[i32](mut fd, own 0i32)
             }
             if task_live(i) {
                 any_live = true
                 if get[i32](kind, i) == 0i32 {
                     PENDING_KIND = 0i32
                     if resume(i) {
-                        set[i32](mut kind, i, take PENDING_KIND)
-                        set[u64](mut deadline, i, take PENDING_DEADLINE)
-                        set[i32](mut fd, i, take PENDING_FD)
+                        set[i32](mut kind, i, own PENDING_KIND)
+                        set[u64](mut deadline, i, own PENDING_DEADLINE)
+                        set[i32](mut fd, i, own PENDING_FD)
                     }
                     ran = true
                 }

@@ -1,11 +1,11 @@
 struct S { n: i32 }
 
-fn f(s: S) -> S {
-    let take r = s
+fn f(s: own S) -> S {
+    let own r = s
     return s
 }
 
 fn main() {
     let a = S { n = 1 }
-    let b = f(take a)
+    let b = f(own a)
 }

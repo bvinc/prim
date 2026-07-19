@@ -145,7 +145,7 @@ fn eprintln[T: Display](x: read T) {
 // Backs the `@dbg` expression: print the `[file:line] expr = ` prefix and the
 // value's `Debug` form (with a trailing newline), then return the value so
 // `@dbg e` still evaluates to `e`.
-fn dbg[T: Debug](prefix: read String, x: T) -> T {
+fn dbg[T: Debug](prefix: read String, x: own T) -> T {
     print(prefix)
     println(debug_string(x))
     return x

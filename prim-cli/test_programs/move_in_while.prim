@@ -6,7 +6,7 @@ fn main() {
     let a = S { n = 1 }
     let mut i = 0i32
     while i < 3i32 {
-        let x = sink(take a)
+        let x = sink(own a)
         i = i + 1i32
     }
 }

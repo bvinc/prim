@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn need_take(s: S) -> i32 { return s.n }
+fn need_take(s: own S) -> i32 { return s.n }
 
 fn main() {
     let a = S { n = 1 }

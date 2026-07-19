@@ -17,7 +17,7 @@ enum Opt {
 fn main() {
     let o = Opt.Some { w = Wrap { r = Res { id = 5 } } }
     match o {
-        Opt.Some { w: Wrap { take r } } => println(1i32),
+        Opt.Some { w: Wrap { own r } } => println(1i32),
         Opt.None => println(2i32),
     }
     println(0i32)

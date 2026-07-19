@@ -1,4 +1,4 @@
-// Binding a non-Copy payload in a match requires `take` (extracting owned data
+// Binding a non-Copy payload in a match requires `own` (extracting owned data
 // from a scrutinee is explicit). Without it, this is an error.
 struct S { n: i32 }
 enum Box {

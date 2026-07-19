@@ -57,7 +57,7 @@ fn elaborate_function(
     // Maps each droppable local to its declaration span (for diagnostics).
     let mut droppable: HashMap<SymbolId, SpanId> = HashMap::new();
     for p in &func.params {
-        if matches!(p.mode, PassMode::Take) && info.needs_drop(&p.ty) {
+        if matches!(p.mode, PassMode::Own) && info.needs_drop(&p.ty) {
             droppable.insert(p.name, p.span);
         }
     }

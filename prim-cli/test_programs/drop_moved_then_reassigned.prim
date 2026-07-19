@@ -5,13 +5,13 @@ impl Drop for R {
     fn drop(mut self) { println(self.id) }
 }
 
-fn sink(r: R) {
+fn sink(r: own R) {
     println(9i32)
 }
 
 fn main() {
     let mut r = R { id = 1 }
-    sink(take r)
+    sink(own r)
     r = R { id = 2 }
     println(0i32)
 }

@@ -73,8 +73,14 @@ later feature).
   `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
   `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
 
-- **Borrows — Tier A/B + the `data`/`view` kind system done; derivation for
-  escaping view types remains.** `read T` / `mut T` are real, tracked reference
+- **Borrows — read-default params, the `data`/`view` kind system, and
+  return-provenance done; unmarked consumption + deeper derivation remain.**
+  Parameters default to **`read`**: a bare `x: T` borrows (reading is the common
+  case going in), `x: mut T` mutably borrows, and an owned parameter is written
+  `x: own T`. Move-out bindings and match arms use `own` (`let own r = ...`,
+  `Some(own v)`); the `take` keyword is retired.
+
+  `read T` / `mut T` are real, tracked reference
   types: borrow expressions (`read place` / `mut place`), a function may *return*
   a borrow (provenance by elision — the sole borrowed parameter, detected even
   when the `Ref` is nested in the return type), a borrow may live **inside an
@@ -118,6 +124,13 @@ later feature).
     borrow (`at_mut(v,i).f = x`); an inline borrow expr in constructor position
     (`Some(read x)` parses `read` as an arg mode — bind to a local first);
     aggregate *array* elements (inline stride) in `Array.get`.
+  - **Unmarked consumption** — the memory-model wants `mut x` to be the *only*
+    call-site mark, with consumption and reads unmarked (0007 locality). Today a
+    call still marks the mode explicitly (`f(own x)`, `f(mut x)`) and the checker
+    requires it to match the parameter's declared mode. Making consumption
+    unmarked means deriving each argument's effect from the *callee's* parameter
+    mode, which the CFG's move detection currently reads from the call-site
+    arg-mode — a deeper change deferred here.
   - **NLL** — borrows are lexical; non-lexical liveness is a strict,
     backward-compatible upgrade on the same checker.
   - **Multiple borrowed params** — elision is single-source; more than one needs

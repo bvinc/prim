@@ -5,14 +5,14 @@ impl Drop for R {
     fn drop(mut self) { println(self.id) }
 }
 
-// A resource moved (`take`) into a callee is dropped by the callee, not the
+// A resource moved (`own`) into a callee is dropped by the callee, not the
 // caller — exactly once.
-fn consume(r: R) {
+fn consume(r: own R) {
     println(9i32)
 }
 
 fn main() {
     let a = R { id = 1 }
-    consume(take a)
+    consume(own a)
     println(0i32)
 }

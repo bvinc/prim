@@ -1,9 +1,9 @@
 struct S { n: i32 }
 
-fn sink(s: S) -> i32 { return s.n }
+fn sink(s: own S) -> i32 { return s.n }
 
 fn main() {
     let a = S { n = 1 }
-    let x = sink(take a)
-    let y = sink(take a)
+    let x = sink(own a)
+    let y = sink(own a)
 }

@@ -1,6 +1,6 @@
 import std.io.println
 
-// Literal patterns take their type from the scrutinee (no suffix needed).
+// Literal patterns own their type from the scrutinee (no suffix needed).
 fn classify(n: i32) -> i32 {
     return match n {
         0 => 10i32,

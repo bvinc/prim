@@ -12,6 +12,6 @@ struct Pair { a: Res, b: Res }
 fn main() {
     let p = Pair { a = Res { id = 1 }, b = Res { id = 2 } }
     match p {
-        Pair { a: take x, b: _ } => println(0i32),
+        Pair { a: own x, b: _ } => println(0i32),
     }
 }

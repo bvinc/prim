@@ -9,13 +9,13 @@ fn checked_div(a: i32, b: i32) -> Result[i32, i32] {
 }
 
 fn main() {
-    // `unwrap`/`unwrap_or` consume their Result (take self); `is_ok` only
+    // `unwrap`/`unwrap_or` consume their Result (own self); `is_ok` only
     // borrows, so it reads a fresh value rather than the moved `ok`.
     let ok = checked_div(20i32, 4i32)
     let err = checked_div(1i32, 0i32)
     let ok_check = checked_div(20i32, 4i32)
     println(ok.unwrap())
-    println(err.unwrap_or(take 99i32))
+    println(err.unwrap_or(own 99i32))
     if ok_check.is_ok() {
         println(1i32)
     }

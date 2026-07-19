@@ -28,17 +28,17 @@ impl Option {
     }
 
     // Extract the value, aborting if there is none. Consumes the option.
-    fn unwrap(take self) -> T {
+    fn unwrap(own self) -> T {
         return match self {
-            Option.Some(take v) => v,
+            Option.Some(own v) => v,
             Option.None => panic_value[T]("Option.unwrap called on None"),
         }
     }
 
     // Extract the value, or return `default` if there is none.
-    fn unwrap_or(take self, default: T) -> T {
+    fn unwrap_or(own self, default: T) -> T {
         return match self {
-            Option.Some(take v) => v,
+            Option.Some(own v) => v,
             Option.None => default,
         }
     }

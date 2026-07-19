@@ -30,17 +30,17 @@ impl Result {
 
     // Extract the success value, aborting if the result is an `Err`. Consumes
     // the result.
-    fn unwrap(take self) -> T {
+    fn unwrap(own self) -> T {
         return match self {
-            Result.Ok(take v) => v,
+            Result.Ok(own v) => v,
             Result.Err(_) => panic_value[T]("Result.unwrap called on Err"),
         }
     }
 
     // Extract the success value, or return `default` if it is an `Err`.
-    fn unwrap_or(take self, default: T) -> T {
+    fn unwrap_or(own self, default: T) -> T {
         return match self {
-            Result.Ok(take v) => v,
+            Result.Ok(own v) => v,
             Result.Err(_) => default,
         }
     }

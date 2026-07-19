@@ -10,5 +10,5 @@ fn main() {
     println(b.is_some())
     let c: Option[i32] = Option.None
     println(c.is_none())
-    println(c.unwrap_or(take 9i32))
+    println(c.unwrap_or(own 9i32))
 }

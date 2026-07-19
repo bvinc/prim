@@ -5,11 +5,11 @@ struct Wrap[T] {
 }
 
 // Generic function that constructs a generic struct using its own T.
-fn wrap[T](x: T) -> Wrap[T] {
+fn wrap[T](x: own T) -> Wrap[T] {
     return Wrap { inner = x }
 }
 
 fn main() {
-    let a = wrap(take 42i32)
+    let a = wrap(own 42i32)
     println(a.inner)
 }

@@ -5,17 +5,17 @@ impl Drop for R {
     fn drop(mut self) { println(self.id) }
 }
 
-fn sink(r: R) {}
+fn sink(r: own R) {}
 
-fn route(c: bool, r: R) {
+fn route(c: bool, r: own R) {
     if c {
-        sink(take r)
+        sink(own r)
     } else {
-        sink(take r)
+        sink(own r)
     }
 }
 
 fn main() {
-    route(true, take R { id = 5 })
+    route(true, own R { id = 5 })
     println(0i32)
 }

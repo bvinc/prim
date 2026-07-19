@@ -683,7 +683,7 @@ pub enum Effect {
 pub fn effect(mode: PassMode, ty: &Type) -> Effect {
     if is_copy(ty) {
         Effect::Copy
-    } else if matches!(mode, PassMode::Take) {
+    } else if matches!(mode, PassMode::Own) {
         Effect::Move
     } else {
         Effect::Borrow

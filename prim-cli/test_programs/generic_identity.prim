@@ -2,11 +2,11 @@ import std.io.println
 
 // Simplest generic: pass-through. The compiler stamps out a separate
 // `identity[i32]` after monomorphization.
-fn identity[T](x: T) -> T {
+fn identity[T](x: own T) -> T {
     return x
 }
 
 fn main() {
-    let n = identity(take 42i32)
+    let n = identity(own 42i32)
     println(n)
 }

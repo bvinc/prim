@@ -2,14 +2,14 @@ import std.io.println
 import std.option.Option
 
 fn main() {
-    // `unwrap`/`unwrap_or` consume their Option (take self), so the checks
+    // `unwrap`/`unwrap_or` consume their Option (own self), so the checks
     // below use fresh values rather than reusing a moved one.
     let some = Option.Some(42i32)
     let none: Option[i32] = Option.None
     let some_check = Option.Some(42i32)
     let none_check: Option[i32] = Option.None
     println(some.unwrap())
-    println(none.unwrap_or(take 7i32))
+    println(none.unwrap_or(own 7i32))
     if some_check.is_some() {
         println(1i32)
     }

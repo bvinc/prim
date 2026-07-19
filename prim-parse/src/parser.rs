@@ -878,9 +878,9 @@ impl<'a> Parser<'a> {
                 self.advance();
                 PassMode::Mut
             }
-            Some(TokenKind::Take) => {
+            Some(TokenKind::Own) => {
                 self.advance();
-                PassMode::Take
+                PassMode::Own
             }
             _ => PassMode::Read,
         }
@@ -1443,7 +1443,7 @@ impl<'a> Parser<'a> {
         // A receiver is `self` optionally prefixed by a mode (`mut self`).
         // Detect by looking past an optional leading mode keyword.
         let self_offset = match self.peek_kind() {
-            Some(TokenKind::Read | TokenKind::Mut | TokenKind::Take) => 1,
+            Some(TokenKind::Read | TokenKind::Mut | TokenKind::Own) => 1,
             _ => 0,
         };
         let leading_self = matches!(self.peek_kind_at(self_offset), Some(TokenKind::Identifier))
@@ -1484,22 +1484,28 @@ impl<'a> Parser<'a> {
         let name = self.ident(name_span);
 
         self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
-        let ty = self.parse_type()?;
 
-        // The passing mode is part of the type: `v: read Vec[T]` borrows,
-        // `v: mut Vec[T]` mutably borrows, a bare `v: Vec[T]` is owned (moved
-        // in). The borrow is unwrapped here so the rest of the pipeline keeps
-        // seeing `{ mode, inner type }`.
-        let (mode, type_annotation) = match ty {
-            Type::Ref {
-                kind: RefKind::Read,
-                inner,
-            } => (PassMode::Read, *inner),
-            Type::Ref {
-                kind: RefKind::Mut,
-                inner,
-            } => (PassMode::Mut, *inner),
-            other => (PassMode::Take, other),
+        // An owned parameter is written `x: own T`; the mode is a prefix on the
+        // type. Otherwise the mode comes from the type itself: `read T` / `mut T`
+        // borrow, and a bare `x: T` *reads* (the default — reading is the common
+        // case going in). The borrow is unwrapped here so the rest of the
+        // pipeline keeps seeing `{ mode, inner type }`.
+        let owned = self.consume_optional(TokenKind::Own);
+        let ty = self.parse_type()?;
+        let (mode, type_annotation) = if owned {
+            (PassMode::Own, ty)
+        } else {
+            match ty {
+                Type::Ref {
+                    kind: RefKind::Read,
+                    inner,
+                } => (PassMode::Read, *inner),
+                Type::Ref {
+                    kind: RefKind::Mut,
+                    inner,
+                } => (PassMode::Mut, *inner),
+                other => (PassMode::Read, other),
+            }
         };
 
         Ok(Parameter {
@@ -2041,7 +2047,7 @@ impl<'a> Parser<'a> {
     /// - `A.B { ... }` (a dotted path) → enum variant
     fn parse_pattern(&mut self) -> Result<crate::Pattern, ParseError> {
         // `take [mut] x` — a binding that moves the value out of the scrutinee.
-        if matches!(self.peek_kind(), Some(TokenKind::Take)) {
+        if matches!(self.peek_kind(), Some(TokenKind::Own)) {
             let take_span = self.advance().span;
             let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
             if mutable {
@@ -2054,7 +2060,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable,
-                mode: crate::PassMode::Take,
+                mode: crate::PassMode::Own,
                 span: take_span.cover(name_span),
             });
         }
@@ -2232,7 +2238,7 @@ impl<'a> Parser<'a> {
         // `take [mut] name` / `mut name` shorthands bind the field to its own
         // name; `take` additionally moves it out of the scrutinee.
         let lead = self.peek().map(|t| t.span);
-        let take = matches!(self.peek_kind(), Some(TokenKind::Take));
+        let take = matches!(self.peek_kind(), Some(TokenKind::Own));
         if take {
             self.advance();
         }
@@ -2252,7 +2258,7 @@ impl<'a> Parser<'a> {
                     name: field,
                     mutable,
                     mode: if take {
-                        crate::PassMode::Take
+                        crate::PassMode::Own
                     } else {
                         crate::PassMode::Read
                     },

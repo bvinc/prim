@@ -17,15 +17,15 @@ fn describe(m: read MaybeI32) -> i32 {
 // scrutinee (here, the enum value itself).
 // The `rest` arm binds the whole (non-Copy) scrutinee, so `m` is moved out of
 // the match and must be taken by value.
-fn unwrap_or_zero(m: MaybeI32) -> i32 {
+fn unwrap_or_zero(m: own MaybeI32) -> i32 {
     return match m {
         MaybeI32.Some { value } => value,
-        take rest => describe(rest),
+        own rest => describe(rest),
     }
 }
 
 fn main() {
     println(describe(MaybeI32.Some { value = 5i32 }))
     println(describe(MaybeI32.None))
-    println(unwrap_or_zero(take MaybeI32.None))
+    println(unwrap_or_zero(own MaybeI32.None))
 }

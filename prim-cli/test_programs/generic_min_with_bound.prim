@@ -15,7 +15,7 @@ impl Ord for Value {
 // Bounded generic: any T that implements Ord can be passed; the body
 // calls `a.lt(b)` which the typechecker resolves through the bound and
 // monomorphization turns into a direct call to Value::lt.
-fn min[T: Ord](a: T, b: T) -> T {
+fn min[T: Ord](a: own T, b: own T) -> T {
     if a.lt(b) {
         return a
     }
@@ -25,6 +25,6 @@ fn min[T: Ord](a: T, b: T) -> T {
 fn main() {
     let x = Value { n = 7 }
     let y = Value { n = 3 }
-    let m = min(take x, take y)
+    let m = min(own x, own y)
     println(m.n)
 }

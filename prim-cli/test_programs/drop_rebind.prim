@@ -10,6 +10,6 @@ impl Drop for R {
 // on a freed box and print garbage.
 fn main() {
     let a = R { id = 1 }
-    let take b = a
+    let own b = a
     println(0i32)
 }

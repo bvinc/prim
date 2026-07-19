@@ -3,13 +3,13 @@ import std.io.println
 // Same generic, two different concrete substitutions. Mono should
 // produce two specializations (identity[i32], identity[i64]) — both
 // callable in the same program.
-fn identity[T](x: T) -> T {
+fn identity[T](x: own T) -> T {
     return x
 }
 
 fn main() {
-    let a = identity(take 7i32)
-    let b = identity(take 700000000000i64)
+    let a = identity(own 7i32)
+    let b = identity(own 700000000000i64)
     println(a)
     println(b)
 }

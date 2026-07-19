@@ -45,7 +45,7 @@ pub enum TokenKind {
     Const,
     Mut,
     Read,
-    Take,
+    Own,
     /// The `view` type-kind modifier on a `struct`/`enum` declaration. Distinct
     /// from the `read` access keyword: `view` classifies a type as holding a
     /// borrow, `read` is a shared-borrow mode.
@@ -557,7 +557,7 @@ impl<'a> Tokenizer<'a> {
             "const" => TokenKind::Const,
             "mut" => TokenKind::Mut,
             "read" => TokenKind::Read,
-            "take" => TokenKind::Take,
+            "own" => TokenKind::Own,
             "view" => TokenKind::View,
             "from" => TokenKind::From,
             "u8" => TokenKind::U8,

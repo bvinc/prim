@@ -2,6 +2,6 @@ struct S { n: i32 }
 
 fn main() {
     let a = S { n = 1 }
-    let take b = a
-    let take c = a
+    let own b = a
+    let own c = a
 }

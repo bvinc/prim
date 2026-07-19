@@ -463,18 +463,19 @@ pub enum ConstArg {
 /// not a type modifier: the value's type is unchanged in all three cases. Modes
 /// are checked then erased before monomorphization.
 ///
-/// - `View` — shared read borrow; caller keeps ownership, callee reads only.
-/// - `Edit` — exclusive mutable borrow; caller keeps ownership, callee may
+/// - `Read` — shared read borrow; caller keeps ownership, callee reads only.
+/// - `Mut` — exclusive mutable borrow; caller keeps ownership, callee may
 ///   mutate in place (visible to the caller via aliasing).
-/// - `Take` — ownership transfer (move); the caller loses access.
+/// - `Own` — ownership transfer (move); the caller loses access.
 ///
-/// `Read` is the default at both declaration and call sites.
+/// `Read` is the default in parameter position (a bare `x: T` borrows); an owned
+/// parameter is written `x: own T`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PassMode {
     #[default]
     Read,
     Mut,
-    Take,
+    Own,
 }
 
 #[derive(Debug, Clone, PartialEq)]

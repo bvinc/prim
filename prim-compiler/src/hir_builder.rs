@@ -2484,7 +2484,7 @@ impl<'a> LoweringContext<'a> {
                         func: dbg_fid,
                         type_args: Vec::new(),
                         args: vec![prefix_lit, lowered_inner],
-                        arg_modes: vec![PassMode::Read, PassMode::Take],
+                        arg_modes: vec![PassMode::Read, PassMode::Own],
                     },
                     dbg_ty,
                 )

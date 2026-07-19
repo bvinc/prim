@@ -99,8 +99,8 @@ impl std::fmt::Display for MoveError {
             ),
             MoveErrorKind::BindWithoutTake => write!(
                 f,
-                "cannot bind a non-Copy value out of a place without `take`; \
-                 use `take` to move it out, or `_` to ignore it"
+                "cannot bind a non-Copy value out of a place without `own`; \
+                 use `own` to move it out, or `_` to ignore it"
             ),
             MoveErrorKind::MutateWhileBorrowed => {
                 write!(f, "cannot mutate a value while it is borrowed")
@@ -468,7 +468,7 @@ impl Checker<'_> {
             } => {
                 for (i, a) in args.iter().enumerate() {
                     let mode = arg_modes.get(i).copied().unwrap_or(PassMode::Read);
-                    if matches!(mode, PassMode::Mut | PassMode::Take) {
+                    if matches!(mode, PassMode::Mut | PassMode::Own) {
                         if let Some(root) = root_symbol(a) {
                             self.check_mutate(root, a.span, active);
                         }
@@ -534,11 +534,15 @@ impl Checker<'_> {
         let idx = match f.provenance {
             Some(i) => i,
             None => {
+                // Only a non-`Copy` borrowed parameter is a real borrow source;
+                // a Copy parameter (e.g. `i: usize`) reads by default now but its
+                // mode is a no-op, so it can't be the provenance.
                 let mut borrowed = f
                     .params
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| matches!(p.mode, PassMode::Read | PassMode::Mut));
+                    .filter(|(_, p)| matches!(p.mode, PassMode::Read | PassMode::Mut))
+                    .filter(|(_, p)| !is_copy(&p.ty));
                 let (i, _) = borrowed.next()?;
                 if borrowed.next().is_some() {
                     return None;

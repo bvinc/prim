@@ -5,11 +5,11 @@ impl Drop for R {
     fn drop(mut self) { println(self.id) }
 }
 
-fn sink(r: R) {}
+fn sink(r: own R) {}
 
 fn main() {
     let r = R { id = 1 }
     if true {
-        sink(take r)
+        sink(own r)
     }
 }

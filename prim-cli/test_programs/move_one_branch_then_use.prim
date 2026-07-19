@@ -1,12 +1,12 @@
 struct S { n: i32 }
 
-fn sink(s: S) -> i32 { return s.n }
+fn sink(s: own S) -> i32 { return s.n }
 
 fn main() {
     let a = S { n = 1 }
     let cond = true
     if cond {
-        let x = sink(take a)
+        let x = sink(own a)
     }
-    let take again = a
+    let own again = a
 }
