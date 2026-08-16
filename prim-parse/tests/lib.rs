@@ -119,7 +119,7 @@ fn test_parse_let_statement() {
                 _ => panic!("Expected Int, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -252,7 +252,7 @@ fn test_parse_let_without_type() {
                 _ => panic!("Expected Int, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -287,7 +287,7 @@ fn test_parse_arithmetic_expression() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -322,7 +322,7 @@ fn test_parse_arithmetic_expression_2() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -340,12 +340,12 @@ fn test_parse_println() {
             assert_eq!(args.len(), 1);
             match &args[0].kind {
                 ExprKind::Int(_) => assert_eq!(args[0].span.text(source), "42"),
-                _ => panic!("Expected Int, got {:?}", &args[0]),
+                _ => panic!("Expected Int, got {:?}", args[0]),
             }
         }
         _ => panic!(
             "Expected println function call, got {:?}",
-            &main_func.body.expr
+            main_func.body.expr
         ),
     }
 }
@@ -374,12 +374,12 @@ fn test_parse_println_with_expression() {
                         _ => panic!("Expected Int, got {:?}", right),
                     }
                 }
-                _ => panic!("Expected binary expression, got {:?}", &args[0]),
+                _ => panic!("Expected binary expression, got {:?}", args[0]),
             }
         }
         _ => panic!(
             "Expected println function call, got {:?}",
-            &main_func.body.expr
+            main_func.body.expr
         ),
     }
 }
@@ -464,7 +464,7 @@ fn test_parse_parentheses_basic() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -656,7 +656,7 @@ fn test_parse_parentheses_nested() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -703,7 +703,7 @@ fn test_parse_parentheses_with_all_operators() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -745,10 +745,10 @@ fn test_parse_parentheses_function_call_args() {
                         _ => panic!("Expected Int, got {:?}", right),
                     }
                 }
-                _ => panic!("Expected binary expression, got {:?}", &args[0]),
+                _ => panic!("Expected binary expression, got {:?}", args[0]),
             }
         }
-        _ => panic!("Expected FunctionCall, got {:?}", &main_func.body.expr),
+        _ => panic!("Expected FunctionCall, got {:?}", main_func.body.expr),
     }
 }
 
@@ -836,7 +836,7 @@ fn test_parse_subtraction_with_identifiers() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -872,7 +872,7 @@ fn test_parse_subtraction_precedence() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -910,7 +910,7 @@ fn test_parse_subtraction_chained() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -946,7 +946,7 @@ fn test_parse_subtraction_with_parentheses() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -971,7 +971,7 @@ fn test_parse_division_basic() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -998,7 +998,7 @@ fn test_parse_division_with_identifiers() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1036,7 +1036,7 @@ fn test_parse_division_precedence_with_addition() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1074,7 +1074,7 @@ fn test_parse_division_chained() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1110,7 +1110,7 @@ fn test_parse_division_with_multiplication() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1148,7 +1148,7 @@ fn test_parse_division_with_parentheses() {
             }
             _ => panic!("Expected binary expression, got {:?}", value),
         },
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1598,7 +1598,7 @@ fn test_parse_let_mut() {
                 _ => panic!("Expected Int, got {:?}", value),
             }
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1618,7 +1618,7 @@ fn test_parse_let_mut_without_type() {
             assert!(*mutable);
             assert_eq!(type_annotation, &None);
         }
-        _ => panic!("Expected let statement, got {:?}", &main_func.body.stmts[0]),
+        _ => panic!("Expected let statement, got {:?}", main_func.body.stmts[0]),
     }
 }
 
@@ -1674,7 +1674,7 @@ fn test_while_condition_no_struct_literal_ambiguity() {
         }
         _ => panic!(
             "Expected while statement, got {:?}",
-            &main_func.body.stmts[0]
+            main_func.body.stmts[0]
         ),
     }
 }
@@ -1712,7 +1712,7 @@ fn test_while_condition_with_comparison() {
         }
         _ => panic!(
             "Expected while statement, got {:?}",
-            &main_func.body.stmts[0]
+            main_func.body.stmts[0]
         ),
     }
 }
@@ -1752,7 +1752,7 @@ fn test_if_condition_with_comparison() {
             assert!(then_branch.stmts.is_empty() && then_branch.expr.is_none());
             assert!(else_branch.is_none());
         }
-        _ => panic!("Expected if expression, got {:?}", &main_func.body.expr),
+        _ => panic!("Expected if expression, got {:?}", main_func.body.expr),
     }
 }
 

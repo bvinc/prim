@@ -1,0 +1,29 @@
+struct Point { x: i32, y: i32 }
+
+enum Outer {
+    None,
+    Some { inner: Inner },
+}
+
+enum Inner {
+    None,
+    Some { p: Point },
+}
+
+// Rule 4 for `match mut`, nested: an exclusive `match mut` on a `read` arm
+// binding is the same hole as on a `read` parameter — the arms' `mut` bindings
+// would write into the caller's box through a shared borrow.
+fn bump2(read o: Outer) {
+    match o {
+        Outer.Some { read inner } => match mut inner {
+            Inner.Some { mut p } => { p.x = 99i32 },
+            Inner.None => {},
+        },
+        Outer.None => {},
+    }
+}
+
+fn main() {
+    let o = Outer.Some { inner = Inner.Some { p = Point { x = 1i32, y = 2i32 } } }
+    bump2(read o)
+}

@@ -1,9 +1,9 @@
 import std.io.println
 import std.option.Option
 
-// Tier B: Array.get returns Option[read T] — a borrow stored inside an
-// aggregate. The borrow is extracted by match; the loan is tracked against the
-// array while the Option is live.
+// Array.get returns Option[T] — a copy of the element (copy-able types only,
+// enforced at monomorphization). The Option is extracted by match; reading an
+// out-of-bounds index yields None.
 fn main() {
     let a: Array[i32, 2] = [11i32, 22i32]
     let o = a.get(1usize)

@@ -3,7 +3,7 @@ import std.io.println
 // Once a value is moved into an `own` parameter, it is gone.
 struct S { n: i32 }
 
-fn consume(s: own S) -> i32 {
+fn consume(own s: S) -> i32 {
     return s.n
 }
 

@@ -1,0 +1,17 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+// A `mut` binding of a *scalar field* of an aggregate is also a copy; writes
+// must copy back into the scrutinee's box at arm end.
+fn bump_x(mut p: Point) {
+    match mut p {
+        Point { mut x, y } => { x = 99i32 },
+    }
+}
+
+fn main() {
+    let mut p = Point { x = 1i32, y = 2i32 }
+    bump_x(mut p)
+    println(p.x)
+}

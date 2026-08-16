@@ -5,7 +5,7 @@ struct Wrap[T] {
 }
 
 // Generic function that constructs a generic struct using its own T.
-fn wrap[T](x: own T) -> Wrap[T] {
+fn wrap[T](own x: T) -> Wrap[T] {
     return Wrap { inner = x }
 }
 

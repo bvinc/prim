@@ -145,12 +145,10 @@ impl<'a> InlinePolicy<'a> {
     fn field_size_guarded(&self, ty: &hir::Type, visiting: &mut Vec<hir::StructId>) -> u32 {
         if matches!(ty, hir::Type::Struct(..) | hir::Type::Tuple(..))
             && !self.drop_info.needs_drop(ty)
+            && let Some(n) = self.inline_size_opt(ty, visiting)
+            && n <= MAX_INLINE_BYTES
         {
-            if let Some(n) = self.inline_size_opt(ty, visiting) {
-                if n <= MAX_INLINE_BYTES {
-                    return n;
-                }
-            }
+            return n;
         }
         ty.size_bytes()
     }

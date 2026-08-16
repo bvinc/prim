@@ -1,0 +1,18 @@
+struct S { n: i32 }
+enum Box { Full { s: S }, Empty }
+
+fn bump(mut s: S) { s.n = 99i32 }
+
+// Rule 4 for arm bindings: a `mut` call argument may not be a value reachable
+// only through a `read`/bare arm binding. The arm binding `s` is a read-only
+// borrow (like a `read` parameter), so `bump(mut s)` would perform an
+// exclusive write through it — the mutation would persist into the caller's
+// scrutinee box. ModeMismatch does not catch this (`mut` matches `bump`'s
+// declared `mut` parameter), so rule 4 must.
+fn main() {
+    let b = Box.Full { s = S { n = 1i32 } }
+    match b {
+        Box.Full { s } => bump(mut s),
+        Box.Empty => {},
+    }
+}

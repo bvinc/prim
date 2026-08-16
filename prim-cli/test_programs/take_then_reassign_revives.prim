@@ -2,7 +2,7 @@ import std.io.println
 
 struct S { n: i32 }
 
-fn sink(s: own S) -> i32 { return s.n }
+fn sink(own s: S) -> i32 { return s.n }
 
 // After a move, reassigning the binding makes it usable again.
 fn main() {

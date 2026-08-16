@@ -166,7 +166,7 @@ pub fn compile(
         let mut hir = hir_builder::lower_to_hir(&program, &module_scopes, source_map.clone())?;
         hir::type_check(&mut hir)?;
         hir::check_ownership(&hir)?;
-        hir::monomorphize(&mut hir);
+        hir::monomorphize(&mut hir)?;
         hir::elaborate_drops(&mut hir)?;
         Ok(hir)
     })();

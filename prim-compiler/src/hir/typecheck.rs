@@ -1,7 +1,8 @@
 use super::{
-    BinaryOp, Block, Expr, ExprKind, FuncId, Function, InternSymbol, Program, SpanId, Stmt,
-    StructId, SymbolId, Type,
+    BinaryOp, Block, Expr, ExprKind, FuncId, Function, InternSymbol, PassMode, Program, SpanId,
+    Stmt, StructId, SymbolId, Type,
 };
+use crate::hir::cfg::is_copy;
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -342,10 +343,6 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params(t, pins))
                     .collect(),
             ),
-            Type::Ref { kind, inner } => Type::Ref {
-                kind: *kind,
-                inner: Box::new(Self::substitute_params(inner, pins)),
-            },
             _ => ty.clone(),
         }
     }
@@ -381,10 +378,6 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params_with_slice(t, args))
                     .collect(),
             ),
-            Type::Ref { kind, inner } => Type::Ref {
-                kind: *kind,
-                inner: Box::new(Self::substitute_params_with_slice(inner, args)),
-            },
             _ => ty.clone(),
         }
     }
@@ -404,9 +397,6 @@ impl<'a> Checker<'a> {
         span: SpanId,
     ) -> Result<(), TypeCheckError> {
         match ty {
-            // A borrow satisfies a bound iff the borrowed type does (you can
-            // render/compare a `read T` exactly when you can a `T`).
-            Type::Ref { inner, .. } => self.check_type_arg_bound(inner, bound, mode, span),
             _ if crate::hir::MethodOwner::of_type(ty)
                 .is_some_and(|owner| self.program.impls.contains_key(&(bound, owner))) =>
             {
@@ -469,10 +459,10 @@ impl<'a> Checker<'a> {
             // here — the bound would misleadingly report the placeholder type
             // as lacking the impl. `finalize` reports the underlying literal
             // with a precise span instead.
-            if !matches!(pinned, Type::IntVar | Type::FloatVar) {
-                if let Some(bound) = param.bound {
-                    self.check_type_arg_bound(&pinned, bound, mode, span)?;
-                }
+            if !matches!(pinned, Type::IntVar | Type::FloatVar)
+                && let Some(bound) = param.bound
+            {
+                self.check_type_arg_bound(&pinned, bound, mode, span)?;
             }
             resolved.push(pinned);
         }
@@ -1329,16 +1319,6 @@ impl<'a> Checker<'a> {
                 *ty = Type::Usize;
                 Ok(Type::Usize)
             }
-            // `read place` / `mut place` — borrow a place, yielding `Ref<inner>`.
-            ExprKind::Borrow { kind, place } => {
-                let inner = self.check_expr(place, locals)?;
-                let ref_ty = Type::Ref {
-                    kind: *kind,
-                    inner: Box::new(inner),
-                };
-                *ty = ref_ty.clone();
-                Ok(ref_ty)
-            }
             // `spawn(f)` yields the new task's handle.
             ExprKind::Spawn { .. } => {
                 *ty = Type::Usize;
@@ -1956,12 +1936,6 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Field { base, field } => {
                 let base_ty = self.check_expr(base, locals)?;
-                // Auto-deref a borrow: `r.field` on a `read T`/`mut T` reads the
-                // field of `T` (a borrow is transparent for member access).
-                let base_ty = match base_ty {
-                    Type::Ref { inner, .. } => *inner,
-                    t => t,
-                };
                 let (struct_id, base_type_args) = match base_ty {
                     Type::Struct(id, args) => (id, args),
                     // A field access on a non-struct value is a type error. It
@@ -2263,7 +2237,11 @@ impl<'a> Checker<'a> {
                 *ty = enum_ty.clone();
                 Ok(enum_ty)
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                mode,
+                scrutinee,
+                arms,
+            } => {
                 let scrut_ty = self.check_expr(scrutinee, locals)?;
                 // The scrutinee must be a type we can match on structurally.
                 if !self.is_matchable(&scrut_ty) {
@@ -2275,8 +2253,40 @@ impl<'a> Checker<'a> {
                         )),
                     ));
                 }
+                // A `match mut` scrutinee must be a place (a borrow needs a
+                // place to borrow), and the arms' `mut` bindings write back to
+                // it. Checked against the actual scrutinee type: `mut` requires
+                // a non-`Copy` value the caller owns.
+                if *mode == PassMode::Mut && is_copy(&scrut_ty) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "`match mut` requires a non-Copy scrutinee (got `{}`); \
+                                 borrows are second-class, so there is nothing to \
+                                 mutate in a Copy value",
+                            self.type_name(&scrut_ty)
+                        )),
+                    ));
+                }
                 let mut result_ty: Option<Type> = None;
                 for arm in arms.iter_mut() {
+                    // A `mut` arm binding is an exclusive borrow of the
+                    // scrutinee: its writes copy back into the scrutinee's
+                    // place, so it is only legal under an explicit `match mut`
+                    // (mutation must stay explicit — a bare/`read` match would
+                    // silently write through a read-only access). `own`
+                    // bindings are unaffected: they move, and consumption is
+                    // inferred per arm.
+                    if *mode != PassMode::Mut && pattern_has_mut_binding(&arm.pattern) {
+                        return Err(self.error(
+                            arm.pattern.span(),
+                            TypeCheckKind::Legacy(
+                                "a `mut` arm binding writes back into the scrutinee; \
+                                 use `match mut` to make the exclusive match explicit"
+                                    .to_string(),
+                            ),
+                        ));
+                    }
                     let arm_bindings =
                         self.type_pattern(&mut arm.pattern, &scrut_ty, locals, true)?;
                     let body_ty = self.check_expr(&mut arm.body, locals)?;
@@ -2300,6 +2310,41 @@ impl<'a> Checker<'a> {
                             }
                         },
                     };
+                }
+                // Consumption is always inferred from the arms: an `own`
+                // binding of a non-`Copy` payload moves it out, and only then
+                // is the scrutinee consumed. `match own e` is optional
+                // documentation of that consume — it must not claim a consume
+                // the arms don't make (the move checker, drop-elaboration and
+                // codegen would otherwise disagree about the same bindings).
+                let consumes = crate::hir::cfg::match_consumes(arms);
+                if *mode == PassMode::Own && !consumes {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "`match own e` requires an arm that moves a payload out \
+                             (write `own v` in the pattern); consumption is inferred \
+                             from the arms, not forced by the keyword"
+                                .to_string(),
+                        ),
+                    ));
+                }
+                // A consuming match's scrutinee is owned and freed by the
+                // match, so no arm may *borrow* a payload out of it (the
+                // borrow would dangle / be dropped as owned). Move with `own`.
+                if consumes {
+                    for arm in arms.iter() {
+                        if let Some(binding) = pattern_first_borrow_binding(&arm.pattern) {
+                            return Err(self.error(
+                                binding.1,
+                                TypeCheckKind::Legacy(
+                                    "cannot borrow a payload out of a consumed scrutinee; \
+                                     write `own` to move it out instead"
+                                        .to_string(),
+                                ),
+                            ));
+                        }
+                    }
                 }
                 // Reachability + exhaustiveness via the Maranget usefulness
                 // algorithm.
@@ -2477,11 +2522,11 @@ impl<'a> Checker<'a> {
             ExprKind::VariantLit {
                 enum_id, type_args, ..
             } => {
-                if let Type::Enum(expected_enum, expected_args) = expected {
-                    if enum_id == expected_enum {
-                        *type_args = expected_args.clone();
-                        *ty = expected.clone();
-                    }
+                if let Type::Enum(expected_enum, expected_args) = expected
+                    && enum_id == expected_enum
+                {
+                    *type_args = expected_args.clone();
+                    *ty = expected.clone();
                 }
             }
             ExprKind::Match { arms, .. } => {
@@ -2490,13 +2535,13 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::TupleLit(elems) => {
-                if let Type::Tuple(expected_elems) = expected {
-                    if expected_elems.len() == elems.len() {
-                        for (e, et) in elems.iter_mut().zip(expected_elems.iter()) {
-                            self.apply_expected(e, et);
-                        }
-                        *ty = expected.clone();
+                if let Type::Tuple(expected_elems) = expected
+                    && expected_elems.len() == elems.len()
+                {
+                    for (e, et) in elems.iter_mut().zip(expected_elems.iter()) {
+                        self.apply_expected(e, et);
                     }
+                    *ty = expected.clone();
                 }
             }
             _ => {}
@@ -2651,7 +2696,9 @@ impl<'a> Checker<'a> {
                     self.finalize_expr(val)?;
                 }
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 self.finalize_expr(scrutinee)?;
                 for arm in arms {
                     self.finalize_pattern(&mut arm.pattern);
@@ -2692,18 +2739,18 @@ impl<'a> Checker<'a> {
                 if let Some(else_block) = else_branch {
                     self.finalize_block(else_block)?;
                 }
-                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    if let Some(then_expr) = &then_branch.expr {
-                        *ty = self.finalize_type(&then_expr.ty);
-                    }
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
+                    && let Some(then_expr) = &then_branch.expr
+                {
+                    *ty = self.finalize_type(&then_expr.ty);
                 }
             }
             ExprKind::Block(block) => {
                 self.finalize_block(block)?;
-                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    if let Some(expr) = &block.expr {
-                        *ty = self.finalize_type(&expr.ty);
-                    }
+                if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
+                    && let Some(expr) = &block.expr
+                {
+                    *ty = self.finalize_type(&expr.ty);
                 }
             }
             _ => {}
@@ -2792,5 +2839,56 @@ impl<'a> Checker<'a> {
             .copied()
             .expect("missing span");
         TypeCheckError { file, span, kind }
+    }
+}
+
+/// Whether a match-arm pattern binds any `mut` binding. A `mut` arm binding is
+/// an exclusive borrow of the scrutinee (its writes copy back into the
+/// scrutinee's place), so it is only legal under an explicit `match mut`.
+/// `read`/bare bindings borrow, `own` bindings move — neither writes back.
+fn pattern_has_mut_binding(pattern: &crate::hir::Pattern) -> bool {
+    match pattern {
+        crate::hir::Pattern::Binding { mode, .. } => *mode == PassMode::Mut,
+        crate::hir::Pattern::Tuple { elems, .. } => elems.iter().any(pattern_has_mut_binding),
+        crate::hir::Pattern::Variant { fields, .. }
+        | crate::hir::Pattern::Struct { fields, .. } => {
+            fields.iter().any(|f| pattern_has_mut_binding(&f.pattern))
+        }
+        crate::hir::Pattern::Wildcard { .. }
+        | crate::hir::Pattern::Int { .. }
+        | crate::hir::Pattern::Bool { .. } => false,
+    }
+}
+
+/// The first `read`/`mut`/bare binding of a non-`Copy` payload in an arm
+/// pattern — a second-class *borrow* (as opposed to an `own` move). Returns
+/// `(symbol, span)`; used to reject borrows in consuming matches. Copy
+/// bindings are not borrows.
+fn pattern_first_borrow_binding(
+    pattern: &crate::hir::Pattern,
+) -> Option<(crate::hir::SymbolId, SpanId)> {
+    match pattern {
+        crate::hir::Pattern::Binding {
+            symbol,
+            ty,
+            mode,
+            span,
+        } => {
+            if crate::hir::cfg::effect(*mode, ty) == crate::hir::cfg::Effect::Borrow {
+                Some((*symbol, *span))
+            } else {
+                None
+            }
+        }
+        crate::hir::Pattern::Tuple { elems, .. } => {
+            elems.iter().find_map(pattern_first_borrow_binding)
+        }
+        crate::hir::Pattern::Variant { fields, .. }
+        | crate::hir::Pattern::Struct { fields, .. } => fields
+            .iter()
+            .find_map(|f| pattern_first_borrow_binding(&f.pattern)),
+        crate::hir::Pattern::Wildcard { .. }
+        | crate::hir::Pattern::Int { .. }
+        | crate::hir::Pattern::Bool { .. } => None,
     }
 }

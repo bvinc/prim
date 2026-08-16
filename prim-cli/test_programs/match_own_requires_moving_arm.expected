@@ -1,0 +1,1 @@
+ERROR: `match own e` requires an arm that moves a payload out (write `own v` in the pattern); consumption is inferred from the arms, not forced by the keyword

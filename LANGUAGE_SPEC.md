@@ -201,14 +201,44 @@ The compiler provides clear error messages for:
 - Function parameters are passed by value
 - Pointers: `*const T` and `*mut T` with explicit dereference
 
-### Planned: Ownership and Borrowing
+### Ownership and Borrowing (second-class references)
 
-Prim will adopt ownership semantics with compile-time borrow checking:
+Prim has ownership semantics with compile-time move checking (no garbage
+collection; memory safety enforced entirely at compile time):
 
-- Each value has a single owner. When the owner goes out of scope, the value is dropped.
-- Values can be borrowed immutably (`&T`) or mutably (`&mut T`).
-- Lifetimes will be tracked to prevent dangling references.
-- No garbage collector — memory safety is enforced entirely at compile time.
+- Each value has a single owner. When the owner goes out of scope, the value is
+  dropped.
+- References are **second-class**: `read` / `mut` / `own` exist only as
+  *parameter modes*, *match-arm bindings*, and *call-site argument marks* —
+  never as type modifiers, `let` bindings, or stored values. There is no
+  reference type, no `&T`/`&mut T`, no borrow expressions, and no returned
+  references.
+  - `fn len(read v: Vec[T])` — a read-only borrow, released on return.
+  - `fn push(mut v: Vec[T], own x: T)` — `mut` is writable and released on
+    return (the callee's writes are visible to the caller); `own` takes
+    ownership (a move).
+  - `match mut e { Some(mut v) => ... }` — arm bindings borrow like parameters;
+    `mut` bindings write back into the scrutinee. Bare arm bindings are `read`.
+    A `mut` arm binding requires the explicit `match mut` (enforced): an
+    exclusive write-back through a bare/`read` match would mutate through a
+    read-only access. Consumption is always inferred from the arms — `match own
+    e` is documentation of the inferred consume (rejected if the arms don't
+    move a payload), and a consuming match cannot borrow a payload out of the
+    scrutinee.
+  - Call sites mark the mode: `f(mut x)`, `f(own x)`, `f(read x)`.
+- A `let` binding always *moves* a non-`Copy` RHS into the new binding:
+  `let x = a` transfers ownership of `a` (a later use of `a` is a compile
+  error); `let own x = a` is the explicit, redundant spelling. Copy values
+  copy. `let read x` is a parse error (a local cannot hold a second-class
+  borrow); `let mut x` is a mutable owned local.
+- A borrow parameter has the plain type `T` inside the body: storing it,
+  returning it, moving out of it, or boxing it into a trait object is rejected
+  by the move checker. Modes are erased before code generation.
+- Access is copies plus whole-structure methods: `Vec.get`/`Array.get` return
+  a copy (enforced copy-able — scalar, pointer, or inline aggregate; a boxed
+  element would alias the slot and double-free on drop, so it is rejected at
+  monomorphization), `Vec.set`/`Vec.push`/`Vec.swap` mutate in place, and
+  match arms read enum payloads via `read`/`mut` bindings.
 
 ## Modules
 

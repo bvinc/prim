@@ -1,0 +1,18 @@
+struct S { n: i32 }
+enum Box { Full { s: S }, Empty }
+
+// `match own e` is documentation of the consume the arms make — it must not
+// force one: with only a borrow (`s`) arm there is nothing to move, so the
+// keyword is a lie and is rejected. Consumption is inferred from the arms.
+fn f(own b: Box) -> i32 {
+    match own b {
+        Box.Full { s } => s.n,
+        Box.Empty => 0i32,
+    }
+    return 0i32
+}
+
+fn main() {
+    let b = Box.Full { s = S { n = 5i32 } }
+    println(f(own b))
+}

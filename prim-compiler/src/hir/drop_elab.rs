@@ -324,8 +324,16 @@ impl Insert<'_> {
                 }
             }
             ExprKind::Block(b) => self.block(b, false, &[]),
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                mode: _,
+                scrutinee,
+                arms,
+            } => {
                 self.expr(scrutinee);
+                // Consumption is always inferred from the arms (an `own`
+                // binding moves a payload out); `match own`/`match mut` modes
+                // don't change it. Only a consumed scrutinee's bindings are
+                // owned-and-dropped at arm end.
                 let consuming = cfg::match_consumes(arms);
                 for arm in arms.iter_mut() {
                     self.arm(arm, consuming);
@@ -358,7 +366,6 @@ impl Insert<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
-            ExprKind::Borrow { place, .. } => self.expr(place),
             ExprKind::Coerce { value, .. } => self.expr(value),
             ExprKind::Int(_)
             | ExprKind::Float(_)
@@ -493,7 +500,11 @@ impl Filter<'_> {
                 }
             }
             ExprKind::Block(b) => self.block(b),
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                mode: _,
+                scrutinee,
+                arms,
+            } => {
                 self.expr(scrutinee);
                 for arm in arms.iter_mut() {
                     self.expr(&mut arm.body);
@@ -526,7 +537,6 @@ impl Filter<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
-            ExprKind::Borrow { place, .. } => self.expr(place),
             ExprKind::Coerce { value, .. } => self.expr(value),
             ExprKind::MethodCall { receiver, args, .. }
             | ExprKind::TraitBoundCall { receiver, args, .. } => {
@@ -609,10 +619,10 @@ fn collect_droppable_expr(expr: &Expr, info: &DropInfo, out: &mut HashMap<Symbol
             }
         }
         ExprKind::Block(b) => collect_droppable_bindings(b, info, out),
-        ExprKind::Match { arms, .. } => {
+        ExprKind::Match { mode, arms, .. } => {
             // A consumed scrutinee transfers ownership to the arm bindings, so
             // any needs-drop binding is dropped at its arm's end.
-            let consuming = cfg::match_consumes(arms);
+            let consuming = matches!(mode, PassMode::Own) || cfg::match_consumes(arms);
             for arm in arms {
                 if consuming {
                     let mut binds = Vec::new();

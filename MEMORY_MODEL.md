@@ -1,9 +1,11 @@
 # Prim Memory Model
 
-**Status: final.** This is the design of record for ownership, borrowing, and
-destruction. It supersedes the "Memory Model" and "Planned: Ownership and
-Borrowing" sections of `LANGUAGE_SPEC.md`. Where the compiler disagrees with
-this document, the compiler is behind; §12 tracks the gap.
+**Status: superseded.** The borrow-as-a-type model in this document (`read T` /
+`mut T` reference types, the `data`/`view` kind system, provenance, the loan
+checker) has been replaced by **second-class references**: `read`/`mut`/`own`
+exist only as parameter modes, match-arm bindings, and call-site argument marks —
+never as types. See `PLAN_SECOND_CLASS_REFS.md` (§1–§7) for the current model.
+This file is retained for history.
 
 The whole model in one sentence: *reading is the default going in, owning is the
 default coming out, mutation is never a default anywhere, and a borrow may never

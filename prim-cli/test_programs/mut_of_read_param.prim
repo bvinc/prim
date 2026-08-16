@@ -1,0 +1,13 @@
+struct S { n: i32 }
+
+fn bump(mut s: S) { s.n = s.n + 1i32 }
+
+// Rule 4: `mut`-borrowing through a `read` parameter is illegal.
+fn outer(read a: S) {
+    bump(mut a)
+}
+
+fn main() {
+    let x = S { n = 1 }
+    outer(read x)
+}

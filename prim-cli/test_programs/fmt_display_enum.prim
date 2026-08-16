@@ -1,0 +1,26 @@
+import std.io.println
+import std.fmt.Display
+import std.fmt.Formatter
+
+// The enum Display/Debug payoff: `fmt` receives `self` as a `read` borrow, and
+// the arm's `read v` binding borrows the payload — readable without moving it
+// out of the borrowed enum (impossible before second-class match bindings).
+enum MaybeI32 {
+    None,
+    Some { value: i32 },
+}
+
+impl Display for MaybeI32 {
+    fn fmt(read self, mut f: Formatter) {
+        match self {
+            MaybeI32.Some { read value } => f.write_i64(i64.from_i32(value)),
+            MaybeI32.None => f.write_str("None"),
+        }
+    }
+}
+
+fn main() {
+    let a = MaybeI32.Some { value = 41i32 }
+    println(a)
+    println(MaybeI32.None)
+}

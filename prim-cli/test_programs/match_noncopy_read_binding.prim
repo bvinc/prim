@@ -1,0 +1,33 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+enum Shape {
+    None,
+    Some { p: Point },
+}
+
+// A non-Copy payload bound by `read` (or bare) in a match over a `read`
+// scrutinee: the binding is a second-class borrow. The payload is readable
+// (field access) without moving it, and the scrutinee stays usable after.
+fn read_x(read s: Shape) -> i32 {
+    return match s {
+        Shape.Some { read p } => p.x,
+        Shape.None => 0i32,
+    }
+}
+
+fn read_x_bare(read s: Shape) -> i32 {
+    return match s {
+        Shape.Some { p } => p.x,
+        Shape.None => 0i32,
+    }
+}
+
+fn main() {
+    let s = Shape.Some { p = Point { x = 5i32, y = 6i32 } }
+    println(read_x(s))
+    println(read_x_bare(s))
+    println(read_x(Shape.None))
+    println(read_x_bare(s))
+}

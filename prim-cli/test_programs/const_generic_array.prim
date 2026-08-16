@@ -3,7 +3,7 @@ import std.io.println
 // A function generic over a const array length N. The length is inferred from
 // the array argument's type and monomorphized per value, so count(a) and
 // count(b) are distinct specializations with N folded to a literal.
-fn count[T, const N: usize](a: read Array[T, N]) -> usize {
+fn count[T, const N: usize](read a: Array[T, N]) -> usize {
     return N
 }
 

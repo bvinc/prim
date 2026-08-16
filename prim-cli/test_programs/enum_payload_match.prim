@@ -5,7 +5,7 @@ enum MaybeI32 {
     Some { value: i32 },
 }
 
-fn unwrap_or(m: read MaybeI32, default: i32) -> i32 {
+fn unwrap_or(read m: MaybeI32, default: i32) -> i32 {
     return match m {
         MaybeI32.Some { value } => value,
         MaybeI32.None => default,

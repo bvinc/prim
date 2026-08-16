@@ -1,0 +1,32 @@
+import std.io.println
+
+enum Maybe {
+    None,
+    Some { value: i32 },
+}
+
+// Second-class read borrows in match arms (the enum Display/Debug fix): a bare
+// or `read` binding of a non-Copy payload borrows it for the arm's body instead
+// of erroring or moving it. The scrutinee stays alive after the match.
+fn read_payload(read m: Maybe) -> i32 {
+    return match m {
+        Maybe.Some { value } => value,      // bare binding = read borrow
+        Maybe.None => 0i32,
+    }
+}
+
+fn read_payload2(read m: Maybe) -> i32 {
+    return match m {
+        Maybe.Some { read value } => value, // explicit read
+        Maybe.None => 0i32,
+    }
+}
+
+fn main() {
+    let a = Maybe.Some { value = 41i32 }
+    println(read_payload(a))
+    println(read_payload2(a))
+    println(read_payload(Maybe.None))
+    // The scrutinee was only borrowed: it is still usable after the match.
+    println(read_payload(a))
+}

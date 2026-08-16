@@ -122,7 +122,11 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_expr(val, locals);
             }
         }
-        hir::ExprKind::Match { scrutinee, arms } => {
+        hir::ExprKind::Match {
+            mode: _,
+            scrutinee,
+            arms,
+        } => {
             collect_locals_expr(scrutinee, locals);
             for arm in arms {
                 collect_locals_pattern(&arm.pattern, locals);
@@ -405,7 +409,11 @@ fn collect_scratch_types_expr(
                 collect_scratch_types_expr(val, runtime, scalar_abi, scalar_ret, ret_scalar, out);
             }
         }
-        hir::ExprKind::Match { scrutinee, arms } => {
+        hir::ExprKind::Match {
+            mode: _,
+            scrutinee,
+            arms,
+        } => {
             // The scrutinee local holds the matched value (scalar or pointer).
             out.push(hir_type_to_valtype(&scrutinee.ty));
             collect_scratch_types_expr(scrutinee, runtime, scalar_abi, scalar_ret, ret_scalar, out);
@@ -546,7 +554,11 @@ fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
                 collect_str_literals_expr(val, out);
             }
         }
-        hir::ExprKind::Match { scrutinee, arms } => {
+        hir::ExprKind::Match {
+            mode: _,
+            scrutinee,
+            arms,
+        } => {
             collect_str_literals_expr(scrutinee, out);
             for arm in arms {
                 collect_str_literals_expr(&arm.body, out);

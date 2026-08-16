@@ -1,7 +1,0 @@
-struct P { x: i32 }
-fn main() {
-    let mut p = P { x = 5i32 }
-    let r = mut p
-    let s = read p
-    let z = r.x
-}

@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn sink(s: own S) -> i32 { return s.n }
+fn sink(own s: S) -> i32 { return s.n }
 
 // Moved on one match arm only: after the match the value is moved on some
 // paths, so using it is a use-after-move (the CFG joins the arm successors).

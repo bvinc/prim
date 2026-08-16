@@ -35,11 +35,11 @@ fn new[T]() -> Vec[T] {
     return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
 }
 
-fn len[T](v: read Vec[T]) -> usize {
+fn len[T](read v: Vec[T]) -> usize {
     return v.len
 }
 
-fn push[T](v: mut Vec[T], value: own T) {
+fn push[T](mut v: Vec[T], own value: T) {
     if v.len == v.cap {
         let mut new_cap = 4usize
         if v.cap != 0usize {
@@ -52,31 +52,20 @@ fn push[T](v: mut Vec[T], value: own T) {
     v.len = v.len + 1
 }
 
-fn get[T](v: read Vec[T], i: usize) -> T {
+// Read element `i` as a copy. Enforced: the element must be copy-able — a
+// scalar, pointer, or inline (small, no-`Drop`) aggregate — because `*p` is a
+// deref-read of the slot; a boxed element would copy the box pointer and
+// alias the slot (double free on drop), which the compiler rejects at
+// monomorphization. Index loops are the v1 replacement for reference-yielding
+// iterators.
+fn get[T](read v: Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
     return *add[T](v.ptr, i)
 }
 
-// Borrow element i in place: `at` for a shared read, `at_mut` for exclusive
-// mutation. The returned borrow is tracked against the vector, so the vector
-// cannot be mutated (e.g. pushed) while the borrow is live.
-fn at[T](v: read Vec[T], i: usize) -> read T {
-    if i >= v.len {
-        panic("Vec.at: index out of bounds")
-    }
-    return read *add[T](v.ptr, i)
-}
-
-fn at_mut[T](v: mut Vec[T], i: usize) -> mut T {
-    if i >= v.len {
-        panic("Vec.at_mut: index out of bounds")
-    }
-    return mut *add[T](v.ptr, i)
-}
-
-fn set[T](v: mut Vec[T], i: usize, value: own T) {
+fn set[T](mut v: Vec[T], i: usize, own value: T) {
     if i >= v.len {
         panic("Vec.set: index out of bounds")
     }

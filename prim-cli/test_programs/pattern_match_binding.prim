@@ -6,7 +6,7 @@ enum MaybeI32 {
 }
 
 // Field sub-patterns: `value: x` renames the binding, `value: _` discards it.
-fn describe(m: read MaybeI32) -> i32 {
+fn describe(read m: MaybeI32) -> i32 {
     return match m {
         MaybeI32.Some { value: x } => x,
         MaybeI32.None => 0i32,
@@ -17,7 +17,7 @@ fn describe(m: read MaybeI32) -> i32 {
 // scrutinee (here, the enum value itself).
 // The `rest` arm binds the whole (non-Copy) scrutinee, so `m` is moved out of
 // the match and must be taken by value.
-fn unwrap_or_zero(m: own MaybeI32) -> i32 {
+fn unwrap_or_zero(own m: MaybeI32) -> i32 {
     return match m {
         MaybeI32.Some { value } => value,
         own rest => describe(rest),

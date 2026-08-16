@@ -1,9 +1,0 @@
-import std.io.println
-
-// `view` is only meaningful on a type that holds a borrow. A `struct view`
-// with no view-kinded field is a definition-site error.
-struct view Plain { x: i32 }
-
-fn main() {
-    println(1i32)
-}

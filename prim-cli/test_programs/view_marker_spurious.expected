@@ -1,1 +1,0 @@
-ERROR: `view` is only for a struct or enum that holds a borrow

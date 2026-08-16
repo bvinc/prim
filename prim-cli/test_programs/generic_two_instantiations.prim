@@ -3,7 +3,7 @@ import std.io.println
 // Same generic, two different concrete substitutions. Mono should
 // produce two specializations (identity[i32], identity[i64]) — both
 // callable in the same program.
-fn identity[T](x: own T) -> T {
+fn identity[T](own x: T) -> T {
     return x
 }
 

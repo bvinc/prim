@@ -658,12 +658,11 @@ fn prim_root_from_env_or_exe() -> Result<PathBuf, LoadError> {
 
     // Walk up looking for .../bin/, which would indicate PRIM_ROOT/bin/<binary>.
     for _ in 0..8 {
-        if let Some(name) = cur.file_name().and_then(|n| n.to_str()) {
-            if name == "bin" {
-                if let Some(root) = cur.parent() {
-                    return Ok(root.to_path_buf());
-                }
-            }
+        if let Some(name) = cur.file_name().and_then(|n| n.to_str())
+            && name == "bin"
+            && let Some(root) = cur.parent()
+        {
+            return Ok(root.to_path_buf());
         }
         if cur.join("prim-std").exists() || cur.join("src").join("std").exists() {
             return Ok(cur.to_path_buf());

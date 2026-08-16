@@ -2,14 +2,14 @@ import std.io.println
 
 // Reading is the default going in: a bare parameter `s: S` borrows, so the
 // caller keeps ownership and can pass the same value again. An owned parameter
-// is written `s: own S`, and consumes its argument.
+// is written `own s: S`, and consumes its argument.
 struct S { n: i32 }
 
 fn peek(s: S) -> i32 {
     return s.n
 }
 
-fn consume(s: own S) -> i32 {
+fn consume(own s: S) -> i32 {
     return s.n
 }
 

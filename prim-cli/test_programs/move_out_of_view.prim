@@ -1,7 +1,7 @@
 struct Inner { n: i32 }
 struct S { inner: Inner }
 
-fn steal(s: read S) -> Inner {
+fn steal(read s: S) -> Inner {
     return s.inner
 }
 
