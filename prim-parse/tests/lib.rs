@@ -96,6 +96,96 @@ fn test_turbofish_args_must_be_glued() {
 }
 
 #[test]
+fn test_dot_path_paren_next_line_is_not_call() {
+    // A parenthesized expression on the line after a field access is its own
+    // grouped expression, not a method call of the previous line: `v.field`
+    // followed by `(expr)` on the next line must NOT silently become
+    // `v.field(expr)`. Mirrors `test_paren_line_is_grouping_not_call` for the
+    // dot-path case.
+    let source = "fn f() -> usize {\n    let a = v.field\n    (a + 1usize)\n}";
+    let (program, _) = parse_ok(source);
+    let body = &program.functions[0].body;
+    assert_eq!(body.stmts.len(), 2, "the let plus the grouped expression");
+    // The let's value is a plain field access (a path), not a method call.
+    match &body.stmts[0] {
+        Stmt::Let { value, .. } => assert!(
+            matches!(value.kind, ExprKind::Path(_)),
+            "expected `v.field` to parse as a path, got {:?}",
+            value.kind
+        ),
+        other => panic!("expected let, got {other:?}"),
+    }
+    // The trailing line is a grouped binary expression, not the call's args.
+    let trailing = tail_expr(body);
+    assert!(
+        matches!(trailing.kind, ExprKind::Binary { .. }),
+        "expected a grouped Binary, got {:?}",
+        trailing.kind
+    );
+}
+
+#[test]
+fn test_dot_path_call_must_be_glued_to_name() {
+    // A `(` separated from the field name by whitespace is not a method call,
+    // so `v.field (x)` is two adjacent expressions on one line — a same-line
+    // statement error rather than a silent call.
+    let source = "fn main() {\n    v.field (a + 1usize)\n}";
+    let (result, diagnostics) = parse(source, &Interner::new());
+    assert!(result.is_err());
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("statements on the same line")),
+        "expected a same-line diagnostic, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn test_dot_path_glued_call_still_parses() {
+    // The adjacent form is still a call: `v.field(x)` parses as a call on the
+    // two-segment path `v.field` (lowering decides whether it is a method
+    // call). A non-path receiver like `f().g(x)` becomes a `MethodCall`.
+    let source = "fn main() { v.field(a + 1usize) }";
+    let (program, _) = parse_ok(source);
+    let call = tail_expr(&program.functions[0].body);
+    match &call.kind {
+        ExprKind::FunctionCall { path, .. } => assert_eq!(
+            path.segments.len(),
+            2,
+            "expected the two-segment path `v.field`, got {:?}",
+            call.kind
+        ),
+        ExprKind::MethodCall { .. } => {}
+        other => panic!("expected a call, got {:?}", other),
+    }
+    // Same adjacency applies after a call receiver: `f().g(x)` is a method call.
+    let source = "fn main() { f().g(a + 1usize) }";
+    let (program, _) = parse_ok(source);
+    let call = tail_expr(&program.functions[0].body);
+    assert!(
+        matches!(call.kind, ExprKind::MethodCall { .. }),
+        "expected MethodCall after a call receiver, got {:?}",
+        call.kind
+    );
+}
+
+#[test]
+fn test_dot_path_add_group_continues_across_operator() {
+    // A line ending in a binary operator continues: `v.field +\n(expr)` is one
+    // binary expression, not a call glued to `v.field`.
+    let source = "fn f() -> usize {\n    let x = v.field +\n        (a + 1usize)\n}";
+    let (program, _) = parse_ok(source);
+    match &program.functions[0].body.stmts[0] {
+        Stmt::Let { value, .. } => assert!(
+            matches!(value.kind, ExprKind::Binary { .. }),
+            "expected `v.field + (a + 1usize)` to parse as one binary expression, got {:?}",
+            value.kind
+        ),
+        other => panic!("expected let, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_parse_let_statement() {
     let source = "fn main() { let x: u32 = 42 }";
     let (program, interner) = parse_ok(source);
