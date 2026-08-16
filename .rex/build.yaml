@@ -1,0 +1,43 @@
+# Build the prim toolchain and stage the runnable dist tree.
+#
+# Wraps the repo's ./build.sh (cargo build + staging under
+# target/{debug,release}/dist). Use a persistent named VM so the target/
+# build cache carries between runs:
+#
+#   rex run .rex/build.yaml --name prim                # debug (default)
+#   rex run .rex/build.yaml --name prim --set profile=release
+#
+# The vm block boots the named VM from the baked image prim-toolchain-rust188
+# (toolchain + warm caches pre-installed) if it doesn't already exist — so a
+# brand-new session/agent can run this with no init. If the image is missing
+# (e.g. fresh project), run .rex/init.yaml once instead.
+#
+# The staged dist tree is pulled back into target/{debug,release}/dist in
+# the repo (target/ is gitignored, so it never pollutes commits).
+version: 1
+name: prim-build
+vm:
+  provider: workcell
+  image: prim-toolchain-rust188
+description: |
+  Build the prim toolchain and stage the runnable tree via ./build.sh, on a
+  persistent tool VM (--name prim) so the cargo target/ cache is reused
+  between runs. Set profile=release for an optimized build. The staged dist
+  is downloaded back to target/{debug,release}/dist.
+vars:
+  profile:
+    description: cargo profile; debug (default) or release
+    default: debug
+execution:
+  timeout: 30m
+  cwd: work
+inputs:
+  - src: .
+    dest: work
+    exclude: ["target/**", ".git/**", ".direnv/**"]
+command:
+  argv: [bash, -lc, "export PATH=\"$HOME/.cargo/bin:$PATH\"; mkdir -p \"$HOME/.cache/prim-target\"; ln -sfn \"$HOME/.cache/prim-target\" target; if [ \"${profile}\" = release ]; then ./build.sh --release; else ./build.sh; fi"]
+outputs:
+  - src: work/target/${profile}/dist
+    dest: ./target/${profile}/dist
+    mode: changed-only

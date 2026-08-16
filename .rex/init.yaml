@@ -1,0 +1,73 @@
+# One-time initialization of a tool VM for building prim.
+#
+# Installs what a fresh VM needs to build and test the workspace:
+#   - system build deps (gcc/binutils — the CLI links generated code with gcc;
+#     see AGENTS.md) and curl/ca-certificates for rustup
+#   - rustup, which then auto-installs the pinned toolchain from
+#     rust-toolchain.toml (1.88 + rustfmt + clippy) on the first cargo call
+#   - wasmtime (runtime for generated wasm; the CLI integration tests invoke it)
+#   - a warm cargo registry (`cargo fetch`) so builds never wait on the network
+#
+# Idempotent: safe to re-run on a VM that already has the toolchain.
+# Run it once per VM, then keep the VM for later builds:
+#
+#   rex run .rex/init.yaml --name prim          # create-or-reuse VM "prim"
+#   rex run .rex/init.yaml --name prim --warm   # ...and fold into its work-baseline
+#                                               #    so every later run starts warmed
+#
+# To skip init entirely on future VMs, bake this VM into a reusable image and
+# boot new VMs from it (toolchain + warm caches included):
+#
+#   rex resource powerdown prim
+#   rex resource save prim prim-toolchain-rust188 --scope project --description "…" --label prim
+#   rex resource create prim-toolchain-rust188 --name prim --wait   # no init needed
+#
+# See .rex/README.md ("Skip init: baked base image").
+version: 1
+name: prim-init
+description: |
+  Initialize a fresh tool VM for building prim: system build deps, wasmtime
+  (runtime for generated wasm, used by the CLI tests), the Rust 1.88
+  toolchain (auto-installed from rust-toolchain.toml), and a warmed cargo
+  registry via `cargo fetch`. Idempotent; run once per VM, then reuse the VM
+  (or bake it into a base image) for fast builds.
+execution:
+  timeout: 20m
+  cwd: work
+inputs:
+  - src: .
+    dest: work
+    exclude: ["target/**", ".git/**", ".direnv/**"]
+command:
+  argv:
+    - bash
+    - -lc
+    - |
+      set -euo pipefail
+      export PATH="$HOME/.cargo/bin:$PATH"
+
+      echo ">> system build deps"
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq --no-install-recommends curl ca-certificates build-essential
+
+      echo ">> rustup"
+      if ! command -v rustup >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --profile minimal --no-modify-path
+      fi
+
+      echo ">> wasmtime (runtime for generated wasm; CLI tests invoke it)"
+      if ! command -v wasmtime >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://wasmtime.dev/install.sh \
+          | bash -s
+        sudo ln -sf "$HOME/.wasmtime/bin/wasmtime" /usr/local/bin/wasmtime
+      fi
+      wasmtime --version
+
+      echo ">> pinned toolchain (rust-toolchain.toml)"
+      rustup show active-toolchain
+
+      echo ">> warm cargo registry"
+      cargo fetch
+
+      echo ">> init done"

@@ -1,0 +1,19 @@
+# Fast readiness probe: is this VM set up to build prim?
+#
+#   rex run .rex/check.yaml --name prim
+#
+# Verifies rustup is present, the pinned 1.88 toolchain is installed, and
+# cargo is on PATH. (Inside a synced repo dir, rust-toolchain.toml
+# overrides the active toolchain to 1.88 — this probe confirms it is
+# installed so that override resolves instantly.) A quick (~1s) check, useful
+# before a long build or to confirm a freshly baked VM is ready.
+version: 1
+name: prim-check
+description: |
+  Fast read-only probe that a tool VM is ready to build prim: rustup present,
+  the pinned 1.88 toolchain installed, cargo on PATH. Useful to confirm a
+  fresh or baked VM is ready before running a build.
+execution:
+  timeout: 2m
+command:
+  argv: [bash, -lc, "export PATH=\"$HOME/.cargo/bin:$PATH\"; command -v rustup && rustup toolchain list && rustc --version && cargo --version"]

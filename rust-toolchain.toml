@@ -1,0 +1,8 @@
+# Pins the exact Rust toolchain for every cargo/rustup invocation in this repo.
+# A fresh machine (or rex tool VM) with rustup installed will auto-download
+# this toolchain on first `cargo` run — no manual `rustup toolchain install`.
+# Keep in sync with RUSTC_VERSION in flake.nix.
+[toolchain]
+channel = "1.88"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
