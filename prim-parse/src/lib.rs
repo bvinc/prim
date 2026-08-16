@@ -56,28 +56,11 @@ pub enum Type {
     },
     /// An anonymous product type, `(A, B, ...)` with two or more elements.
     Tuple(Vec<Type>),
-    /// A borrow type: `read T` (shared) or `mut T` (exclusive). In a
-    /// parameter position this is unwrapped during lowering into the inner
-    /// type plus a `PassMode`; it carries the borrow as part of the type so the
-    /// same notation works in return and (later) field positions.
-    Ref {
-        kind: RefKind,
-        inner: Box<Type>,
-    },
     /// `Self` (and a bare `self` parameter): the type an `impl`/`trait` is
     /// for. Resolved to the concrete target (in an impl) or the trait type
     /// (in a trait declaration) during HIR lowering.
     SelfType,
     Undetermined, // Type not yet determined during parsing
-}
-
-/// The kind of borrow a `read`/`mut` type denotes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RefKind {
-    /// `read T` — shared read borrow.
-    Read,
-    /// `mut T` — exclusive mutable borrow.
-    Mut,
 }
 
 /// An expression with its span and type.
@@ -128,8 +111,11 @@ pub enum ExprKind {
         variant_name: Ident,
         fields: Vec<StructField>,
     },
-    /// `match scrutinee { pattern => arm_expr, ... }`.
+    /// `match scrutinee { pattern => arm_expr, ... }`. `mode` is the
+    /// scrutinee's access mode: `read` (the default), `mut` (exclusive borrow
+    /// — requires `match mut e`), or `own` (consume).
     Match {
+        mode: PassMode,
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
@@ -152,12 +138,6 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
-    /// A borrow expression: `read place` (shared) or `mut place` (exclusive).
-    /// Produces a `read T` / `mut T` value tracked by the loan checker.
-    Borrow {
-        kind: RefKind,
-        place: Box<Expr>,
-    },
     /// A tuple literal, `(a, b, ...)` with two or more elements.
     Tuple(Vec<Expr>),
     /// Positional tuple access, `tuple.0`.
@@ -305,11 +285,6 @@ pub struct StructDefinition {
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructFieldDefinition>,
     pub repr_c: bool,
-    /// `true` when declared `struct view Name { ... }`: the type is view-kinded
-    /// (holds a borrow) and so may not escape the frame it is created in. The
-    /// modifier is mandatory when — and only when — a field is itself
-    /// view-kinded; the ownership pass checks that acknowledgment.
-    pub is_view: bool,
     /// `true` for an `@builtin type Name[...]` stub: a fieldless nominal entry
     /// whose representation is intrinsic (e.g. `Array[T, N]`). It exists to give
     /// the built-in type a home for type parameters and impls.
@@ -328,9 +303,6 @@ pub struct EnumDefinition {
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<VariantDefinition>,
-    /// `true` when declared `enum view Name { ... }`. See
-    /// [`StructDefinition::is_view`].
-    pub is_view: bool,
     pub span: Span,
 }
 
@@ -428,11 +400,6 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
-    /// The parameter a returned borrow is derived from, named by a trailing
-    /// `from <param>` clause (`-> read T from v`). `None` uses elision (the sole
-    /// borrowed parameter). Provenance lets a returned view be tracked against
-    /// its source in the caller.
-    pub provenance: Option<Ident>,
     pub body: Block,
     pub runtime_binding: Option<String>,
     /// `@entry`: this function is the program's wasm entry point (`_start`).
@@ -588,8 +555,6 @@ pub struct ImplMethod {
     pub name: Ident,
     pub parameters: Vec<Parameter>,
     pub return_type: Option<Type>,
-    /// A `from <param>` provenance clause (see [`Function::provenance`]).
-    pub provenance: Option<Ident>,
     pub body: Block,
     /// `@runtime("...")` symbol for an intrinsic associated function with no
     /// body (e.g. the primitive conversions). `None` for an ordinary method.

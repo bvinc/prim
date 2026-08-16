@@ -1,0 +1,20 @@
+struct Counter { n: i32 }
+
+trait Greeter {
+    fn greet(self) -> i32;
+}
+
+impl Greeter for Counter {
+    fn greet(self) -> i32 { return self.n }
+}
+
+// Boxing a second-class borrow into a trait object is rejected: the box owns
+// its value, so it would outlive the `read` parameter's scope.
+fn box_it(read c: Counter) -> Greeter {
+    return c
+}
+
+fn main() {
+    let c = Counter { n = 99 }
+    let g = box_it(read c)
+}

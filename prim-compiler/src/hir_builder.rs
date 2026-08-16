@@ -421,7 +421,6 @@ impl<'a> LoweringContext<'a> {
                         name: SymbolId(res_id.0),
                         type_params: Vec::new(),
                         fields: Vec::new(),
-                        is_view: s.is_view,
                         span,
                     });
                 }
@@ -466,7 +465,6 @@ impl<'a> LoweringContext<'a> {
                         type_params: Vec::new(),
                         params: Vec::new(),
                         ret: None,
-                        provenance: None,
                         body: hir::Block {
                             stmts: Vec::new(),
                             expr: None,
@@ -527,7 +525,6 @@ impl<'a> LoweringContext<'a> {
                         type_params: Vec::new(),
                         variants: Vec::new(),
                         variant_idx: HashMap::new(),
-                        is_view: e.is_view,
                         span,
                     });
                 }
@@ -607,7 +604,6 @@ impl<'a> LoweringContext<'a> {
                             type_params: Vec::new(),
                             params: Vec::new(),
                             ret: None,
-                            provenance: None,
                             body: hir::Block {
                                 stmts: Vec::new(),
                                 expr: None,
@@ -678,18 +674,18 @@ impl<'a> LoweringContext<'a> {
         target: &Type,
         module_id: ModuleId,
     ) -> Result<hir::MethodOwner, TargetError> {
-        if let Type::Struct(sym, args) = target {
-            if args.is_empty() {
-                let name = self.interner.resolve(sym).to_string();
-                let Some(res) = self
-                    .module_scopes
-                    .get(&module_id)
-                    .and_then(|scope| scope.get(&name).copied())
-                else {
-                    return Err(TargetError::Unknown(name));
-                };
-                return self.method_owner(res).ok_or(TargetError::Invalid(name));
-            }
+        if let Type::Struct(sym, args) = target
+            && args.is_empty()
+        {
+            let name = self.interner.resolve(sym).to_string();
+            let Some(res) = self
+                .module_scopes
+                .get(&module_id)
+                .and_then(|scope| scope.get(&name).copied())
+            else {
+                return Err(TargetError::Unknown(name));
+            };
+            return self.method_owner(res).ok_or(TargetError::Invalid(name));
         }
         if matches!(target, Type::Array(_, _)) {
             return Ok(hir::MethodOwner::Array);
@@ -1018,13 +1014,10 @@ impl<'a> LoweringContext<'a> {
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
-                    let provenance =
-                        self.resolve_provenance(f.provenance.as_ref(), &f.parameters, file.file_id);
                     if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                         hir_func.type_params = type_params;
                         hir_func.params = params;
                         hir_func.ret = ret;
-                        hir_func.provenance = provenance;
                         hir_func.body = body;
                         hir_func.span = span;
                     }
@@ -1141,15 +1134,9 @@ impl<'a> LoweringContext<'a> {
                         let body =
                             self.lower_block(&m.body, module_id, file.file_id, ast, module_scope);
                         let span = self.span_id(m.name.span, file.file_id);
-                        let provenance = self.resolve_provenance(
-                            m.provenance.as_ref(),
-                            &m.parameters,
-                            file.file_id,
-                        );
                         if let Some(hir_func) = self.functions.get_mut(fid.0 as usize) {
                             hir_func.params = params;
                             hir_func.ret = ret;
-                            hir_func.provenance = provenance;
                             hir_func.body = body;
                             hir_func.span = span;
                             // Only a `self`-method is generic over the owner's
@@ -1167,26 +1154,6 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
-    }
-
-    /// Resolve a `from <param>` provenance clause to the index of the named
-    /// parameter. An unknown name is a lowering error.
-    fn resolve_provenance(
-        &mut self,
-        provenance: Option<&prim_parse::Ident>,
-        parameters: &[prim_parse::Parameter],
-        file: FileId,
-    ) -> Option<usize> {
-        let prov = provenance?;
-        let idx = parameters.iter().position(|p| p.name.sym == prov.sym);
-        if idx.is_none() {
-            self.errors.push(LoweringError::UnknownName {
-                name: self.interner.resolve(&prov.sym).to_string(),
-                file,
-                span: prov.span,
-            });
-        }
-        idx
     }
 
     /// Validate a global's initializer expression. Wasm globals can only
@@ -1363,7 +1330,6 @@ impl<'a> LoweringContext<'a> {
                     },
                 ],
                 ret: None,
-                provenance: None,
                 body: hir::Block { stmts, expr: None },
                 span,
                 runtime: None,
@@ -2090,46 +2056,46 @@ impl<'a> LoweringContext<'a> {
                 // Associated call: `Type.f(args)` where the head names a
                 // struct/enum/primitive and `f` is one of its associated
                 // functions (no `self`).
-                if path.segments.len() == 2 {
-                    if let Some(owner) = self.assoc_call_owner(&path.segments[0], module_scope) {
-                        let fn_name = path.segments[1];
-                        let lowered_args: Vec<hir::Expr> = args
-                            .iter()
-                            .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
-                            .collect();
-                        let lowered_type_args: Vec<hir::Type> = type_args
-                            .iter()
-                            .map(|t| self.lower_type(t, module_scope))
-                            .collect();
-                        return match self.impl_methods.get(&(owner, fn_name.sym)).copied() {
-                            Some(impl_fn) if !impl_fn.is_method => hir::Expr {
-                                kind: hir::ExprKind::Call {
-                                    func: impl_fn.func,
-                                    type_args: lowered_type_args,
-                                    args: lowered_args,
-                                    arg_modes: arg_modes.clone(),
-                                },
-                                ty: self.lower_type(&expr.ty, module_scope),
-                                span,
+                if path.segments.len() == 2
+                    && let Some(owner) = self.assoc_call_owner(&path.segments[0], module_scope)
+                {
+                    let fn_name = path.segments[1];
+                    let lowered_args: Vec<hir::Expr> = args
+                        .iter()
+                        .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                        .collect();
+                    let lowered_type_args: Vec<hir::Type> = type_args
+                        .iter()
+                        .map(|t| self.lower_type(t, module_scope))
+                        .collect();
+                    return match self.impl_methods.get(&(owner, fn_name.sym)).copied() {
+                        Some(impl_fn) if !impl_fn.is_method => hir::Expr {
+                            kind: hir::ExprKind::Call {
+                                func: impl_fn.func,
+                                type_args: lowered_type_args,
+                                args: lowered_args,
+                                arg_modes: arg_modes.clone(),
                             },
-                            Some(_) => {
-                                self.errors.push(LoweringError::NotAssociatedFn {
-                                    name: self.interner.resolve(&fn_name.sym).to_string(),
-                                    file: file_id,
-                                    span: fn_name.span,
-                                });
-                                error()
-                            }
-                            None => {
-                                self.errors.push(LoweringError::UnknownFunction {
-                                    name: self.interner.resolve(&fn_name.sym).to_string(),
-                                    file: file_id,
-                                    span: fn_name.span,
-                                });
-                                error()
-                            }
-                        };
-                    }
+                            ty: self.lower_type(&expr.ty, module_scope),
+                            span,
+                        },
+                        Some(_) => {
+                            self.errors.push(LoweringError::NotAssociatedFn {
+                                name: self.interner.resolve(&fn_name.sym).to_string(),
+                                file: file_id,
+                                span: fn_name.span,
+                            });
+                            error()
+                        }
+                        None => {
+                            self.errors.push(LoweringError::UnknownFunction {
+                                name: self.interner.resolve(&fn_name.sym).to_string(),
+                                file: file_id,
+                                span: fn_name.span,
+                            });
+                            error()
+                        }
+                    };
                 }
                 let call_span = path.segments.last().expect("empty path").span;
                 let fid = self
@@ -2307,7 +2273,11 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                mode,
+                scrutinee,
+                arms,
+            } => {
                 let scrut_hir = self.lower_expr(scrutinee, module, file_id, ast, module_scope);
                 let arms_hir = arms
                     .iter()
@@ -2315,6 +2285,7 @@ impl<'a> LoweringContext<'a> {
                     .collect();
                 (
                     hir::ExprKind::Match {
+                        mode: *mode,
                         scrutinee: Box::new(scrut_hir),
                         arms: arms_hir,
                     },
@@ -2381,20 +2352,6 @@ impl<'a> LoweringContext<'a> {
                 ))),
                 self.lower_type(&expr.ty, module_scope),
             ),
-            ExprKind::Borrow { kind, place } => {
-                let lowered = self.lower_expr(place, module, file_id, ast, module_scope);
-                let inner = lowered.ty.clone();
-                (
-                    hir::ExprKind::Borrow {
-                        kind: *kind,
-                        place: Box::new(lowered),
-                    },
-                    hir::Type::Ref {
-                        kind: *kind,
-                        inner: Box::new(inner),
-                    },
-                )
-            }
             ExprKind::Array(elements) => (
                 hir::ExprKind::ArrayLit(
                     elements
@@ -2727,10 +2684,10 @@ impl<'a> LoweringContext<'a> {
         let name_ident = path.segments.last().expect("empty path");
         let name = self.interner.resolve(&name_ident.sym);
 
-        if let Some(id) = self.lookup_symbol_path(path, module_scope) {
-            if self.func_ids.contains_key(&id) {
-                return Some(id);
-            }
+        if let Some(id) = self.lookup_symbol_path(path, module_scope)
+            && self.func_ids.contains_key(&id)
+        {
+            return Some(id);
         }
 
         if path.segments.len() > 1 {
@@ -2865,10 +2822,6 @@ impl<'a> LoweringContext<'a> {
             // annotation): a real, tracked `Ref`. Parameters are still unwrapped
             // to `(PassMode, inner)` by the parser, so this only fires for
             // non-parameter positions.
-            Type::Ref { kind, inner } => hir::Type::Ref {
-                kind: *kind,
-                inner: Box::new(self.lower_type(inner, module_scope)),
-            },
             Type::SelfType => self
                 .current_self_type
                 .clone()

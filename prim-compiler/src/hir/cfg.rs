@@ -19,8 +19,7 @@
 //!     ownership checker uses (with and without back-edges) for use-after-move.
 
 use super::{
-    Block as HirBlock, Enum, Expr, ExprKind, MatchArm, PassMode, Pattern, RefKind, SpanId, Stmt,
-    Struct, SymbolId, Type,
+    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, SpanId, Stmt, SymbolId, Type,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -471,18 +470,18 @@ impl Builder<'_> {
     /// An expression in move position: a tracked place is moved out; anything
     /// else (a temporary, or a `Copy` value) is just read for its sub-effects.
     fn moved(&mut self, expr: &Expr) {
-        if !is_copy(&expr.ty) {
-            if let Some(root) = root_symbol(expr) {
-                if self.tracked.contains(&root) {
-                    let partial = !matches!(expr.kind, ExprKind::Ident(_));
-                    self.act(Action::Move {
-                        local: root,
-                        span: expr.span,
-                        partial,
-                    });
-                }
-                return;
+        if !is_copy(&expr.ty)
+            && let Some(root) = root_symbol(expr)
+        {
+            if self.tracked.contains(&root) {
+                let partial = !matches!(expr.kind, ExprKind::Ident(_));
+                self.act(Action::Move {
+                    local: root,
+                    span: expr.span,
+                    partial,
+                });
             }
+            return;
         }
         self.read(expr);
     }
@@ -500,10 +499,19 @@ impl Builder<'_> {
                     });
                 }
             }
-            ExprKind::Match { scrutinee, arms } => {
-                // A matched non-`Copy` scrutinee is consumed only when an arm
-                // binds a non-`Copy` payload out of it; otherwise it is borrowed.
-                if match_consumes(arms) {
+            ExprKind::Match {
+                mode: _,
+                scrutinee,
+                arms,
+            } => {
+                // A matched non-`Copy` scrutinee is consumed exactly when an
+                // arm binds a non-`Copy` payload out of it with `own` (the
+                // move is always inferred from the arms). `match own e` is
+                // optional documentation of that consume and `match mut e` /
+                // bare `match e` are read-only unless an arm moves — so the
+                // mode keyword never changes consumption on its own.
+                let consumes = match_consumes(arms);
+                if consumes {
                     self.moved(scrutinee);
                 } else {
                     self.read(scrutinee);
@@ -571,7 +579,6 @@ impl Builder<'_> {
             }
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.read(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.read(e),
-            ExprKind::Borrow { place, .. } => self.read(place),
             ExprKind::Coerce { value, .. } => self.read(value),
             // Typecheck rewrites every `MethodCall` to `Call`/`DynCall`/
             // `TraitBoundCall` before either consumer runs; handle the leftover
@@ -631,37 +638,7 @@ pub fn is_copy(ty: &Type) -> bool {
             | Type::IntVar
             | Type::FloatVar
             | Type::Undetermined
-            // A shared `read` borrow copies freely (like `&T`); an exclusive
-            // `mut` borrow is unique and does not.
-            | Type::Ref { kind: RefKind::Read, .. }
     )
-}
-
-/// Whether a type is *view-kinded*: it transitively holds a borrow, so a value
-/// of this type may not escape the frame it was created in (the four bans in
-/// `ownership.rs`). A borrow (`Ref`) is view-kinded axiomatically; a struct or
-/// enum is view-kinded when it is declared `view` or any of its generic
-/// arguments is (per-instantiation, so `Wrapper[read T]` is view even when
-/// `Wrapper` isn't); a composite is view-kinded when any component is.
-///
-/// `Param` is treated as data here: pre-monomorphization we don't know its
-/// instantiation, and the only way a concrete borrow enters a `Param` slot is a
-/// borrow expression whose own type is a `Ref` — caught at that site. The
-/// remaining case (a generic that stores a borrow *through* a type parameter)
-/// is deferred; no current program constructs it.
-pub fn is_view(ty: &Type, structs: &[Struct], enums: &[Enum]) -> bool {
-    match ty {
-        Type::Ref { .. } => true,
-        Type::Struct(id, args) => {
-            structs[id.0 as usize].is_view || args.iter().any(|a| is_view(a, structs, enums))
-        }
-        Type::Enum(id, args) => {
-            enums[id.0 as usize].is_view || args.iter().any(|a| is_view(a, structs, enums))
-        }
-        Type::Tuple(elems) => elems.iter().any(|e| is_view(e, structs, enums)),
-        Type::Array(elem, _) => is_view(elem, structs, enums),
-        _ => false,
-    }
 }
 
 /// What a binding (parameter, `let`, or `match` arm) or call argument does to

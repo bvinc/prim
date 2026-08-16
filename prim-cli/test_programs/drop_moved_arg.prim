@@ -7,7 +7,7 @@ impl Drop for R {
 
 // A resource moved (`own`) into a callee is dropped by the callee, not the
 // caller — exactly once.
-fn consume(r: own R) {
+fn consume(own r: R) {
     println(9i32)
 }
 

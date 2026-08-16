@@ -1,8 +1,0 @@
-// Binding a non-Copy value out of a named place with `let` requires `own`,
-// just like a match arm. Without it, this is an error.
-struct S { n: i32 }
-
-fn main() {
-    let a = S { n = 1 }
-    let b = a
-}

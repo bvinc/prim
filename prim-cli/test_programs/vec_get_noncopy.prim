@@ -1,0 +1,23 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.get
+
+struct S { n: i32 }
+
+impl Drop for S {
+    fn drop(mut self) { println(100i32 + self.n) }
+}
+
+// `Vec.get` is a copy-read: it returns `*add[T](v.ptr, i)` — a deref-read of
+// the slot. For a boxed element (a struct with a `Drop` impl, stored as a
+// pointer in the slot), that "copy" is really a copy of the box pointer: the
+// returned value would alias the slot, and both would drop the same box
+// (double free / use-after-free). The compiler rejects the instantiation —
+// this is the plan's "bound `get` to `T: Copy`", enforced at mono time.
+fn main() {
+    let mut v = new[S]()
+    push(mut v, own S { n = 9 })
+    let x = get(v, 0usize)
+    println(x.n)
+}

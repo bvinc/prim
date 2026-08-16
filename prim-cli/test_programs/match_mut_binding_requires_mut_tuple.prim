@@ -1,0 +1,21 @@
+struct Point { x: i32, y: i32 }
+
+enum Shape2 {
+    None,
+    Some(Point),
+}
+
+// Tuple-variant form of the same rule: `mut v` in a parenthesized pattern is
+// also an exclusive borrow of the scrutinee and requires `match mut`.
+fn bump2(read s: Shape2) -> i32 {
+    match s {
+        Shape2.Some(mut p) => { p.x = 99i32 },
+        Shape2.None => {},
+    }
+    return 0i32
+}
+
+fn main() {
+    let s = Shape2.Some(Point { x = 1i32, y = 2i32 })
+    bump2(read s)
+}

@@ -1,0 +1,9 @@
+struct S { n: i32 }
+
+fn twice(mut a: S, mut b: S) -> i32 { return a.n + b.n }
+
+// Rule 5: the same place may not be `mut`-borrowed twice at one call.
+fn main() {
+    let x = S { n = 1 }
+    let r = twice(mut x, mut x)
+}

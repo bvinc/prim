@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn f(s: own S) -> S {
+fn f(own s: S) -> S {
     let own r = s
     return s
 }

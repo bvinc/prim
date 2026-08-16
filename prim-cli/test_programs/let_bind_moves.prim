@@ -1,0 +1,13 @@
+struct Point { x: i32, y: i32 }
+
+// A bare `let` binding moves its RHS out of the source place when the value is
+// non-`Copy`: `let x = a` transfers ownership, so a later use of `a` is an
+// error. This is the documented default — no `own` marker is required (and
+// `let own x = a` is the explicit, redundant spelling). Unlike a call site,
+// where the parameter's declared mode makes a bare argument ambiguous, a `let`
+// always creates a new owned binding, so move is the only coherent default.
+fn main() {
+    let a = Point { x = 1i32, y = 2i32 }
+    let x = a
+    let y = a
+}

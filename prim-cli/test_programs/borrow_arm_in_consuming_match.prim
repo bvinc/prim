@@ -1,0 +1,18 @@
+struct S { n: i32 }
+enum Box { Full { s: S }, Full2 { t: S }, Empty }
+
+// One arm moves the payload out (`own s`), so the match consumes the
+// scrutinee — the other arm may not *borrow* a payload (`t`) out of a value
+// the match owns and frees; it must move with `own` too.
+fn f(own b: Box) -> i32 {
+    match b {
+        Box.Full { own s } => s.n,
+        Box.Full2 { t } => t.n,
+        Box.Empty => 0i32,
+    }
+}
+
+fn main() {
+    let b = Box.Full { s = S { n = 5i32 } }
+    println(f(own b))
+}

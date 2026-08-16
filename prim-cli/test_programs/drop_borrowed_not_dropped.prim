@@ -6,7 +6,7 @@ impl Drop for R {
 }
 
 // A `read` borrow does not drop the resource; only its owner does, once.
-fn inspect(r: read R) -> i32 {
+fn inspect(read r: R) -> i32 {
     return r.id
 }
 

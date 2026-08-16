@@ -355,10 +355,8 @@ fn scalar_candidates_block(
                 hir::ExprKind::Call { func, .. } => scalar_ret.contains_key(func),
                 _ => false,
             };
-            if init_ok {
-                if let Some(fields) = flat_scalar_fields(ty, program, policy) {
-                    out.insert(*symbol, fields);
-                }
+            if init_ok && let Some(fields) = flat_scalar_fields(ty, program, policy) {
+                out.insert(*symbol, fields);
             }
         }
         scalar_candidates_stmt(stmt, program, policy, scalar_ret, out);
@@ -425,7 +423,11 @@ fn scalar_candidates_expr(
             }
         }
         hir::ExprKind::Block(b) => scalar_candidates_block(b, program, policy, scalar_ret, out),
-        hir::ExprKind::Match { scrutinee, arms } => {
+        hir::ExprKind::Match {
+            mode: _,
+            scrutinee,
+            arms,
+        } => {
             scalar_candidates_expr(scrutinee, program, policy, scalar_ret, out);
             for arm in arms {
                 scalar_candidates_expr(&arm.body, program, policy, scalar_ret, out);
@@ -587,9 +589,6 @@ fn scalar_disqualify_expr(
         hir::ExprKind::Deref(e) | hir::ExprKind::BitNot(e) | hir::ExprKind::Neg(e) => {
             scalar_disqualify_expr(e, scalar_abi, ret_scalar, disq)
         }
-        hir::ExprKind::Borrow { place, .. } => {
-            scalar_disqualify_expr(place, scalar_abi, ret_scalar, disq)
-        }
         hir::ExprKind::Coerce { value, .. } => {
             scalar_disqualify_expr(value, scalar_abi, ret_scalar, disq)
         }
@@ -605,7 +604,11 @@ fn scalar_disqualify_expr(
             }
         }
         hir::ExprKind::Block(b) => scalar_disqualify_block(b, scalar_abi, ret_scalar, disq),
-        hir::ExprKind::Match { scrutinee, arms } => {
+        hir::ExprKind::Match {
+            mode: _,
+            scrutinee,
+            arms,
+        } => {
             scalar_disqualify_expr(scrutinee, scalar_abi, ret_scalar, disq);
             for arm in arms {
                 scalar_disqualify_expr(&arm.body, scalar_abi, ret_scalar, disq);
@@ -792,7 +795,9 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
                 emit_scalar_let(f, symbol, value, ctx)?;
             } else {
                 emit_expr(f, value, ctx)?;
-                emit_test_bind(f, Src::Stack, &value.ty, pattern, ctx);
+                // `let` patterns never bind `mut` (mode `Read`), so the
+                // write-back list stays empty by construction.
+                emit_test_bind(f, Src::Stack, &value.ty, pattern, ctx, &mut Vec::new());
             }
         }
         hir::Stmt::Assign { target, value, .. } => {
@@ -994,21 +999,19 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
         } => {
             emit_variant_lit(f, *enum_id, *variant_idx, fields, ctx)?;
         }
-        hir::ExprKind::Match { scrutinee, arms } => {
-            emit_match(f, scrutinee, arms, &expr.ty, ctx)?;
+        hir::ExprKind::Match {
+            mode,
+            scrutinee,
+            arms,
+        } => {
+            emit_match(f, *mode, scrutinee, arms, &expr.ty, ctx)?;
         }
         hir::ExprKind::Field { base, field } => {
             if let Some(local) = scalar_base_local(base, &ScalarKey::Field(*field), ctx)? {
                 f.instruction(&Instruction::LocalGet(local));
             } else {
                 emit_expr(f, base, ctx)?;
-                // A borrow is represented as its inner handle, so field access
-                // sees through it.
-                let base_ty = match &base.ty {
-                    hir::Type::Ref { inner, .. } => inner.as_ref(),
-                    t => t,
-                };
-                let struct_id = match base_ty {
+                let struct_id = match &base.ty {
                     hir::Type::Struct(id, _) => *id,
                     _ => {
                         return Err(WasmError::Internal(
@@ -1226,12 +1229,6 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 }
             }
         }
-        // A borrow is representationally transparent: emit the place's value
-        // (the handle for an aggregate, a copy for a scalar). The borrow-ness is
-        // a compile-time property the loan checker enforced earlier.
-        hir::ExprKind::Borrow { place, .. } => {
-            emit_expr(f, place, ctx)?;
-        }
         hir::ExprKind::Neg(operand) => {
             // Floats have a dedicated negate; integers have none, so subtract
             // from zero (push 0, then the operand, then sub).
@@ -1426,23 +1423,23 @@ fn emit_scalar_value(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result
         WasmError::Internal("scalar-ABI value is not a flat scalar aggregate".into())
     })?;
     // A scalarized local/param: push its leaf-field locals directly (no box).
-    if let hir::ExprKind::Ident(sym) = &arg.kind {
-        if let Some(scalar) = ctx.scalarized.get(sym) {
-            for sf in &scalar.fields {
-                let local = scalar
-                    .local_of(&sf.key)
-                    .ok_or_else(|| WasmError::Internal("scalar field local missing".into()))?;
-                f.instruction(&Instruction::LocalGet(local));
-            }
-            return Ok(());
+    if let hir::ExprKind::Ident(sym) = &arg.kind
+        && let Some(scalar) = ctx.scalarized.get(sym)
+    {
+        for sf in &scalar.fields {
+            let local = scalar
+                .local_of(&sf.key)
+                .ok_or_else(|| WasmError::Internal("scalar field local missing".into()))?;
+            f.instruction(&Instruction::LocalGet(local));
         }
+        return Ok(());
     }
     // A scalar-ABI-returning call already leaves N values on the stack — pass
     // them straight through (no box).
-    if let hir::ExprKind::Call { func, args, .. } = &arg.kind {
-        if ctx.scalar_ret.contains_key(func) {
-            return emit_raw_call(f, func, args, ctx);
-        }
+    if let hir::ExprKind::Call { func, args, .. } = &arg.kind
+        && ctx.scalar_ret.contains_key(func)
+    {
+        return emit_raw_call(f, func, args, ctx);
     }
     // Otherwise the value lives in a box; find a local holding its pointer.
     let box_local = match &arg.kind {
@@ -1513,13 +1510,13 @@ fn scalar_base_local(
     key: &ScalarKey,
     ctx: &EmitCtx,
 ) -> Result<Option<u32>, WasmError> {
-    if let hir::ExprKind::Ident(sym) = &base.kind {
-        if let Some(scalar) = ctx.scalarized.get(sym) {
-            return match scalar.local_of(key) {
-                Some(local) => Ok(Some(local)),
-                None => Err(WasmError::Internal("scalarized field has no local".into())),
-            };
-        }
+    if let hir::ExprKind::Ident(sym) = &base.kind
+        && let Some(scalar) = ctx.scalarized.get(sym)
+    {
+        return match scalar.local_of(key) {
+            Some(local) => Ok(Some(local)),
+            None => Err(WasmError::Internal("scalarized field has no local".into())),
+        };
     }
     Ok(None)
 }
@@ -1814,12 +1811,68 @@ enum Src {
     Stack,
 }
 
+/// A `mut` binding made by a `match mut` arm, recorded so the arm's writes can
+/// be copied back into the scrutinee's place at arm end. Only *scalar* payloads
+/// are recorded: an aggregate binding aliases the scrutinee (its local holds a
+/// pointer to the box/payload region), so writes already land in the box; a
+/// scalar binding is a plain copy whose writes would otherwise be discarded.
+struct MutWriteBack {
+    src: Src,
+    ty: hir::Type,
+    symbol: hir::SymbolId,
+}
+
+/// Whether a value of this type is carried in a wasm scalar. A `mut` binding of
+/// a scalar copies the value (and needs write-back); an aggregate aliases.
+fn is_scalar_ty(ty: &hir::Type) -> bool {
+    matches!(
+        ty,
+        hir::Type::U8
+            | hir::Type::I8
+            | hir::Type::U16
+            | hir::Type::I16
+            | hir::Type::U32
+            | hir::Type::I32
+            | hir::Type::U64
+            | hir::Type::I64
+            | hir::Type::Usize
+            | hir::Type::Isize
+            | hir::Type::F32
+            | hir::Type::F64
+            | hir::Type::Bool
+    )
+}
+
+/// Copy a `mut` binding's value back into the place it was bound from, at the
+/// end of a `match mut` arm. `Src::Stack` can't occur for a match binding (the
+/// scrutinee is always stashed in a local first).
+fn emit_mut_write_backs(f: &mut Function, wb: &[MutWriteBack], ctx: &EmitCtx) {
+    for w in wb {
+        let Some(&local) = ctx.locals.get(&w.symbol) else {
+            continue;
+        };
+        match w.src {
+            Src::Local(idx) => {
+                f.instruction(&Instruction::LocalGet(local));
+                f.instruction(&Instruction::LocalSet(idx));
+            }
+            Src::Field { base, offset } => {
+                f.instruction(&Instruction::LocalGet(base));
+                f.instruction(&Instruction::LocalGet(local));
+                emit_field_store(f, &w.ty, offset);
+            }
+            Src::Stack => {}
+        }
+    }
+}
+
 /// Compile a `match` as a chain of fail-blocks wrapped in a result-carrying
 /// block. Each arm tests-and-binds its pattern, short-circuiting to its
 /// fail-block on the first mismatch (so loads behind a non-matching
 /// constructor are never executed), then runs its body and branches to `$done`.
 fn emit_match(
     f: &mut Function,
+    mode: hir::PassMode,
     scrutinee: &hir::Expr,
     arms: &[hir::MatchArm],
     result_ty: &hir::Type,
@@ -1845,7 +1898,10 @@ fn emit_match(
 
     // A consumed scrutinee transfers ownership into the arm; once its payload is
     // bound, the match owns the box(es) the arm did not move out and frees them.
+    // Consumption is always inferred from the arms (`match own`/`match mut`
+    // modes don't force it) — an `own` binding moves a payload out.
     let consuming = hir::cfg::match_consumes(arms);
+    let mut mut_wb: Vec<MutWriteBack> = Vec::new();
     for arm in arms {
         // `$fail`: a mismatch in this arm's test branches to its end, falling
         // through to the next arm.
@@ -1857,11 +1913,20 @@ fn emit_match(
             &scrutinee.ty,
             &arm.pattern,
             ctx,
+            &mut mut_wb,
         );
         if consuming {
             emit_consume_cleanup(f, scrutinee_local, &[], &scrutinee.ty, &arm.pattern, ctx);
         }
         emit_expr(f, &arm.body, ctx)?;
+        // `match mut`: scalar `mut` bindings are copies, so copy them back into
+        // the scrutinee's place at arm end (aggregate bindings alias and need
+        // no copy-back). Skipped when the scrutinee is consumed — the boxes
+        // were freed and there is no place to write back to.
+        if mode == hir::PassMode::Mut && !consuming {
+            emit_mut_write_backs(f, &mut_wb, ctx);
+        }
+        mut_wb.clear();
         let done_br = ctx.ctrl_depth.get() - 1 - done_level;
         f.instruction(&Instruction::Br(done_br));
         f.instruction(&Instruction::End);
@@ -1910,12 +1975,15 @@ fn push_src(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) {
 /// Recursively test a value (`src`, of type `ty`) against `pattern`, branching
 /// to the enclosing `$fail` block (relative depth 0 — no blocks are opened
 /// here) on any mismatch, and binding any sub-bindings along the matching path.
+/// `mut_wb` collects the arm's `mut` bindings of scalar payloads (see
+/// [`MutWriteBack`]) so `emit_match` can copy their writes back.
 fn emit_test_bind(
     f: &mut Function,
     src: Src,
     ty: &hir::Type,
     pattern: &hir::Pattern,
     ctx: &EmitCtx,
+    mut_wb: &mut Vec<MutWriteBack>,
 ) {
     match pattern {
         hir::Pattern::Wildcard { .. } => {
@@ -1925,10 +1993,19 @@ fn emit_test_bind(
                 f.instruction(&Instruction::Drop);
             }
         }
-        hir::Pattern::Binding { symbol, .. } => {
+        hir::Pattern::Binding { symbol, mode, .. } => {
             if let Some(&local) = ctx.locals.get(symbol) {
                 push_src(f, src, ty, ctx);
                 f.instruction(&Instruction::LocalSet(local));
+                // A `mut` binding of a scalar payload is a copy (aggregates
+                // alias); record it so the writes copy back to the scrutinee.
+                if *mode == hir::PassMode::Mut && is_scalar_ty(ty) {
+                    mut_wb.push(MutWriteBack {
+                        src,
+                        ty: ty.clone(),
+                        symbol: *symbol,
+                    });
+                }
             } else if matches!(src, Src::Stack) && produces_value(ty) {
                 // Unbound name fed from the stack: discard to stay balanced.
                 f.instruction(&Instruction::Drop);
@@ -1968,6 +2045,7 @@ fn emit_test_bind(
                     elem_ty,
                     elem,
                     ctx,
+                    mut_wb,
                 );
             }
         }
@@ -2017,6 +2095,7 @@ fn emit_test_bind(
                     &field_ty,
                     &fp.pattern,
                     ctx,
+                    mut_wb,
                 );
             }
         }
@@ -2041,7 +2120,14 @@ fn emit_test_bind(
                     bail(f, ctx, "field not found in struct layout");
                     continue;
                 };
-                emit_test_bind(f, Src::Field { base, offset }, &field_ty, &fp.pattern, ctx);
+                emit_test_bind(
+                    f,
+                    Src::Field { base, offset },
+                    &field_ty,
+                    &fp.pattern,
+                    ctx,
+                    mut_wb,
+                );
             }
         }
     }
@@ -2105,12 +2191,12 @@ fn emit_consume_cleanup(
                 .and_then(|l| l.variants.get(*variant_idx as usize))
             {
                 for fp in fields {
-                    if is_destructure(&fp.pattern) {
-                        if let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field) {
-                            let mut child = path.to_vec();
-                            child.push(8 + *payload_offset);
-                            emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
-                        }
+                    if is_destructure(&fp.pattern)
+                        && let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field)
+                    {
+                        let mut child = path.to_vec();
+                        child.push(8 + *payload_offset);
+                        emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
                     }
                 }
             }
@@ -2118,12 +2204,12 @@ fn emit_consume_cleanup(
         (hir::Type::Struct(sid, _), hir::Pattern::Struct { fields, .. }) => {
             if let Some(layout) = ctx.struct_layouts.get(sid) {
                 for fp in fields {
-                    if is_destructure(&fp.pattern) {
-                        if let Some((offset, field_ty)) = layout.fields.get(&fp.field) {
-                            let mut child = path.to_vec();
-                            child.push(*offset);
-                            emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
-                        }
+                    if is_destructure(&fp.pattern)
+                        && let Some((offset, field_ty)) = layout.fields.get(&fp.field)
+                    {
+                        let mut child = path.to_vec();
+                        child.push(*offset);
+                        emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
                     }
                 }
             }
@@ -2220,11 +2306,11 @@ pub(crate) fn emit_drop_fn(
     free_idx: u32,
 ) -> Function {
     let mut f = Function::new(vec![]); // param 0 is the box pointer
-    if let Some(drop_method) = info.drop_method(ty) {
-        if let Some(&widx) = func_map.get(&drop_method) {
-            f.instruction(&Instruction::LocalGet(0));
-            f.instruction(&Instruction::Call(widx));
-        }
+    if let Some(drop_method) = info.drop_method(ty)
+        && let Some(&widx) = func_map.get(&drop_method)
+    {
+        f.instruction(&Instruction::LocalGet(0));
+        f.instruction(&Instruction::Call(widx));
     }
     for (offset, fty) in recursable_fields(ty, program, policy) {
         // Present only for needs-drop field types; scalars are skipped.

@@ -1,8 +1,8 @@
 struct S { n: i32 }
 
-fn bump(s: mut S) { s.n = s.n + 1i32 }
+fn bump(mut s: S) { s.n = s.n + 1i32 }
 
-fn outer(s: read S) {
+fn outer(read s: S) {
     bump(mut s)
 }
 

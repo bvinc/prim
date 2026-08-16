@@ -1,0 +1,23 @@
+struct Point { x: i32, y: i32 }
+
+enum Shape {
+    None,
+    Some { p: Point },
+}
+
+// Rule 4 for `match mut`: an exclusive `match mut` scrutinee may not be a
+// value reachable only through a `read` parameter — the arms' `mut` bindings
+// would write back into the caller's box through a shared borrow (verified to
+// mutate the caller before this check existed).
+fn bump(read s: Shape) -> i32 {
+    match mut s {
+        Shape.Some { mut p } => { p.x = 99i32 },
+        Shape.None => {},
+    }
+    return 0i32
+}
+
+fn main() {
+    let s = Shape.Some { p = Point { x = 1i32, y = 2i32 } }
+    bump(read s)
+}

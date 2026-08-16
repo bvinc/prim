@@ -1,6 +1,6 @@
 struct S { n: i32 }
 
-fn two(x: own S, y: own S) -> i32 { return x.n + y.n }
+fn two(own x: S, own y: S) -> i32 { return x.n + y.n }
 
 fn main() {
     let a = S { n = 1 }

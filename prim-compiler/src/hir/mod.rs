@@ -1,4 +1,4 @@
-pub use prim_parse::{BinaryOp, InternSymbol, Interner, PassMode, RefKind};
+pub use prim_parse::{BinaryOp, InternSymbol, Interner, PassMode};
 pub use prim_tok::{FileId, ModuleId, Span};
 use std::fmt;
 use std::sync::Arc;
@@ -19,6 +19,9 @@ pub use drop_info::DropInfo;
 
 pub mod drop_elab;
 pub use drop_elab::elaborate as elaborate_drops;
+
+pub mod inline;
+pub use inline::is_inline;
 
 pub mod usefulness;
 
@@ -160,10 +163,6 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
-    /// Index into `params` of the parameter a returned borrow is derived from
-    /// (a `from <param>` clause). Resolved from the parameter name at lowering.
-    /// `None` falls back to elision (the sole borrowed parameter).
-    pub provenance: Option<usize>,
     pub body: Block,
     pub span: SpanId,
     pub runtime: Option<RuntimeAbi>,
@@ -405,9 +404,6 @@ pub struct Struct {
     pub name: SymbolId,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<Field>,
-    /// Declared `struct view Name`: the type is view-kinded (holds a borrow)
-    /// and may not escape its frame. See `cfg::is_view`.
-    pub is_view: bool,
     pub span: SpanId,
 }
 
@@ -423,8 +419,6 @@ pub struct Enum {
     /// Variant name → position in `variants`. O(1) lookup at typecheck
     /// and pattern-match time.
     pub variant_idx: std::collections::HashMap<InternSymbol, u32>,
-    /// Declared `enum view Name`. See [`Struct::is_view`].
-    pub is_view: bool,
     pub span: SpanId,
 }
 
@@ -626,7 +620,11 @@ pub enum ExprKind {
     },
     /// `match scrutinee { arms... }`. Arms are checked left-to-right at
     /// codegen via discriminant equality.
+    /// `match scrutinee { pattern => arm_expr, ... }`. `mode` is the
+    /// scrutinee's access mode: `read` (default), `mut` (exclusive borrow —
+    /// `match mut e`), or `own` (consume).
     Match {
+        mode: PassMode,
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
@@ -685,14 +683,6 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     /// Unary arithmetic negation, `-operand`.
     Neg(Box<Expr>),
-    /// A borrow of a place: `read place` / `mut place`. Yields a `Type::Ref`.
-    /// Representationally it is just the place's value (the handle for an
-    /// aggregate, a copy for a scalar); its purpose is to carry borrow
-    /// provenance to the loan checker.
-    Borrow {
-        kind: RefKind,
-        place: Box<Expr>,
-    },
     /// A tuple literal, `(a, b, ...)`.
     TupleLit(Vec<Expr>),
     /// Positional tuple access, `tuple.index`.
@@ -860,16 +850,6 @@ pub enum Type {
         mutable: bool,
         pointee: Box<Type>,
     },
-    /// A borrow: `read T` (shared) or `mut T` (exclusive). Representationally
-    /// transparent — a borrow of an aggregate is its handle, a borrow of a Copy
-    /// scalar is a copy, so `Ref` is laid out, sized, and loaded exactly as its
-    /// inner type. The borrow-ness is a compile-time property enforced by the
-    /// loan checker; the one place `Ref` differs from `inner` is drop — a borrow
-    /// never owns, so it is never dropped.
-    Ref {
-        kind: RefKind,
-        inner: Box<Type>,
-    },
     /// An anonymous product type, `(A, B, ...)`. Structural: two tuples with
     /// the same element types are the same type. Boxed on the heap like a
     /// struct, with positional fields.
@@ -904,8 +884,6 @@ impl Type {
             Type::Bool | Type::I8 | Type::U8 => 1,
             Type::I16 | Type::U16 => 2,
             Type::I64 | Type::U64 | Type::F64 | Type::FloatVar => 8,
-            // A borrow is represented exactly as its inner type.
-            Type::Ref { inner, .. } => inner.size_bytes(),
             _ => 4,
         }
     }
@@ -975,13 +953,6 @@ impl fmt::Display for Type {
                 } else {
                     write!(f, "*const {pointee}")
                 }
-            }
-            Type::Ref { kind, inner } => {
-                let k = match kind {
-                    RefKind::Read => "read",
-                    RefKind::Mut => "mut",
-                };
-                write!(f, "{k} {inner}")
             }
             Type::Unit => write!(f, "()"),
             Type::IntVar => write!(f, "{{integer}}"),

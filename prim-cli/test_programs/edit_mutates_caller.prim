@@ -3,7 +3,7 @@ import std.io.println
 struct S { n: i32 }
 
 // An `mut` borrow mutates in place; the change is visible to the caller.
-fn bump(s: mut S) { s.n = s.n + 1i32 }
+fn bump(mut s: S) { s.n = s.n + 1i32 }
 
 fn main() {
     let a = S { n = 41 }

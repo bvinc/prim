@@ -1,7 +1,7 @@
 import std.io.println
 
 // Tuples are first-class values: constructed, indexed, passed, and returned.
-fn swap(p: read (i32, i32)) -> (i32, i32) {
+fn swap(read p: (i32, i32)) -> (i32, i32) {
     return (p.1, p.0)
 }
 

@@ -163,10 +163,10 @@ fn full_signature(ty: &Type, program: &Program) -> Option<Vec<Ctor>> {
 fn head_ctors(matrix: &[Vec<Pat>]) -> Vec<Ctor> {
     let mut out: Vec<Ctor> = Vec::new();
     for row in matrix {
-        if let Pat::Ctor(c, _) = &row[0] {
-            if !out.contains(c) {
-                out.push(c.clone());
-            }
+        if let Pat::Ctor(c, _) = &row[0]
+            && !out.contains(c)
+        {
+            out.push(c.clone());
         }
     }
     out

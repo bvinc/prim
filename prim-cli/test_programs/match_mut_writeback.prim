@@ -1,0 +1,26 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+enum Shape {
+    None,
+    Some { p: Point },
+}
+
+// `match mut e` with a `mut` binding: the binding is an exclusive borrow of the
+// payload; writes to its fields go back into the scrutinee's box.
+fn bump_x(mut s: Shape) {
+    match mut s {
+        Shape.Some { mut p } => { p.x = p.x + 1i32 },
+        Shape.None => {},
+    }
+}
+
+fn main() {
+    let mut s = Shape.Some { p = Point { x = 1i32, y = 2i32 } }
+    bump_x(mut s)
+    match s {
+        Shape.Some { p } => println(p.x),
+        Shape.None => println(0i32),
+    }
+}

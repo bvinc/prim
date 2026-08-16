@@ -1,0 +1,25 @@
+import std.io.println
+
+enum Opt {
+    None,
+    Some { v: i32 },
+}
+
+// A `mut` binding of a *scalar* payload is a copy (aggregates alias), so the
+// arm's writes must be copied back into the scrutinee's place at arm end —
+// otherwise `v = 99` would be silently discarded.
+fn bump_v(mut s: Opt) {
+    match mut s {
+        Opt.Some { mut v } => { v = 99i32 },
+        Opt.None => {},
+    }
+}
+
+fn main() {
+    let mut s = Opt.Some { v = 1i32 }
+    bump_v(mut s)
+    match s {
+        Opt.Some { v } => println(v),
+        Opt.None => println(0i32),
+    }
+}

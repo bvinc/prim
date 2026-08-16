@@ -35,17 +35,16 @@ later feature).
   followed by `(expr)` on the next line is still silently absorbed as
   `v.field(expr)`.
 
-- **Trait-object coercion is an untracked borrow.** `let g: Trait = s` (`Coerce`)
-  builds a fat pointer `{vtable, data_addr}` that aliases `s`'s box, and the
-  ownership checker treats it as a *borrow* of `s` — but with no lifetimes,
-  nothing keeps `s` pinned for `g`'s lifetime. Moving `s` away (`consume(take s)`)
-  or letting it drop while `g` is still live compiles cleanly and leaves `g`
-  dangling: `let g: T = r; consume(take r); g.say()` runs `r`'s drop in `consume`,
-  then `g.say()` reads the freed box. This is the trait-object case of the
-  general "borrows can't be pinned without lifetimes" gap (Stage 3). A cheaper
-  stopgap is to treat `Coerce` as a *move* of the source, turning the silent UAF
-  into a use-after-move error — at the cost of leaking the value's `Drop` until
-  `dyn` values are themselves drop-elaborated.
+- **Trait-object coercion of an *owned* value is an untracked borrow.**
+  `let g: Trait = s` (`Coerce`) builds a fat pointer `{vtable, data_addr}` that
+  aliases `s`'s box. Coercing a *borrow* (a `read`/`mut` parameter or match
+  binding) is now rejected (`CoerceOfBorrow` — a second-class borrow cannot
+  outlive the call/arm that holds it), but an **owned** source is still treated
+  as a read: moving `s` away (`consume(own s)`) or letting it drop while `g` is
+  live compiles cleanly and leaves `g` dangling — `g.say()` reads the freed
+  box. The fix is to treat `Coerce` as a *move* of the source, turning the
+  silent UAF into a use-after-move error — at the cost of leaking the value's
+  `Drop` until `dyn` values are themselves drop-elaborated.
 
 - **Hardware traps exit 0.** wasmtime's stack-switching `resume` swallows a wasm
   trap raised inside the scheduler's continuation (and `proc_exit`/a main-stack
@@ -60,81 +59,75 @@ later feature).
 
 ## Deferred design
 
-- **Debug derive — structs only; enums and generics pending.** `Debug` is
-  auto-derived for non-generic structs whose fields are all `Debug` (a
+- **Debug derive — structs done, enums unblocked, generics pending.** `Debug`
+  is auto-derived for non-generic structs whose fields are all `Debug` (a
   derivability fixpoint; non-`Debug`-field structs are skipped). `@dbg` routes
   through `Debug` and prints structs; the old hand-written `__println_*` builtins
-  + `@dbg` scratch map are deleted (formatting now lives in `std.fmt`). Remaining:
-  (1) **enums** — a derived enum `fmt` must read payloads out of a `view self`
-  match, which needs borrowing-out-of-match (lifetimes) for non-`Copy` payloads;
-  (2) **generics** (`Option`/`Result`/`Vec`) — trait impls on generic types now
-  monomorphize, so the remaining piece is **conditional impl bounds**
+  + `@dbg` scratch map are deleted (formatting now lives in `std.fmt`).
+  Second-class `read`/`mut` match bindings now make **enum** `Debug`/`Display`
+  implementable (`fn fmt(read self, f: mut Formatter) { match self {
+  Some(read v) => ... } }`) — proven by `fmt_display_enum`. The derive itself
+  still covers structs only. Remaining: (1) **generics**
+  (`Option`/`Result`/`Vec`) — trait impls on generic types now monomorphize, so
+  the remaining piece is **conditional impl bounds**
   (`impl[T: Debug] Debug for Pair[T]`): the derive's body calls each field's
-  `Debug::fmt`, which needs `T: Debug` on the impl; (3) **wider coverage** —
-  `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (2).
+  `Debug::fmt`, which needs `T: Debug` on the impl; (2) **wider coverage** —
+  `Debug` for pointers/`Vec` (the "make more types Debug" goal), which depends on (1).
 
-- **Borrows — read-default params, the `data`/`view` kind system, and
-  return-provenance done; unmarked consumption + deeper derivation remain.**
-  Parameters default to **`read`**: a bare `x: T` borrows (reading is the common
-  case going in), `x: mut T` mutably borrows, and an owned parameter is written
-  `x: own T`. Move-out bindings and match arms use `own` (`let own r = ...`,
-  `Some(own v)`); the `take` keyword is retired.
+- **Second-class references — mode-only borrows; callbacks and unmarked
+  consumption remain.** References are **second-class**: `read`/`mut`/`own`
+  exist only as parameter modes, match-arm bindings, and call-site argument
+  marks (`fn len(read v: Vec[T])`, `match mut e { Some(mut v) => ... }`,
+  `f(mut x)`). There is no reference *type* — no `read T`/`mut T`, no borrow
+  expressions, no returned references, no `struct view`/provenance, no loan
+  checker. Inside a body a borrow parameter has the plain type `T`; the CFG
+  move analysis already rejects storing or returning it, and `ownership.rs`
+  adds the second-class guarantees: a borrow is unmovable (`BorrowEscapes` /
+  `MoveOutOfBorrow`), never boxed into a trait object (`CoerceOfBorrow`), never
+  `mut`-aliased at a call (`MutAlias`), never `mut`-borrowed through a `read`
+  parameter (`MutOfRead`), and call-site modes must match declarations
+  (`ModeMismatch`). Match-arm `read`/`mut` bindings are second-class exactly
+  like parameters (unmovable for the arm's body); `own` bindings move; `mut`
+  arm writes copy back into the scrutinee. Match consumption is always
+  inferred from the arms: `match own e` is documentation (rejected if the arms
+  don't move a payload), and a consuming match cannot borrow a payload out of
+  the scrutinee (it is owned and freed by the match).
 
-  `read T` / `mut T` are real, tracked reference
-  types: borrow expressions (`read place` / `mut place`), a function may *return*
-  a borrow (provenance by elision — the sole borrowed parameter, detected even
-  when the `Ref` is nested in the return type), a borrow may live **inside an
-  aggregate** (`Option[read T]` constructs/matches/reads), and a **lexical loan
-  checker** enforces shared-xor-mutable (can't mutate or re-borrow a value while
-  it's borrowed; the loan lasts the holder's scope; release with an inner `{ }`).
-  `Vec.at`/`at_mut` and `Array.get -> Option[read T]` return tracked borrows
-  instead of raw `*mut T`. A borrowed value is usable where the borrowed type's
-  bound is needed (`read i32` satisfies/dispatches `Display`).
-
-  The **kind system** classifies every type `data` or `view` (`cfg::is_view`): a
-  type is view-kinded iff it transitively holds a borrow. A struct/enum with a
-  view-kinded field must be declared `struct view` / `enum view` (mandatory
-  acknowledgment, checked at the definition — "nothing silently assigned"). A
-  `view` struct/enum is first-class **within its frame** (construct, read fields,
-  pass by `read`/`mut`).
-
-  A view **may be returned** when the signature carries **provenance**: a
-  trailing `from <param>` clause names the source, or elision infers it (the sole
-  borrowed parameter). The caller then pins the named argument for the returned
-  view's lifetime — `let w = make(read pt); pt = ...` while `w` is live is
-  rejected. Returning a nominal `view` value with no provenance (built from a
-  local, or ambiguous with several borrowed parameters and no `from`) is a
-  `ViewEscapes` error. Remaining:
-  - **Derivation, deeper** — `from origin(p)` (a composite view yielding views of
-    its sources, for iterators) and the type-position placement form
-    (`-> read(self) T`, multi-view returns) are not done; provenance is currently
-    a single trailing `from <param>` plus elision. And the **callee obligation**
-    isn't verified — a returned view is trusted to actually borrow the named
-    parameter (returning `read local` under a decoy borrowed param would slip
-    through, as it already does for `Ref` returns).
-  - **Escaping into long-lived storage** — a view stored in a container that
-    outlives its source (a `Vec[read T]` that escapes) still needs the
-    return-provenance story extended to stored fields.
-  - **Generic-param views** — `kind()` treats `Type::Param` as data pre-mono, so
-    a generic that stores a borrow *through* a type parameter isn't yet caught
-    (no current program constructs one; per-instantiation kinds want a post-mono
-    re-check).
-  - **Polish** — `read i32` in *arithmetic* (`a + read_i32`) isn't coerced yet
-    (so `Vec.get` still returns a copy); field *assignment* through a `mut`
-    borrow (`at_mut(v,i).f = x`); an inline borrow expr in constructor position
-    (`Some(read x)` parses `read` as an arg mode — bind to a local first);
-    aggregate *array* elements (inline stride) in `Array.get`.
-  - **Unmarked consumption** — the memory-model wants `mut x` to be the *only*
-    call-site mark, with consumption and reads unmarked (0007 locality). Today a
-    call still marks the mode explicitly (`f(own x)`, `f(mut x)`) and the checker
-    requires it to match the parameter's declared mode. Making consumption
-    unmarked means deriving each argument's effect from the *callee's* parameter
-    mode, which the CFG's move detection currently reads from the call-site
-    arg-mode — a deeper change deferred here.
-  - **NLL** — borrows are lexical; non-lexical liveness is a strict,
-    backward-compatible upgrade on the same checker.
-  - **Multiple borrowed params** — elision is single-source; more than one needs
-    explicit `read from <param>` provenance.
+  Access is copies + whole-structure methods: `Vec.get`/`Array.get` return
+  copies of copy-able (scalar, pointer, or inline) elements — enforced at
+  monomorphization, see below; `Vec.set`/`Vec.push`/`Vec.swap` mutate in
+  place, match arms read enum payloads via `read`/`mut` bindings. Remaining:
+  - **Callbacks** — `v.with_mut(i, |e: mut T| ...)`-style borrow-in-a-scope
+    needs first-class function values (deferred, out of scope for v1).
+  - **Unmarked consumption** — the memory model wants `mut x` to be the *only*
+    call-site mark, with consumption and reads unmarked (0007 locality). Today
+    a call still marks the mode explicitly (`f(own x)`, `f(mut x)`) and the
+    checker requires it to match the parameter's declared mode. Making
+    consumption unmarked means deriving each argument's effect from the
+    *callee's* parameter mode, which the CFG's move detection currently reads
+    from the call-site arg-mode — a deeper change deferred here.
+  - **Non-Copy element reads — enforced.** `Vec.get`/`Array.get` are
+    deref-reads of the slot; a *boxed* element (a `Drop`-implementing, large,
+    or recursive struct; any enum) is stored as a pointer in the slot, so the
+    "copy" would alias the slot and double-free on drop. Monomorphization now
+    rejects deref-reads of boxed aggregates (the plan's "bound `get` to
+    `T: Copy`", enforced precisely): scalars/pointers and inline (≤16-byte,
+    no-`Drop`) aggregates are copy-able; boxed ones are rejected with the
+    offending instantiation named at the call site
+    (`vec_get_noncopy`, `array_get_noncopy`, `vec_get_boxed_struct`,
+    `vec_get_inline_struct` tests). `set`/`swap`/`own` moves and match arms
+    remain the access path for non-Copy elements.
+  - **`match mut` on Copy scrutinees** is rejected at typecheck (a Copy value
+    has no place to mutate). `mut`-binding writes to scalar payloads and scalar
+    aggregate fields are copied back into the scrutinee's place at arm end
+    (codegen `emit_mut_write_backs`); a `mut` binding of an *aggregate* payload
+    aliases the box directly, so its writes already land in the scrutinee.
+    Rule 4 extends to `match mut`: the scrutinee's root may not be a `read`
+    parameter or a `read`/bare arm binding (both at the call site and nested
+    inside an arm), since exclusive write-back through a shared borrow would
+    alias the caller's box (`MutOfRead`). And a `mut` arm binding itself
+    requires the explicit `match mut` (enforced in typecheck) — under a
+    bare/`read` match it would write back through a read-only access.
 
 - **By-value aggregates — a direct struct/tuple literal at a scalar-ABI
   boundary still boxes.** Small POD aggregates cross parameter and return

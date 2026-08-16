@@ -3,11 +3,11 @@ import std.io.println
 struct Value { n: i32 }
 
 trait Ord {
-    fn lt(self, other: read Ord) -> bool;
+    fn lt(self, read other: Ord) -> bool;
 }
 
 impl Ord for Value {
-    fn lt(self, other: read Value) -> bool {
+    fn lt(self, read other: Value) -> bool {
         return self.n < other.n
     }
 }
@@ -15,7 +15,7 @@ impl Ord for Value {
 // Bounded generic: any T that implements Ord can be passed; the body
 // calls `a.lt(b)` which the typechecker resolves through the bound and
 // monomorphization turns into a direct call to Value::lt.
-fn min[T: Ord](a: own T, b: own T) -> T {
+fn min[T: Ord](own a: T, own b: T) -> T {
     if a.lt(b) {
         return a
     }

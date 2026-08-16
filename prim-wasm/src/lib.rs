@@ -228,10 +228,10 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             if flags.iter().any(|&s| s) {
                 scalar_abi.insert(func.id, flags);
             }
-            if let Some(ret) = &func.ret {
-                if let Some(fields) = flat_scalar_fields(ret, program, &inline_policy) {
-                    scalar_ret.insert(func.id, fields);
-                }
+            if let Some(ret) = &func.ret
+                && let Some(fields) = flat_scalar_fields(ret, program, &inline_policy)
+            {
+                scalar_ret.insert(func.id, fields);
             }
         }
     }
@@ -292,13 +292,15 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             continue;
         }
         let m = &program.modules[sym.module.0 as usize].name;
-        if m.len() == 2 && m[0] == "std" && m[1] == "mem" {
-            if let Some(idx) = func_map.get(&func.id) {
-                match name {
-                    "alloc" => builtins.alloc = *idx,
-                    "free" => builtins.free = *idx,
-                    _ => {}
-                }
+        if m.len() == 2
+            && m[0] == "std"
+            && m[1] == "mem"
+            && let Some(idx) = func_map.get(&func.id)
+        {
+            match name {
+                "alloc" => builtins.alloc = *idx,
+                "free" => builtins.free = *idx,
+                _ => {}
             }
         }
     }

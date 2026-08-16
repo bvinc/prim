@@ -1,0 +1,1 @@
+ERROR: a `mut` arm binding writes back into the scrutinee; use `match mut` to make the exclusive match explicit

@@ -1,0 +1,1 @@
+ERROR: cannot borrow a payload out of a consumed scrutinee; write `own` to move it out instead

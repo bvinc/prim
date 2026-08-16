@@ -1,14 +1,23 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
     BinaryOp, Block, ConstArg, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
-    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, RefKind,
-    Severity, Span, Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
+    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, Severity, Span,
+    Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
 /// Precedence levels for operators (higher = tighter binding)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Precedence(pub i32);
+
+/// Whether a pattern is being parsed in a `let` binding (owned locals; borrow
+/// bindings are illegal) or a match arm (second-class `read`/`mut` borrow
+/// bindings allowed).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternCtx {
+    Let,
+    Match,
+}
 
 impl Precedence {
     pub const NONE: Precedence = Precedence(0);
@@ -287,22 +296,19 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::Ident(self.ident(span)),
             });
         }
-        // Borrow expressions: `read place` / `mut place`.
-        if let Some(rk) = match self.peek_kind() {
-            Some(TokenKind::Read) => Some(RefKind::Read),
-            Some(TokenKind::Mut) => Some(RefKind::Mut),
-            _ => None,
-        } {
-            let kw = self.advance().span;
-            let place = self.parse_prefix()?;
-            let span = kw.cover(place.span);
-            return Ok(Expr {
-                span,
-                ty: Type::Undetermined,
-                kind: ExprKind::Borrow {
-                    kind: rk,
-                    place: Box::new(place),
-                },
+        // `read place` / `mut place` borrow expressions no longer exist:
+        // references are second-class, so a borrow cannot be a value. The
+        // `read`/`mut` keywords reach an expression only as call-argument
+        // modes (`f(mut x)`), which `parse_argument_list` consumes first.
+        if matches!(self.peek_kind(), Some(TokenKind::Read | TokenKind::Mut)) {
+            let kind = self.peek_kind().expect("peeked above");
+            return Err(ParseError::UnexpectedToken {
+                expected: "an expression (borrows are second-class: `read`/`mut` \
+                           may only mark a parameter, match arm binding, or call \
+                           argument)"
+                    .to_string(),
+                found: kind,
+                span: self.current_span(),
             });
         }
         match self.peek_kind() {
@@ -866,8 +872,10 @@ impl<'a> Parser<'a> {
         Ok((args, modes))
     }
 
-    /// Consume an optional leading `read`/`mut`/`take` mode keyword (on a call
-    /// argument or a parameter name), defaulting to `View`.
+    /// Consume an optional leading `read`/`mut`/`own` mode keyword (on a call
+    /// argument or a parameter name), defaulting to `read`. The mode always
+    /// sits immediately left of the thing it qualifies: the argument
+    /// expression at a call site, the binding name at a declaration.
     fn parse_pass_mode(&mut self) -> PassMode {
         match self.peek_kind() {
             Some(TokenKind::Read) => {
@@ -925,20 +933,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Optional provenance clause: `-> T from param` names the parameter a
-        // returned borrow is derived from.
-        let provenance = if self.consume_optional(TokenKind::From) {
-            let span = self
-                .consume(
-                    TokenKind::Identifier,
-                    "Expected parameter name after `from`",
-                )?
-                .span;
-            Some(self.ident(span))
-        } else {
-            None
-        };
-
         // Validate attributes on function
         if repr_c {
             return Err(ParseError::InvalidAttributeUsage {
@@ -982,7 +976,6 @@ impl<'a> Parser<'a> {
             type_params,
             parameters,
             return_type,
-            provenance,
             body,
             runtime_binding: runtime,
             is_entry,
@@ -1002,11 +995,8 @@ impl<'a> Parser<'a> {
             .span
             .start();
 
-        // Optional view-kind modifier: `struct view Name { ... }`, sitting
-        // between the keyword and the name like `mut` in `let mut x`.
-        let is_view = self.consume_optional(TokenKind::View);
-
-        // Parse struct name
+        // Parse struct name. `struct view Name` is rejected: view types are
+        // gone under the second-class model (`view` is not a valid name).
         let name_span = self
             .consume(TokenKind::Identifier, "Expected struct name")?
             .span;
@@ -1034,7 +1024,6 @@ impl<'a> Parser<'a> {
             fields,
             repr_c,
             is_builtin: false,
-            is_view,
             span: full_span,
         })
     }
@@ -1073,7 +1062,6 @@ impl<'a> Parser<'a> {
             fields: Vec::new(),
             repr_c: false,
             is_builtin: true,
-            is_view: false,
             span: full_span,
         })
     }
@@ -1083,7 +1071,8 @@ impl<'a> Parser<'a> {
             .consume(TokenKind::Enum, "Expected 'enum'")?
             .span
             .start();
-        let is_view = self.consume_optional(TokenKind::View);
+        // `enum view Name` is rejected: view types are gone under the
+        // second-class model (`view` is not a valid name).
         let name_span = self
             .consume(TokenKind::Identifier, "Expected enum name")?
             .span;
@@ -1116,7 +1105,6 @@ impl<'a> Parser<'a> {
             name,
             type_params,
             variants,
-            is_view,
             span,
         })
     }
@@ -1278,17 +1266,6 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let provenance = if self.consume_optional(TokenKind::From) {
-                let span = self
-                    .consume(
-                        TokenKind::Identifier,
-                        "Expected parameter name after `from`",
-                    )?
-                    .span;
-                Some(self.ident(span))
-            } else {
-                None
-            };
             // `@runtime` methods are bodyless declarations terminated by `;`;
             // everything else uses parse_block so trailing expressions are
             // preserved (same as regular function bodies).
@@ -1319,7 +1296,6 @@ impl<'a> Parser<'a> {
                 name: mname,
                 parameters,
                 return_type,
-                provenance,
                 body,
                 runtime,
             });
@@ -1430,44 +1406,19 @@ impl<'a> Parser<'a> {
         Ok(parameters)
     }
 
-    /// Like `parse_parameter_list`, but a leading bare `self` is recognized as
-    /// the method receiver — a parameter typed `Self`. Its presence is what
-    /// makes a function in an `impl`/`trait` a method rather than an
-    /// associated function.
+    /// Like `parse_parameter_list`, but a leading `self` is recognized as the
+    /// method receiver — a parameter typed `Self` (the annotation may be
+    /// omitted). `self` is an ordinary parameter whose name is `self`; its
+    /// presence in the first position is what makes a function in an
+    /// `impl`/`trait` a method rather than an associated function. The
+    /// optional mode keyword sits before the name like any other parameter:
+    /// `mut self`, `read self`, `own self`.
     fn parse_method_params(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut parameters = Vec::new();
         if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
             return Ok(parameters);
         }
 
-        // A receiver is `self` optionally prefixed by a mode (`mut self`).
-        // Detect by looking past an optional leading mode keyword.
-        let self_offset = match self.peek_kind() {
-            Some(TokenKind::Read | TokenKind::Mut | TokenKind::Own) => 1,
-            _ => 0,
-        };
-        let leading_self = matches!(self.peek_kind_at(self_offset), Some(TokenKind::Identifier))
-            && self
-                .tokens
-                .get(self.current + self_offset)
-                .map(|t| t.span.text(self.source))
-                == Some("self");
-        if leading_self {
-            let mode = self.parse_pass_mode(); // consumes the mode keyword if present
-            let span = self.advance().span; // consume `self`
-            parameters.push(Parameter {
-                name: self.ident(span),
-                type_annotation: Type::SelfType,
-                mode,
-            });
-            // `(self)` — no further parameters.
-            if !matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                return Ok(parameters);
-            }
-            self.advance(); // consume ',' after self
-        }
-
-        // First non-self parameter, then the comma-separated rest.
         parameters.push(self.parse_parameter()?);
         while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
             self.advance(); // consume ','
@@ -1477,35 +1428,33 @@ impl<'a> Parser<'a> {
         Ok(parameters)
     }
 
+    /// Parse one parameter: `[read|mut|own] name : type`. The mode keyword
+    /// sits left of the name — it qualifies the binding, not the type. A bare
+    /// parameter (`v: T`) reads (the default — reading is the common case
+    /// going in); `mut v: T` borrows exclusively; `own v: T` takes ownership.
+    /// A receiver named `self` may omit the annotation and is typed `Self`.
     fn parse_parameter(&mut self) -> Result<Parameter, ParseError> {
+        let mode = self.parse_pass_mode(); // optional `read`/`mut`/`own`, default read
         let name_span = self
             .consume(TokenKind::Identifier, "Expected parameter name")?
             .span;
         let name = self.ident(name_span);
 
-        self.consume(TokenKind::Colon, "Expected ':' after parameter name")?;
-
-        // An owned parameter is written `x: own T`; the mode is a prefix on the
-        // type. Otherwise the mode comes from the type itself: `read T` / `mut T`
-        // borrow, and a bare `x: T` *reads* (the default — reading is the common
-        // case going in). The borrow is unwrapped here so the rest of the
-        // pipeline keeps seeing `{ mode, inner type }`.
-        let owned = self.consume_optional(TokenKind::Own);
-        let ty = self.parse_type()?;
-        let (mode, type_annotation) = if owned {
-            (PassMode::Own, ty)
+        let type_annotation = if self.consume_optional(TokenKind::Colon) {
+            self.parse_type()?
+        } else if name_span.text(self.source) == "self" {
+            Type::SelfType
         } else {
-            match ty {
-                Type::Ref {
-                    kind: RefKind::Read,
-                    inner,
-                } => (PassMode::Read, *inner),
-                Type::Ref {
-                    kind: RefKind::Mut,
-                    inner,
-                } => (PassMode::Mut, *inner),
-                other => (PassMode::Read, other),
-            }
+            return match self.peek_kind() {
+                Some(kind) => Err(ParseError::UnexpectedToken {
+                    expected: "':' after parameter name".to_string(),
+                    found: kind,
+                    span: self.current_span(),
+                }),
+                None => Err(ParseError::UnexpectedEof {
+                    span: self.current_span(),
+                }),
+            };
         };
 
         Ok(Parameter {
@@ -1520,18 +1469,16 @@ impl<'a> Parser<'a> {
             span: self.current_span(),
         })?;
 
-        // Borrow types: `read T` (shared) / `mut T` (exclusive). `take` is not
-        // a type — it's the move operator at call sites.
-        if let Some(rk) = match kind {
-            TokenKind::Read => Some(RefKind::Read),
-            TokenKind::Mut => Some(RefKind::Mut),
-            _ => None,
-        } {
-            self.advance();
-            let inner = self.parse_type()?;
-            return Ok(Type::Ref {
-                kind: rk,
-                inner: Box::new(inner),
+        // There is no reference type. `read`/`mut` only mark a parameter,
+        // match arm binding, or call argument — never a type.
+        if matches!(kind, TokenKind::Read | TokenKind::Mut) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "a type (references are second-class: `read`/`mut` may \
+                           only mark a parameter, match arm binding, or call \
+                           argument — write `read v: T` / `mut v: T`)"
+                    .to_string(),
+                found: kind,
+                span: self.current_span(),
             });
         }
 
@@ -1696,14 +1643,14 @@ impl<'a> Parser<'a> {
             } else if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
                 // No semicolon and not at the closing brace: two statements
                 // share a line.
-                if let Some(next) = self.peek() {
-                    if self.is_same_line(stmt_end, next.span.start()) {
-                        self.emit(
-                            "statements on the same line should be separated by a semicolon",
-                            next.span,
-                            Severity::Error,
-                        );
-                    }
+                if let Some(next) = self.peek()
+                    && self.is_same_line(stmt_end, next.span.start())
+                {
+                    self.emit(
+                        "statements on the same line should be separated by a semicolon",
+                        next.span,
+                        Severity::Error,
+                    );
                 }
             }
             stmts.push(stmt);
@@ -1846,7 +1793,7 @@ impl<'a> Parser<'a> {
 
         // The binding form is a pattern; `let` accepts only the irrefutable
         // subset (wildcard, binding, tuples thereof), enforced at lower time.
-        let pattern = self.parse_pattern()?;
+        let pattern = self.parse_pattern(PatternCtx::Let)?;
 
         // Optional type annotation
         let type_annotation = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
@@ -2001,6 +1948,10 @@ impl<'a> Parser<'a> {
             .consume(TokenKind::Match, "Expected 'match'")?
             .span
             .start();
+        // Optional scrutinee access mode: `match mut e` borrows the scrutinee
+        // exclusively (arm `mut` bindings write back), `match own e` consumes
+        // it; bare `match e` reads, with `own`-arm bindings consuming.
+        let mode = self.parse_pass_mode();
         // The scrutinee is parsed without struct-literal context for the
         // same reason `if` and `while` do — `{` introduces the arm list.
         let scrutinee = self.without_struct_literals(|p| p.parse_expression(Precedence::NONE))?;
@@ -2021,6 +1972,7 @@ impl<'a> Parser<'a> {
             span: Span::new(match_start, right_brace.span.end()),
             ty: Type::Undetermined,
             kind: ExprKind::Match {
+                mode,
                 scrutinee: Box::new(scrutinee),
                 arms,
             },
@@ -2028,7 +1980,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_match_arm(&mut self) -> Result<crate::MatchArm, ParseError> {
-        let pattern = self.parse_pattern()?;
+        let pattern = self.parse_pattern(PatternCtx::Match)?;
         self.consume(TokenKind::FatArrow, "Expected '=>' after match pattern")?;
         let body = self.parse_expression(Precedence::NONE)?;
         let span = pattern.span().cover(body.span);
@@ -2039,14 +1991,17 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a pattern. Recursive: tuple patterns nest sub-patterns, and
-    /// variant fields nest sub-patterns. Disambiguation:
-    /// - `mut x` / bare `x` → a binding
+    /// Parse a pattern. `ctx` distinguishes `let` (where `mut x` is a mutable
+    /// owned local and borrow bindings are illegal) from match arms (where
+    /// `read x` / `mut x` are second-class borrow bindings). Recursive: tuple
+    /// patterns nest sub-patterns, and variant fields nest sub-patterns.
+    /// Disambiguation:
+    /// - `read x` / `mut x` / `own x` / bare `x` → a binding
     /// - `_` → wildcard
     /// - `(...)` → tuple
     /// - `A.B { ... }` (a dotted path) → enum variant
-    fn parse_pattern(&mut self) -> Result<crate::Pattern, ParseError> {
-        // `take [mut] x` — a binding that moves the value out of the scrutinee.
+    fn parse_pattern(&mut self, ctx: PatternCtx) -> Result<crate::Pattern, ParseError> {
+        // `own [mut] x` — a binding that moves the value out of the scrutinee.
         if matches!(self.peek_kind(), Some(TokenKind::Own)) {
             let take_span = self.advance().span;
             let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
@@ -2054,7 +2009,7 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             let name_span = self
-                .consume(TokenKind::Identifier, "Expected binding name after 'take'")?
+                .consume(TokenKind::Identifier, "Expected binding name after 'own'")?
                 .span;
             let name = self.ident(name_span);
             return Ok(crate::Pattern::Binding {
@@ -2065,7 +2020,34 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // `mut x` — a mutable binding.
+        // `read x` — a read borrow binding in a match arm. A local cannot hold
+        // a borrow, so `let read x` is an error.
+        if matches!(self.peek_kind(), Some(TokenKind::Read)) {
+            if ctx == PatternCtx::Let {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "an owned binding (borrows are second-class: a local \
+                               cannot hold a reference — write `own x` to move, or \
+                               bind a Copy value)"
+                        .to_string(),
+                    found: TokenKind::Read,
+                    span: self.current_span(),
+                });
+            }
+            let read_span = self.advance().span;
+            let name_span = self
+                .consume(TokenKind::Identifier, "Expected binding name after 'read'")?
+                .span;
+            let name = self.ident(name_span);
+            return Ok(crate::Pattern::Binding {
+                name,
+                mutable: false,
+                mode: crate::PassMode::Read,
+                span: read_span.cover(name_span),
+            });
+        }
+
+        // `mut x` — in a match arm, an exclusive borrow binding; in `let`, a
+        // mutable owned local.
         if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
             let mut_span = self.advance().span;
             let name_span = self
@@ -2075,7 +2057,11 @@ impl<'a> Parser<'a> {
             return Ok(crate::Pattern::Binding {
                 name,
                 mutable: true,
-                mode: crate::PassMode::Read,
+                mode: if ctx == PatternCtx::Match {
+                    crate::PassMode::Mut
+                } else {
+                    crate::PassMode::Read
+                },
                 span: mut_span.cover(name_span),
             });
         }
@@ -2085,13 +2071,13 @@ impl<'a> Parser<'a> {
             let open = self.advance().span;
             let mut elems = Vec::new();
             if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-                elems.push(self.parse_pattern()?);
+                elems.push(self.parse_pattern(ctx)?);
                 while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                     self.advance();
                     if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
                         break;
                     }
-                    elems.push(self.parse_pattern()?);
+                    elems.push(self.parse_pattern(ctx)?);
                 }
             }
             let close =
@@ -2142,7 +2128,7 @@ impl<'a> Parser<'a> {
         // A bare name followed by `{` is a struct destructuring pattern.
         if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
             let name = self.ident(first_span);
-            let (fields, close) = self.parse_pattern_fields()?;
+            let (fields, close) = self.parse_pattern_fields(ctx)?;
             return Ok(crate::Pattern::Struct {
                 name,
                 fields,
@@ -2173,14 +2159,14 @@ impl<'a> Parser<'a> {
         let variant_name = segments.pop().expect("variant segment");
         let enum_path = NamePath { segments };
         let (fields, end_span) = if matches!(self.peek_kind(), Some(TokenKind::LeftBrace)) {
-            self.parse_pattern_fields()?
+            self.parse_pattern_fields(ctx)?
         } else if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
             // Tuple variant: `Some(p0, p1, ...)`, desugared to fields `0`, `1`, …
             self.advance(); // consume '('
             let mut fields = Vec::new();
             if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
                 loop {
-                    let elem = self.parse_pattern()?;
+                    let elem = self.parse_pattern(ctx)?;
                     let sym = self.interner.get_or_intern(fields.len().to_string());
                     fields.push(crate::FieldPattern {
                         field: crate::Ident {
@@ -2217,65 +2203,91 @@ impl<'a> Parser<'a> {
     /// the current token). Returns the fields and the closing brace's span.
     fn parse_pattern_fields(
         &mut self,
+        ctx: PatternCtx,
     ) -> Result<(Vec<crate::FieldPattern>, prim_tok::Span), ParseError> {
         self.advance(); // consume '{'
         let mut fields = Vec::new();
         if !matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
-            fields.push(self.parse_field_pattern()?);
+            fields.push(self.parse_field_pattern(ctx)?);
             while matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                 self.advance();
                 if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
                     break;
                 }
-                fields.push(self.parse_field_pattern()?);
+                fields.push(self.parse_field_pattern(ctx)?);
             }
         }
         let close = self.consume(TokenKind::RightBrace, "Expected '}' in pattern")?;
         Ok((fields, close.span))
     }
 
-    fn parse_field_pattern(&mut self) -> Result<crate::FieldPattern, ParseError> {
-        // `take [mut] name` / `mut name` shorthands bind the field to its own
-        // name; `take` additionally moves it out of the scrutinee.
+    fn parse_field_pattern(&mut self, ctx: PatternCtx) -> Result<crate::FieldPattern, ParseError> {
+        // `own [mut] name` / `read name` / `mut name` shorthands bind the field
+        // to its own name; `own` additionally moves it out of the scrutinee,
+        // `read`/`mut` borrow it (match arms only).
         let lead = self.peek().map(|t| t.span);
         let take = matches!(self.peek_kind(), Some(TokenKind::Own));
         if take {
             self.advance();
         }
-        let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
-        if mutable {
-            self.advance();
-        }
-        if take || mutable {
-            let field_span = self
-                .consume(TokenKind::Identifier, "Expected field name in pattern")?
-                .span;
-            let field = self.ident(field_span);
+        let (mode, mutable) = if take {
+            // `own [mut] x` — the `mut` after `own` is the mutable flag.
+            let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+            if mutable {
+                self.advance();
+            }
+            (crate::PassMode::Own, mutable)
+        } else {
+            match self.peek_kind() {
+                Some(TokenKind::Read) => {
+                    if ctx == PatternCtx::Let {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "an owned binding (borrows are second-class: \
+                                       a local cannot hold a reference)"
+                                .to_string(),
+                            found: TokenKind::Read,
+                            span: self.current_span(),
+                        });
+                    }
+                    self.advance();
+                    (crate::PassMode::Read, false)
+                }
+                Some(TokenKind::Mut) => {
+                    self.advance();
+                    if ctx == PatternCtx::Match {
+                        (crate::PassMode::Mut, true)
+                    } else {
+                        // `let Point { mut x } = p` — a mutable owned local.
+                        (crate::PassMode::Read, true)
+                    }
+                }
+                _ => (crate::PassMode::Read, false),
+            }
+        };
+        let field_span = self
+            .consume(TokenKind::Identifier, "Expected field name in pattern")?
+            .span;
+        let field = self.ident(field_span);
+        if take || mutable || mode != crate::PassMode::Read {
+            // A mode-prefixed shorthand binds the field to its own name
+            // (`own x`, `mut x`, `read x` — and `let Point { mut x }`, where
+            // `mut` is the mutable-local flag rather than a borrow).
             let span = lead.unwrap_or(field_span).cover(field_span);
             return Ok(crate::FieldPattern {
                 field,
                 pattern: crate::Pattern::Binding {
                     name: field,
                     mutable,
-                    mode: if take {
-                        crate::PassMode::Own
-                    } else {
-                        crate::PassMode::Read
-                    },
+                    mode,
                     span,
                 },
             });
         }
-        let field_span = self
-            .consume(TokenKind::Identifier, "Expected field name in pattern")?
-            .span;
-        let field = self.ident(field_span);
-        // `name: <pattern>` matches the field against a sub-pattern; bare
-        // `name` is shorthand for `name: name` — a binding of the field's
-        // own name.
+        // No mode prefix: bare `name` is shorthand for `name: name` — a binding
+        // of the field's own name — unless a `:` follows, giving a sub-pattern.
         let pattern = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance();
-            self.parse_pattern()?
+            self.parse_pattern(ctx)?
         } else {
             crate::Pattern::Binding {
                 name: field,
@@ -2394,14 +2406,12 @@ impl<'a> Parser<'a> {
     /// `foo().\nbar()` keeps it. Continuation is decided purely by the last
     /// token of the line, never by how the next line starts.
     fn next_infix_precedence(&self) -> Precedence {
-        if self.current > 0 {
-            if let (Some(prev), Some(next)) = (self.tokens.get(self.current - 1), self.peek()) {
-                if !self.is_same_line(prev.span.end(), next.span.start())
-                    && is_statement_ending(prev.kind)
-                {
-                    return Precedence::NONE;
-                }
-            }
+        if self.current > 0
+            && let (Some(prev), Some(next)) = (self.tokens.get(self.current - 1), self.peek())
+            && !self.is_same_line(prev.span.end(), next.span.start())
+            && is_statement_ending(prev.kind)
+        {
+            return Precedence::NONE;
         }
         match self.peek_kind() {
             Some(kind @ (TokenKind::LeftParen | TokenKind::LeftBracket)) => {

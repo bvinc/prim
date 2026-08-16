@@ -1,0 +1,16 @@
+import std.io.println
+
+struct S { n: i32 }
+
+impl Drop for S {
+    fn drop(mut self) {}
+}
+
+// `Array.get` has the same aliasing hazard as `Vec.get`: for a boxed element
+// the deref-read copies the box pointer, so the returned `Option[S]` would
+// alias the array slot and double-free on drop. Rejected at mono time.
+fn main() {
+    let a: Array[S, 2] = [S { n = 1 }, S { n = 2 }]
+    let o = a.get(0usize)
+    println(o.is_some())
+}

@@ -148,11 +148,11 @@ pub fn parse_float_literal(literal: &str, span: Span) -> Result<(f64, Type), Par
         if (ch == 'e' || ch == 'E') && !saw_exp {
             saw_exp = true;
             idx = i + ch.len_utf8();
-            if let Some((j, sign)) = iter.peek().copied() {
-                if sign == '+' || sign == '-' {
-                    iter.next();
-                    idx = j + sign.len_utf8();
-                }
+            if let Some((j, sign)) = iter.peek().copied()
+                && (sign == '+' || sign == '-')
+            {
+                iter.next();
+                idx = j + sign.len_utf8();
             }
             continue;
         }

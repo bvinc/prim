@@ -14,7 +14,7 @@ import std.option.Option
 
 // A pointer to the array's first element. No-op reinterpret at the wasm level.
 @runtime("prim_rt_array_ptr")
-fn ptr[T, const N: usize](a: read Array[T, N]) -> *mut T;
+fn ptr[T, const N: usize](read a: Array[T, N]) -> *mut T;
 
 impl Array[T, N] {
     // The number of elements (a compile-time constant).
@@ -22,11 +22,13 @@ impl Array[T, N] {
         return N
     }
 
-    // A borrow of element `i`, or `None` if `i` is out of bounds — no panic.
-    // The returned `read T` is tracked against the array (not a raw pointer).
-    fn get(read self, i: usize) -> Option[read T] {
+    // A copy of element `i`, or `None` if `i` is out of bounds — no panic.
+    // Enforced: the element must be copy-able (scalar, pointer, or inline
+    // aggregate) — a boxed element would alias the slot and double-free on
+    // drop, which the compiler rejects at monomorphization.
+    fn get(read self, i: usize) -> Option[T] {
         if i < N {
-            let r = read *add[T](ptr(self), i)
+            let r = *add[T](ptr(self), i)
             return Option.Some(r)
         }
         return Option.None

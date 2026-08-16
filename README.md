@@ -6,13 +6,25 @@ Prim is a programming language that values simplicity, safety, and a useful and 
 
 2. **Green threads via wasm continuations.** The runtime provides lightweight, cooperatively-scheduled green threads built on the WebAssembly stack-switching (typed-continuations) proposal. Each task is a continuation whose stack the engine grows and manages, enabling millions of concurrent tasks without OS thread overhead. (Earlier plans called for Prim-owned, copyable/relocatable stacks like Go; delegating to the engine keeps the runtime far simpler and needs no stack relocator.)
 
-3. **No garbage collection.** Memory is managed through ownership, borrowing, and lifetimes — not a GC. The programmer always knows when memory is freed.
+3. **No garbage collection.** Memory is managed through ownership and
+   compile-time move checking — not a GC. The programmer always knows when
+   memory is freed.
 
-4. **Strong types with a borrow checker.** Ownership and lifetime tracking are enforced at compile time, preventing use-after-free, data races, and dangling references without runtime cost.
+4. **Strong types with a move checker.** Ownership is enforced at compile time
+   (use-after-move, use-after-free, and data races are rejected), with
+   **second-class references** for cross-call access: `read`/`mut`/`own` are
+   parameter modes (`fn len(read v: Vec[T])`, `match mut e { Some(mut v) => ..
+   . }`, `f(own x)`), never types — no reference can be stored, returned, or
+   escape its call.
 
 ### Current Status
 
-The compiler implements basic types, structs, enums, traits with dynamic dispatch, generics, functions, control flow, modules, and type inference. The runtime provides a Prim-written allocator, basic I/O, and a single-task continuation scheduler (cooperative `yield`). Ownership, borrowing, and lifetimes are not yet implemented; multi-task green threads (`spawn`, a runnable queue) are in progress.
+The compiler implements basic types, structs, enums, traits with dynamic
+dispatch, generics, functions, control flow, modules, type inference, and
+compile-time ownership (second-class `read`/`mut`/`own` parameter modes,
+CFG-based move checking, drop elaboration). The runtime provides a Prim-written
+allocator, basic I/O, and a single-task continuation scheduler (cooperative
+`yield`). Multi-task green threads (`spawn`, a runnable queue) are in progress.
 
 Primitive integer types: u8, i8, u16, i16, u32, i32, u64, i64, usize, isize.
 Primitive floating point types: f32, f64.
