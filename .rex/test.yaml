@@ -1,0 +1,27 @@
+# Full pre-merge validation on a tool VM: the same trio the pre-commit hook
+# runs (see .githooks/pre-commit and README.md).
+#
+#   rex run .rex/test.yaml --name prim
+#
+# Runs cargo fmt --check, clippy -D warnings, and the whole workspace test
+# suite. Reuse the persistent VM (--name prim) so init and the build cache
+# are warm. The vm block boots from the baked image prim-toolchain-rust188 if
+# the VM doesn't exist yet (no init needed in a fresh session).
+version: 1
+name: prim-test
+vm:
+  provider: workcell
+  image: prim-toolchain-rust188
+description: |
+  Run the full pre-commit validation suite on a tool VM: cargo fmt --check,
+  clippy --workspace --all-targets --all-features -D warnings, and cargo
+  test --workspace --all-targets. Reuse for any pre-merge / CI-style check.
+execution:
+  timeout: 30m
+  cwd: work
+inputs:
+  - src: .
+    dest: work
+    exclude: ["target/**", ".git/**", ".direnv/**"]
+command:
+  argv: [bash, -lc, "export PATH=\"$HOME/.cargo/bin:$PATH\"; cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace --all-targets"]

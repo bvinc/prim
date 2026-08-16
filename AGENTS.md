@@ -36,3 +36,10 @@ Note: The CLI links with `gcc`; ensure GNU binutils are in `PATH`.
 ## Environment Tips
 - Dev shells: optional Nix via `nix develop` or `direnv allow` (see `flake.nix`, `.envrc`).
 - Toolchain: stable Rust, plus `gcc` for linking.
+- Remote builds: `.rex/` ships task files for a rex tool VM (`.rex/README.md`).
+  `build.yaml`/`test.yaml` boot the named VM from the baked project image
+  `prim-toolchain-rust188` (Rust 1.88 + wasmtime + warm caches pre-installed),
+  so `rex run .rex/build.yaml --name prim` / `.rex/test.yaml` just work in any
+  session of this project — no init step. Only run `.rex/init.yaml` (once, on
+  a bare VM) if that image is missing or you need to rebuild it. The toolchain
+  is pinned by `rust-toolchain.toml` (1.88).
