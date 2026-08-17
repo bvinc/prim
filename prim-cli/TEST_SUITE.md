@@ -1,55 +1,53 @@
 # Prim Language Test Suite
 
-This directory contains the official test programs for the Prim language, along with their expected outputs.
+This directory contains the official test programs for the Prim language, along
+with their expected outputs. The suite is **auto-discovered**: `prim-cli/build.rs`
+scans this directory for every `.prim` file with a sibling `.expected`, and
+generates one `#[test]` per pair (via `include!(.../test_programs_cases.rs)` in
+`prim-cli/tests/test_programs.rs`). Adding a test is just adding the two files —
+no registration.
 
 ## Test File Format
 
 - `.prim` files contain Prim source code
-- `.expected` files contain the expected output when the program runs
-- If a `.expected` file contains `PARSE_ERROR`, the program should fail to parse
-- If a `.expected` file contains `COMPILE_ERROR`, the program should fail to compile
-- If a `.expected` file contains `RUNTIME_ERROR`, the program should compile but fail at runtime
-
-## Current Test Programs
-
-### Basic Functionality
-- `basic_hello.prim` - Simple println with literal
-- `arithmetic.prim` - Basic arithmetic with precedence
-- `type_annotations.prim` - Explicit type annotations
-- `precedence.prim` - Operator precedence (multiplication before addition)
-- `parentheses.prim` - Parentheses override precedence
-- `loop_break.prim` - `loop {}` with `break` exiting to subsequent statements
-
-### Statement Termination
-- `semicolon_termination.prim` - Multiple statements with semicolons
-- `invalid_no_terminator.prim` - Multiple statements without semicolons
-
-### Functions
-- `function_with_params.prim` - User-defined function with parameters and return type
+- `.expected` files contain the expected output when the program runs, or a failure marker:
+  - `PARSE_ERROR` — the program should fail to parse
+  - `COMPILE_ERROR` — the program should fail to compile
+  - `RUNTIME_ERROR` — the program should compile but fail at runtime
+  - `ERROR: <message>` — the program should fail (compile or runtime) with an error containing `<message>`
+- `ignored.txt` lists program stems (one per line) that are compiled but skipped by the runner.
 
 ## Running Tests
 
-To validate the implementation against the specification:
-
 ```bash
-# Run a specific test
-cargo run -- run test_programs/basic_hello.prim
+# Build + run the whole suite (each .prim program is a #[test])
+cargo test -p prim --test test_programs
 
-# Test that it matches expected output
-cargo run -- run test_programs/basic_hello.prim | diff - test_programs/basic_hello.expected
+# All workspace tests
+cargo test --workspace
+
+# Run a specific program manually (staged PRIM_ROOT is handled for you in tests)
+cargo run -p prim -- run test_programs/basic_hello.prim
 ```
 
-## Test Coverage Goals
+The test harness stages `prim-std/src/std` into a temporary `PRIM_ROOT`
+(`prim-cli/tests/common.rs`), so programs can `import std.*` exactly as a
+staged CLI build would.
 
-The test suite should eventually cover:
-- [x] Basic expressions and arithmetic
-- [x] Operator precedence and associativity
-- [x] Variable declarations with and without type annotations
-- [x] Function definitions and calls
-- [x] Statement termination rules
-- [ ] All numeric types (u8, i8, u16, i16, u32, i32, u64, i64, usize, isize, f32, f64)
-- [ ] Type inference
-- [ ] Error conditions (type mismatches, undefined variables, etc.)
-- [ ] Complex nested expressions
-- [ ] Multiple functions calling each other
-- [ ] Edge cases and boundary conditions
+## Coverage
+
+The suite exercises, among others:
+
+- expressions, arithmetic, precedence, and literals
+- `let` bindings and type inference/annotations
+- structs, enums, `match` (read/mut/own arm bindings), tuples, arrays
+- functions, methods, and `read`/`mut`/`own` parameter modes
+- ownership: moves, `Drop`/RAII, borrow-escape/mut-alias/mode-mismatch rejections
+- traits and dynamic dispatch, generics and monomorphization
+- the allocator (basic, reuse, growth, stress, trees)
+- green threads (`spawn`, `yield`, the runtime scheduler)
+- modules and imports (multi-directory programs)
+- error conditions (type mismatches, undefined variables, missing `main`, …)
+
+The `.prim`/`.expected` files themselves are the source of truth for what is
+covered; `KNOWN_ISSUES.md` tracks known gaps.

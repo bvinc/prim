@@ -2,29 +2,41 @@ Prim is a programming language that values simplicity, safety, and a useful and 
 
 ## Design Goals
 
-1. **Simplicity above all.** The language, compiler, and runtime should be as simple as possible. Fewer concepts, fewer special cases, less code.
+1. **A language that is useful for AI.** High assurances, high performance, fast
+   compilation, and **local reasoning**: a function's signature states
+   everything it can read, mutate, or consume, so any piece of code can be
+   understood and verified in isolation, without tracing effects across the
+   program. Memory safety, data-race freedom, and deterministic resource
+   handling are enforced at compile time, so generated code can be trusted
+   without a runtime safety net. No GC pauses and value semantics keep
+   performance predictable. A small, simple compiler compiles quickly, so the
+   AI code-and-verify loop stays tight.
 
-2. **Green threads via wasm continuations.** The runtime provides lightweight, cooperatively-scheduled green threads built on the WebAssembly stack-switching (typed-continuations) proposal. Each task is a continuation whose stack the engine grows and manages, enabling millions of concurrent tasks without OS thread overhead. (Earlier plans called for Prim-owned, copyable/relocatable stacks like Go; delegating to the engine keeps the runtime far simpler and needs no stack relocator.)
-
-3. **No garbage collection.** Memory is managed through ownership and
+2. **No garbage collection.** Memory is managed through ownership and
    compile-time move checking — not a GC. The programmer always knows when
-   memory is freed.
+   memory is freed; there are no pauses and no tracing.
 
-4. **Strong types with a move checker.** Ownership is enforced at compile time
-   (use-after-move, use-after-free, and data races are rejected), with
-   **second-class references** for cross-call access: `read`/`mut`/`own` are
-   parameter modes (`fn len(read v: Vec[T])`, `match mut e { Some(mut v) => ..
-   . }`, `f(own x)`), never types — no reference can be stored, returned, or
-   escape its call.
+3. **Green threads.** Lightweight, cooperatively-scheduled green threads built
+   on the WebAssembly stack-switching (typed-continuations) proposal. Each task
+   is a continuation whose stack the engine grows and manages, enabling
+   millions of concurrent tasks without OS thread overhead.
+
+4. **Strong types with control of aliasing.** Ownership is enforced at compile
+   time (use-after-move, use-after-free, and data races are rejected). Aliasing
+   is controlled by **second-class references**: `read`/`mut`/`own` are binding
+   modes (`fn len(read v: Vec[T])`, `match mut e { Some(mut v) => ... }`,
+   `f(own x)`), never types — no reference can be stored, returned, or escape
+   its call, so shared mutable state exists only where it is explicitly
+   allowed.
 
 ### Current Status
 
 The compiler implements basic types, structs, enums, traits with dynamic
 dispatch, generics, functions, control flow, modules, type inference, and
-compile-time ownership (second-class `read`/`mut`/`own` parameter modes,
+compile-time ownership (second-class `read`/`mut`/`own` binding modes,
 CFG-based move checking, drop elaboration). The runtime provides a Prim-written
-allocator, basic I/O, and a single-task continuation scheduler (cooperative
-`yield`). Multi-task green threads (`spawn`, a runnable queue) are in progress.
+allocator, basic I/O, and cooperative green threads — `spawn`, `yield`, a
+multi-task scheduler, and blocking park/poll — built on wasm continuations.
 
 Primitive integer types: u8, i8, u16, i16, u32, i32, u64, i64, usize, isize.
 Primitive floating point types: f32, f64.
@@ -59,7 +71,7 @@ fn double(x: u32) -> u32 {
 
 ```
 impl Point {
-    fn x(&self) -> f64 {
+    fn x(read self) -> f64 {
         self.x
     }
 }
