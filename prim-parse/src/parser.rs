@@ -669,8 +669,14 @@ impl<'a> Parser<'a> {
                     )?
                     .span;
                 let name = self.ident(name_span);
-                // `(` after the name → method call; otherwise field access.
-                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) {
+                // `(` after the name → method call, but only when glued to the
+                // name (no whitespace, same line): `v.field(x)` is a call,
+                // while `v.field (x)` and a `(` on the next line are a field
+                // access followed by a parenthesized expression — a line can't
+                // be silently absorbed as a call of the previous one. Mirrors
+                // the call-`(` adjacency checks on plain names and explicit
+                // type-argument calls (`f[T](x)`).
+                if matches!(self.peek_kind(), Some(TokenKind::LeftParen)) && self.glued_to_prev() {
                     self.advance(); // consume '('
                     let (args, arg_modes) = self.parse_argument_list()?;
                     let close =

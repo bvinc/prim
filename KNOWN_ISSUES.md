@@ -29,12 +29,6 @@ later feature).
   the file header but enforced nowhere — compare the grow result against
   `top() + topsize()`.
 
-- **Call parens not glued on the dot path.** Commit "require call parens to be
-  glued to the callee" added the `glued_to_prev()` check to the plain-call and
-  turbofish paths but missed the `.method` infix path. `let a = v.field`
-  followed by `(expr)` on the next line is still silently absorbed as
-  `v.field(expr)`.
-
 - **Trait-object coercion of an *owned* value is an untracked borrow.**
   `let g: Trait = s` (`Coerce`) builds a fat pointer `{vtable, data_addr}` that
   aliases `s`'s box. Coercing a *borrow* (a `read`/`mut` parameter or match
