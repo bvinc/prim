@@ -31,9 +31,10 @@ later feature).
 
 - **Trait-object coercion of an *owned* value is an untracked borrow.**
   `let g: Trait = s` (`Coerce`) builds a fat pointer `{vtable, data_addr}` that
-  aliases `s`'s box. Coercing a *borrow* (a `read`/`mut` parameter or match
-  binding) is now rejected (`CoerceOfBorrow` — a second-class borrow cannot
-  outlive the call/arm that holds it), but an **owned** source is still treated
+  aliases `s`'s box. Storing a *borrow* in a trait object (`let g: Trait = x`
+  for a `read`/`mut` parameter or match binding) is now rejected
+  (`CoerceOfBorrow` — a second-class borrow cannot outlive the call/arm that
+  holds it), but an **owned** source is still treated
   as a read: moving `s` away (`consume(own s)`) or letting it drop while `g` is
   live compiles cleanly and leaves `g` dangling — `g.say()` reads the freed
   box. The fix is to treat `Coerce` as a *move* of the source, turning the
@@ -77,7 +78,7 @@ later feature).
   checker. Inside a body a borrow parameter has the plain type `T`; the CFG
   move analysis already rejects storing or returning it, and `ownership.rs`
   adds the second-class guarantees: a borrow is unmovable (`BorrowEscapes` /
-  `MoveOutOfBorrow`), never boxed into a trait object (`CoerceOfBorrow`), never
+  `MoveOutOfBorrow`), never *stored* in a trait object (`CoerceOfBorrow`), never
   `mut`-aliased at a call (`MutAlias`), never `mut`-borrowed through a `read`
   parameter (`MutOfRead`), and call-site modes must match declarations
   (`ModeMismatch`). Match-arm `read`/`mut` bindings are second-class exactly
@@ -100,6 +101,12 @@ later feature).
     consumption unmarked means deriving each argument's effect from the
     *callee's* parameter mode, which the CFG's move detection currently reads
     from the call-site arg-mode — a deeper change deferred here.
+  - **Borrow-to-trait-view coercion** — a `read T` argument may be coerced to a
+    `read Trait` parameter (`T: Trait`): the trait-object view is itself
+    second-class and dies with the call, so it stores nothing. The checker
+    currently rejects *every* coercion of a borrow (`CoerceOfBorrow` fires at
+    argument position too), so this is deferred; storing a borrow in a trait
+    object stays rejected.
   - **Non-Copy element reads — enforced.** `Vec.get`/`Array.get` are
     deref-reads of the slot; a *boxed* element (a `Drop`-implementing, large,
     or recursive struct; any enum) is stored as a pointer in the slot, so the
@@ -170,16 +177,15 @@ later feature).
   active variant's payload is *not* dropped (sound, just leaky), because that
   needs discriminant dispatch — the next follow-up.
 
-- **Drop/RAII — `take` in a `match` ends ownership; some payloads still leak.**
-  Binding a non-`Copy` value in a `match` arm requires `take` (`Some { take r }`,
-  positional `Some(take v)`, or whole-value `take rest`); a plain binding of a
-  non-`Copy` value is a compile error (borrowing one out awaits lifetimes — use
-  `take` to move it, or `_` to ignore it). A `take` binding consumes the
+- **Drop/RAII — `own` in a `match` ends ownership; some payloads still leak.**
+  A `read`/`mut` (or bare) arm binding borrows the payload for the arm body; an
+  `own` binding moves it out of the scrutinee (`Some { own r }`, positional
+  `Some(own v)`, or whole-value `own rest`). An `own` binding consumes the
   scrutinee: the moved-out values are dropped at their arm's end (drop
   elaboration hosts them in the arm's block scope, `hir/drop_elab.rs`) and every
   box the arm did not move out is freed (`emit::emit_consume_cleanup`), including
   nested destructured boxes. A payload an arm *returns* is moved out and not
-  double-freed. Remaining gaps, sound but leaky: an **un-taken needs-drop field**
+  double-freed. Remaining gaps, sound but leaky: an **un-owned needs-drop field**
   in a consuming arm, and the **live payload behind a wildcard arm over an enum**
   (its box is freed but the variant's payload is not dropped — same discriminant-
   dispatch gap as enum recursive drop above). Conditionally-moved resources are a

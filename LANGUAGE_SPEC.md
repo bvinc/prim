@@ -2,7 +2,11 @@
 
 ## Overview
 
-Prim is a statically-typed programming language with a focus on simplicity, safety, and concurrency. It compiles to WebAssembly (wasm32 + WASI), run via wasmtime. Prim uses ownership and borrowing for memory safety (no garbage collection) and provides green threads built on the WebAssembly stack-switching (typed-continuations) proposal, where the engine manages each task's stack.
+Prim is a statically-typed programming language with a focus on simplicity, safety, and concurrency. It compiles to WebAssembly (wasm32 + WASI), run via wasmtime. Prim uses ownership, move semantics, and **second-class references** for memory safety (no garbage collection) and provides green threads built on the WebAssembly stack-switching (typed-continuations) proposal, where the engine manages each task's stack.
+
+The memory model — ownership, moves, `Drop`, and the `read`/`mut`/`own` binding
+modes — is specified in [`MEMORY_MODEL.md`](MEMORY_MODEL.md). This document
+describes the grammar and semantics of the core language.
 
 ## Grammar
 
@@ -56,7 +60,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 ## Lexical Rules
 
 ### Tokens
-- **Keywords**: `fn`, `let`, `loop`, `break`, `if`, `true`, `false`, `mod`, `import`
+- **Keywords**: `fn`, `let`, `loop`, `break`, `if`, `true`, `false`, `mod`, `import`, `struct`, `enum`, `impl`, `trait`, `type`, `match`, `while`, `for`, `in`, `return`, `const`, `read`, `mut`, `own`
 - **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`, `bool`
 - **Operators**: `+`, `-`, `*`, `/`, `=`, `==`, `->`, `(`, `)`, `{`, `}`, `,`, `:`, `;`
 - **Literals**: 
@@ -91,7 +95,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 
 ### Variables
 - Variables must be declared with `let` before use
-- Variables are immutable after declaration
+- Variables are immutable after declaration unless declared `let mut`
 - Type annotations are optional; types are inferred when omitted
 - Variable names must be unique within their scope
 
@@ -196,10 +200,18 @@ The compiler provides clear error messages for:
 
 ## Memory Model
 
-- All variables are currently stack-allocated
-- No garbage collection (by design — this is a permanent decision)
-- Function parameters are passed by value
-- Pointers: `*const T` and `*mut T` with explicit dereference
+Prim has no garbage collection (by design — this is a permanent decision).
+Memory is managed through **ownership** and **compile-time move checking**:
+each value has one owner; assignment and argument passing move (except
+copyable scalar and pointer values, which copy); values are destroyed at
+statically known points via `Drop`. The full model — including moves, copies,
+destructors, representation, and panics — is in
+[`MEMORY_MODEL.md`](MEMORY_MODEL.md). What follows is the ownership and
+reference surface as it appears in the language.
+
+Pointers `*const T` and `*mut T` are raw, unmanaged memory (the trusted core's
+escape hatch), with explicit dereference — they are not the safe reference
+mechanism; `read`/`mut` are.
 
 ### Ownership and Borrowing (second-class references)
 
