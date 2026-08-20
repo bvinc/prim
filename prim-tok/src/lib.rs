@@ -459,7 +459,13 @@ impl<'a> Tokenizer<'a> {
                     continue;
                 }
                 if ch == '_' {
-                    if self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                    // An underscore separates digit groups when the next char
+                    // is a digit of *this* radix. Hex digits include A-F,
+                    // which are alphabetic, so the alphabetic check used for
+                    // decimal literals would misread `0xFFFF_FFF4` as having
+                    // a suffix starting at the underscore. Only a char that is
+                    // not a radix digit starts a type suffix.
+                    if self.peek().is_some_and(|c| !is_digit(c)) {
                         break;
                     }
                     self.advance();

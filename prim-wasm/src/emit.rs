@@ -90,6 +90,12 @@ pub(crate) struct EmitCtx<'a> {
     pub loop_exits: RefCell<Vec<u32>>,
     pub str_sites: &'a [StrSite],
     pub str_counter: Cell<u32>,
+    /// Static bytes of the allocator's out-of-memory message, laid out by
+    /// `lib.rs` next to the string literals. The `Oom` runtime ABI writes
+    /// them straight to stdout/stderr — no String box — so the abort path
+    /// never allocates (the heap may be the thing that failed).
+    pub oom_msg: StrSite,
+    pub oom_sentinel: StrSite,
     /// First codegen invariant violation hit while emitting this function. The
     /// `()`-returning emit helpers record it here (and still emit a placeholder
     /// `unreachable` to keep the partial function well-formed); `emit_user_function`
@@ -116,6 +122,8 @@ pub(crate) fn build_emit_ctx<'a>(
     dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
     vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
     str_sites: &'a [StrSite],
+    oom_msg: StrSite,
+    oom_sentinel: StrSite,
 ) -> EmitCtx<'a> {
     let mut locals = HashMap::new();
     let mut scalarized: HashMap<hir::SymbolId, ScalarLocals> = HashMap::new();
@@ -190,6 +198,8 @@ pub(crate) fn build_emit_ctx<'a>(
         loop_exits: RefCell::new(Vec::new()),
         str_sites,
         str_counter: Cell::new(0),
+        oom_msg,
+        oom_sentinel,
         codegen_error: RefCell::new(None),
     }
 }
@@ -3162,6 +3172,21 @@ fn emit_runtime_call(
         // which reschedules immediately (single-task case) or picks another
         // runnable continuation (future, when a queue exists).
         hir::RuntimeAbi::Trap => {
+            f.instruction(&Instruction::Unreachable);
+        }
+        // oom() — the allocator's allocation-failure abort. Write the message
+        // to stdout and the abort sentinel to stderr from static bytes, then
+        // trap. Must not allocate (the heap is the thing that failed) and must
+        // write the same sentinel `panic` does, so `prim run` reports a
+        // nonzero exit. Static byte offsets come from `lib.rs`.
+        hir::RuntimeAbi::Oom => {
+            for (fd, site) in [(1, ctx.oom_msg), (2, ctx.oom_sentinel)] {
+                f.instruction(&Instruction::I32Const(fd));
+                f.instruction(&Instruction::I32Const(site.ptr as i32));
+                f.instruction(&Instruction::I32Const(site.len as i32));
+                f.instruction(&Instruction::Call(ctx.builtins.write_bytes));
+                f.instruction(&Instruction::Drop);
+            }
             f.instruction(&Instruction::Unreachable);
         }
         hir::RuntimeAbi::Yield => {

@@ -47,6 +47,13 @@ fn push[T](mut v: Vec[T], own value: T) {
         let mut new_cap = 4usize
         if v.cap != 0usize {
             new_cap = v.cap * 2usize
+            if new_cap < v.cap {
+                // The capacity doubled past 2^31 and wrapped to a small
+                // number; realloc would shrink the buffer and the copy that
+                // follows would overrun it. A Vec at 2^31 elements is at the
+                // 32-bit heap's practical limit — abort rather than corrupt.
+                panic("Vec.push: capacity overflow")
+            }
         }
         v.ptr = realloc[T](v.ptr, v.len, new_cap)
         v.cap = new_cap

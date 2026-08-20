@@ -1,0 +1,12 @@
+trusted mod alloc_overflow_aborts
+import std.io.println
+import std.mem.alloc
+
+// A request at or above 2^32 - 11 would wrap request2size's +11 addition and
+// hand back a tiny chunk (corrupting the free lists). alloc rejects it up
+// front: the program aborts with a nonzero exit instead of writing through a
+// wrapped pointer.
+fn main() {
+    let p = alloc(0xFFFF_FFF5usize)
+    println(0i32) // not reached
+}

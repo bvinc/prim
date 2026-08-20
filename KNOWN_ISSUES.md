@@ -6,29 +6,6 @@ later feature).
 
 ## Bugs
 
-- **OOM corrupts low memory instead of trapping.** `alloc` returns null
-  (address 0) when `memory.grow` fails, and no consumer null-checks before
-  storing: `Vec.push` and the four codegen box-allocation sites (struct/string/
-  variant literal, dyn coercion) write through the null pointer into the
-  always-mapped first page — println scratch buffers and string-literal data.
-  The old bump allocator trapped on OOM; this silently corrupts static data and
-  keeps running.
-
-- **Allocation sizes wrap.** `request2size` has no `MAX_REQUEST` guard, so a
-  request near 2^32 wraps to a tiny `nb` (even 0) and `alloc` hands back a
-  16-byte chunk while corrupting the free lists. `alloc_array` compounds it with
-  an unchecked `count * size_of[T]()` multiply, so a large element count silently
-  becomes a small allocation that the caller overruns. Guard both against
-  overflow and return null past the limit.
-
-- **`sys_alloc` assumes it owns `memory.grow`.** It extends the top chunk by the
-  grown bytes without checking that the new pages are contiguous with the old
-  heap end. `std.wasm.memory.grow` is public API, so a user grow inserts pages
-  between the heap and the next allocator grow, and the top chunk silently
-  expands over the user's pages. The single-segment assumption is documented in
-  the file header but enforced nowhere — compare the grow result against
-  `top() + topsize()`.
-
 - **Trait-object coercion of an *owned* value is an untracked borrow.**
   `let g: Trait = s` (`Coerce`) builds a fat pointer `{vtable, data_addr}` that
   aliases `s`'s box. Storing a *borrow* in a trait object (`let g: Trait = x`
@@ -47,10 +24,12 @@ later feature).
   cannot set a nonzero exit code from program code. `panic` works around this by
   writing an abort sentinel to stderr that the runner (`compile_and_run`) turns
   into a nonzero exit — so panics, and everything built on them (`Vec` bounds,
-  `unwrap`), now exit nonzero. But **divide-by-zero and out-of-bounds memory
-  access trap directly, bypassing `panic`, and still exit 0.** Guarding the
-  arithmetic/memory ops to route through `panic` is the fix. Note the sentinel
-  only takes effect through `prim run`; a raw `wasmtime` invocation still exits 0.
+  `unwrap`), now exit nonzero. The allocator's out-of-memory abort
+  (`prim_rt_oom`) writes the same sentinel, so OOM also exits nonzero. But
+  **divide-by-zero and out-of-bounds memory access trap directly, bypassing
+  `panic`, and still exit 0.** Guarding the arithmetic/memory ops to route
+  through `panic` is the fix. Note the sentinel only takes effect through
+  `prim run`; a raw `wasmtime` invocation still exits 0.
 
 ## Deferred design
 

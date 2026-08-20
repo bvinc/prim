@@ -1,0 +1,12 @@
+trusted mod alloc_size_wrap_aborts
+import std.io.println
+import std.mem.alloc
+
+// The largest request alloc will serve (2^32 - 12) still produces a chunk
+// size (2^32 - 8) whose growth math in sys_alloc would wrap: nb + 16 overflows
+// back to a small number. sys_alloc detects that wrap and aborts — the
+// allocator never hands back a chunk from wrapped arithmetic.
+fn main() {
+    let p = alloc(0xFFFF_FFF4usize)
+    println(0i32) // not reached
+}

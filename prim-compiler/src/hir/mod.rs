@@ -219,6 +219,11 @@ pub enum RuntimeAbi {
     SpawnMain,
     /// `trap()` — abort execution (wasm `unreachable`). Backs `panic`.
     Trap,
+    /// `oom()` — abort on allocation failure. Like `panic`, but its message
+    /// and the abort sentinel come from static bytes emitted directly by
+    /// codegen: the heap may be the thing that failed, so the abort path
+    /// must not allocate. Backs the allocator's out-of-memory handling.
+    Oom,
     NullMutU8,
     NullMutU32,
     NullMutUsize,
@@ -324,6 +329,7 @@ impl RuntimeAbi {
             "prim_rt_spawn" => Some(Self::Spawn),
             "prim_rt_spawn_main" => Some(Self::SpawnMain),
             "prim_rt_trap" => Some(Self::Trap),
+            "prim_rt_oom" => Some(Self::Oom),
             "prim_rt_size_of" => Some(Self::SizeOf),
             "prim_rt_null" => Some(Self::Null),
             "prim_rt_ptr_byte_add" => Some(Self::PtrByteAdd),

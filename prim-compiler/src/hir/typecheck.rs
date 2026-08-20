@@ -182,8 +182,8 @@ struct Checker<'a> {
     /// as `StructLit`, and at pattern lowering to look up binding
     /// types.
     enum_variant_fields: HashMap<(crate::hir::EnumId, u32), HashMap<InternSymbol, Type>>,
-    /// Functions whose runtime ABI is `Trap` (they never return); a call to
-    /// one diverges, satisfying a function's return obligation.
+    /// Functions whose runtime ABI is `Trap` or `Oom` (they never return); a
+    /// call to one diverges, satisfying a function's return obligation.
     trap_funcs: std::collections::HashSet<FuncId>,
     /// The `Copy` marker trait's id, resolved once by name. Used to give
     /// `T: Copy` bounds their special semantics (satisfied by `is_copy`,
@@ -1014,7 +1014,10 @@ impl<'a> Checker<'a> {
             if !f.type_params.is_empty() {
                 self.func_type_params.insert(f.id, f.type_params.clone());
             }
-            if matches!(f.runtime, Some(crate::hir::RuntimeAbi::Trap)) {
+            if matches!(
+                f.runtime,
+                Some(crate::hir::RuntimeAbi::Trap | crate::hir::RuntimeAbi::Oom)
+            ) {
                 self.trap_funcs.insert(f.id);
             }
         }
@@ -1134,7 +1137,8 @@ impl<'a> Checker<'a> {
             ExprKind::Match { arms, .. } => {
                 !arms.is_empty() && arms.iter().all(|a| self.expr_always_returns(&a.body))
             }
-            // A call to the `trap` runtime primitive never returns, so it
+            // A call to a diverging runtime primitive (`trap`, `oom`) never
+            // returns, so it
             // diverges (satisfies any return obligation). This lets a generic
             // `never`-style helper be written as `{ ...; trap() }`.
             ExprKind::Call { func, .. } => self.trap_funcs.contains(func),
@@ -3100,7 +3104,10 @@ fn trusted_violation_expr(program: &Program, expr: &Expr) -> Option<(SpanId, Str
                     .and_then(|f| program.symbols.get(f.name.0 as usize))
                     .map(|s| program.interner.resolve(&s.name).to_string())
                     .unwrap_or_else(|| "?".to_string());
-                return Some((expr.span, format!("spawn of trusted-only function `{name}`")));
+                return Some((
+                    expr.span,
+                    format!("spawn of trusted-only function `{name}`"),
+                ));
             }
             None
         }

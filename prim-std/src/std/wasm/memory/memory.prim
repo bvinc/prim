@@ -12,6 +12,12 @@ trusted mod memory
 
 // Grow linear memory by `pages` (each page is 64 KiB).
 // Returns the previous page count, or -1 on failure.
+//
+// Growing memory yourself while the allocator is live is dangerous: a grow
+// inserts pages at the end of linear memory, which may be *between* the
+// allocator's heap and its next grow. The allocator detects that the new
+// pages are no longer contiguous with its heap and aborts the program rather
+// than silently extending its top chunk over your pages.
 @runtime("prim_rt_memory_grow")
 fn grow(pages: usize) -> isize;
 

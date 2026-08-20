@@ -64,7 +64,7 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - **Types**: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`, `f32`, `f64`, `bool`
 - **Operators**: `+`, `-`, `*`, `/`, `=`, `==`, `->`, `(`, `)`, `{`, `}`, `,`, `:`, `;`
 - **Literals**: 
-  - Integer: `42`, `0`, `123u32` 
+  - Integer: `42`, `0`, `123u32` (radix prefixes `0b`/`0o`/`0x` and `_` digit-group separators are supported: `0xFF_FFu16`, `1_000`)
   - Float: `3.14`, `2.0f32`
   - String: `"hello world"`, `"with\nescapes"`
   - Character: `'a'`, `'\n'`, `'\''`
