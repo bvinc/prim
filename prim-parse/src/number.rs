@@ -57,10 +57,11 @@ fn split_literal(literal: &str, mut is_digit: impl FnMut(char) -> bool) -> (&str
             continue;
         }
         if ch == '_' {
-            if iter
-                .peek()
-                .is_some_and(|(_, next)| next.is_ascii_alphabetic())
-            {
+            // Same rule as the lexer: an underscore separates digit groups
+            // when the next char is a digit of this radix, and only starts a
+            // type suffix otherwise. Hex digits include A-F (alphabetic), so
+            // `0xFFFF_FFF4usize` must not split at the underscore.
+            if iter.peek().is_some_and(|(_, next)| !is_digit(*next)) {
                 break;
             }
             idx = i + ch.len_utf8();
@@ -196,6 +197,23 @@ mod tests {
         let span = Span::new(0, 0);
         let (value, ty) = parse_int_literal("0xFFu8", span).unwrap();
         assert_eq!(value, 255);
+        assert_eq!(ty, Type::U8);
+    }
+
+    #[test]
+    fn parse_int_underscore_separated_hex() {
+        // Hex digits include A-F, which are alphabetic: the underscore after a
+        // hex digit must still be a digit-group separator, not a suffix start.
+        let span = Span::new(0, 0);
+        let (value, ty) = parse_int_literal("0xFF_FFu32", span).unwrap();
+        assert_eq!(value, 65535);
+        assert_eq!(ty, Type::U32);
+        let (value, ty) = parse_int_literal("0xFFFF_FFF4usize", span).unwrap();
+        assert_eq!(value, 0xFFFF_FFF4);
+        assert_eq!(ty, Type::Usize);
+        // A suffix still parses when no hex digit follows the underscore.
+        let (value, ty) = parse_int_literal("0xABu8", span).unwrap();
+        assert_eq!(value, 171);
         assert_eq!(ty, Type::U8);
     }
 

@@ -306,8 +306,14 @@ meaning.** The hypotheses are `Shared[T]`, FFI, and the small trusted core
 Destructors run at statically known points — last use, scope end, or the
 owner's destruction — on the normal path. A `panic` aborts the program: it
 prints the message and a sentinel, then traps, and `prim run` turns the sentinel
-into a nonzero exit. There is **no unwinding** and destructors do **not** run on
-the panic path.
+into a nonzero exit. **Allocation failure aborts the same way**: `std.mem.alloc`
+never returns null — a request that cannot be served (memory exhausted, or a
+size that would overflow the 32-bit heap) aborts with an out-of-memory message
+and the same nonzero-exit sentinel. In a no-GC runtime an allocation that
+cannot be served has no recovery path, and returning null would only push a
+null-dereference onto every caller; aborting is the honest, corruption-free
+behavior. There is **no unwinding** and destructors do **not** run on the
+panic path.
 
 Invariants may be broken inside an exclusive `mut` claim, so unwinding to run
 destructors would have to run them over half-updated values. Prim aborts
@@ -351,7 +357,9 @@ read-default parameters and `self` receivers; call-site `mut`/`own` marks;
 bindings with inferred consumption and `match mut` write-back; the move
 dataflow plus the five checker rules (§5); `Drop`/RAII with recursive field
 drops over structs, tuples, and arrays; copyability as structural scalars +
-pointers with monomorphization-enforced copyable element reads; green threads
+pointers with monomorphization-enforced copyable element reads; a dlmalloc
+port in `std.mem` that aborts on OOM instead of returning null (allocation
+failure is fatal, §10) and verifies memory-grow contiguity; green threads
 (`spawn`, cooperative `yield`, a multi-task scheduler with blocking
 park/poll).
 

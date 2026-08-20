@@ -34,6 +34,17 @@ fn ctz(x: usize) -> usize;
 @runtime("prim_rt_clz_u32")
 fn clz(x: usize) -> usize;
 
+// Abort on allocation failure (memory exhausted or a request that would
+// overflow the 32-bit heap). Writes an "out of memory" message and the abort
+// sentinel to stderr, then traps — the same sentinel `std.sys.panic` writes,
+// so `prim run` reports a nonzero exit. Codegen emits the message from static
+// bytes with no allocation, so this is safe to call when the heap itself is
+// the thing that failed. `alloc` never returns null: an allocation that
+// cannot be served aborts here instead of handing back a null pointer that
+// callers would store through (corrupting the always-mapped first page).
+@runtime("prim_rt_oom")
+fn oom();
+
 // ============================================================================
 // dlmalloc-style allocator, written in Prim.
 //
@@ -64,11 +75,14 @@ fn clz(x: usize) -> usize;
 // designated victim (dv) caches the last split remainder, and a top chunk is
 // the wilderness extended from linear memory via memory.grow.
 //
-// Single contiguous segment: in this runtime the allocator is the only thing
-// that grows linear memory (the scheduler uses wasm continuations, not the
-// heap), and memory.grow appends pages, so the heap is one contiguous region
-// that only ever extends. That removes dlmalloc's multi-segment and mmap
-// machinery. Footers and the runtime security checks are likewise omitted.
+// Single contiguous segment: the allocator is normally the only thing that
+// grows linear memory (the scheduler uses wasm continuations, not the heap),
+// and memory.grow appends pages, so the heap is one contiguous region that
+// only ever extends. That removes dlmalloc's multi-segment and mmap machinery.
+// The assumption is *enforced*, not assumed: `sys_alloc` verifies each grow
+// starts exactly where the heap ended and aborts if a user `memory.grow`
+// inserted pages in between, so the top chunk can never expand over foreign
+// memory. Footers and the runtime security checks are likewise omitted.
 // ============================================================================
 
 // Root of the allocator state: the address of malloc_state, or 0 before the
@@ -175,6 +189,14 @@ fn request2size(req: usize) -> usize {
         return 16usize
     }
     return (req + 4usize + 7usize) & !7usize
+}
+
+// Largest byte count `alloc` will serve. request2size(req) = (req + 11) & !7,
+// so a request at or above 2^32 - 11 would wrap the addition and hand back a
+// tiny chunk, corrupting the free lists. `alloc` rejects everything above
+// this before any header arithmetic runs.
+fn max_request() -> usize {
+    return 0xFFFF_FFF4usize
 }
 
 // ---- header status setters ----
@@ -567,6 +589,9 @@ fn init_mstate() {
     // the rest becomes the top chunk.
     let pages = 4usize
     let prev = mem_grow(pages)
+    if prev < 0isize {
+        oom()
+    }
     let base = isize_to_usize(prev) * 65536usize
     GM = base
     mem_fill(from_addr[u8](base), 0u8, 672usize)
@@ -615,14 +640,36 @@ fn alloc_from_top(nb: usize) -> *mut u8 {
 }
 
 // Grow linear memory and extend the (contiguous) top chunk, then serve nb.
+// Never returns null: on memory exhaustion — or if the heap can no longer be
+// extended as one contiguous segment — it aborts (`oom`), because handing
+// back null would have every caller store through address 0 into the
+// always-mapped first page.
 fn sys_alloc(nb: usize) -> *mut u8 {
     let need = nb + 16usize
+    if need < nb {
+        oom() // nb + 16 wrapped: a request near 2^32
+    }
     let have = topsize()
     let deficit = need - have
+    // More than the 32-bit address space can hold: reject before the page
+    // math below could wrap (deficit + 65535 must not overflow).
+    if deficit > 0xFFFF_0000usize {
+        oom()
+    }
     let pages = (deficit + 65535usize) / 65536usize
     let prev = mem_grow(pages)
     if prev < 0isize {
-        return null8()
+        oom() // memory exhausted
+    }
+    // `std.wasm.memory.grow` is public API: a user grow can insert pages
+    // between the old heap end and this grow, silently putting the new pages
+    // somewhere else. Verify the grown pages start exactly where the heap
+    // ended (memory.grow returns the previous page count), so the top chunk
+    // never expands over foreign pages.
+    let new_base = isize_to_usize(prev) * 65536usize
+    let heap_end = addr[u8](byte_add[u8](top(), topsize()))
+    if new_base != heap_end {
+        oom() // the heap lost its single contiguous segment
     }
     let added = pages * 65536usize
     set_segsize(segsize() + added)
@@ -756,9 +803,14 @@ fn tmalloc_large(nb: usize) -> *mut u8 {
 // public API: alloc / free and the typed conveniences
 // ============================================================================
 
-// alloc(n) — a pointer to n freshly allocated bytes (8-byte aligned), or null
-// if memory is exhausted.
+// alloc(n) — a pointer to n freshly allocated bytes (8-byte aligned). Never
+// returns null: memory exhaustion or an oversized request aborts the program
+// (`oom`) instead of handing back a null pointer that callers would store
+// through into the always-mapped first page.
 trusted fn alloc(nbytes: usize) -> *mut u8 {
+    if nbytes > max_request() {
+        oom() // request2size would wrap
+    }
     init_if_needed()
     let nb = request2size(nbytes)
 
@@ -889,7 +941,15 @@ trusted fn dealloc[T](p: *mut T) {
 }
 
 trusted fn alloc_array[T](count: usize) -> *mut T {
-    return alloc_bytes[T](count * size_of[T]())
+    let n = size_of[T]()
+    // `count * n` must not wrap: an element count that large would silently
+    // become a tiny allocation the caller then overruns. (alloc's own
+    // max_request check can't see the multiply — it has already wrapped by
+    // the time the byte count reaches it.)
+    if count != 0usize && n > max_request() / count {
+        oom()
+    }
+    return alloc_bytes[T](count * n)
 }
 
 // Resize a `T` allocation: allocate `new_count` elements, copy the first

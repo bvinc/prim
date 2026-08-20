@@ -1,0 +1,17 @@
+trusted mod alloc_grow_contiguity_aborts
+import std.io.println
+import std.mem.alloc
+import std.mem.free
+import std.wasm.memory.grow
+
+// std.wasm.memory.grow is public API, so a user grow can insert pages between
+// the allocator's heap and its next memory.grow. The allocator must not
+// silently extend its top chunk over those foreign pages: it verifies the
+// grown pages start exactly where the heap ended and aborts on a mismatch.
+// No println before the abort (println itself allocates).
+fn main() {
+    let a = alloc(1000000usize) // forces the allocator to grow memory
+    let prev = grow(1usize)     // user pages inserted after the heap
+    let b = alloc(1000000usize) // next allocator grow is not contiguous -> aborts
+    println(0i32)               // not reached
+}

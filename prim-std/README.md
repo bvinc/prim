@@ -17,4 +17,5 @@ Status:
   `time`, `vec`, `wasm`.
 - The runtime (`std.rt`) provides cooperative green threads — `spawn`, `yield`,
   a multi-task scheduler, and blocking park/poll — built on wasm continuations.
-- `std.mem` is a Prim-written dlmalloc port; `std.fmt` backs `println`/`Debug`.
+- `std.mem` is a Prim-written dlmalloc port (allocation failure aborts — it
+  never returns null); `std.fmt` backs `println`/`Debug`.

@@ -372,6 +372,33 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         per_func_str_range.insert(func.id, str_start..str_sites.len());
     }
 
+    // The allocator's out-of-memory abort (`prim_rt_oom`) needs a static,
+    // allocation-free message: lay its bytes out here (after the user string
+    // literals) so the emission can reference them by offset. No String box is
+    // ever built, so the abort path cannot re-enter the allocator. The
+    // sentinel must stay in sync with ABORT_SENTINEL in prim-cli/src/lib.rs
+    // and the `panic` in prim-std/src/std/sys/sys.prim.
+    let oom_msg = {
+        let bytes = b"out of memory\n";
+        let site = StrSite {
+            ptr: cursor,
+            len: bytes.len() as u32,
+        };
+        static_data.extend_from_slice(bytes);
+        cursor += bytes.len() as u32;
+        site
+    };
+    let oom_sentinel = {
+        let bytes = b"prim-runtime-abort: nonzero exit\n";
+        let site = StrSite {
+            ptr: cursor,
+            len: bytes.len() as u32,
+        };
+        static_data.extend_from_slice(bytes);
+        cursor += bytes.len() as u32;
+        site
+    };
+
     // Trait dispatch: every impl method that may be invoked through a
     // trait fat pointer gets a stable slot in wasm table 0. The vtables
     // (one per (TraitId, StructId) impl) live in static memory and store
@@ -645,6 +672,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 &dyn_call_types,
                 &vtable_addr,
                 str_slice,
+                oom_msg,
+                oom_sentinel,
             );
             codes.function(&emit_user_function(func, &ctx)?);
         }
