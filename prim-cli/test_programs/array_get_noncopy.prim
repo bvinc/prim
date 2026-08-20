@@ -1,4 +1,5 @@
 import std.io.println
+import std.array.get
 
 struct S { n: i32 }
 
@@ -8,9 +9,10 @@ impl Drop for S {
 
 // `Array.get` has the same aliasing hazard as `Vec.get`: for a boxed element
 // the deref-read copies the box pointer, so the returned `Option[S]` would
-// alias the array slot and double-free on drop. Rejected at mono time.
+// alias the array slot and double-free on drop. The `T: Copy` bound rejects
+// `get[S, 2]` at the call site (S has a Drop impl, so it is not Copy).
 fn main() {
     let a: Array[S, 2] = [S { n = 1 }, S { n = 2 }]
-    let o = a.get(0usize)
+    let o = get(a, 0usize)
     println(o.is_some())
 }

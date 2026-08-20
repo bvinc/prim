@@ -1,0 +1,21 @@
+import std.io.println
+
+// A non-generic recursive enum: `Cons` holds a `next: List` directly, so
+// `List` has no finite inline size and a value is a 4-byte box pointer. A
+// `Cons` payload's `next` field is therefore stored in the box as a box
+// pointer, not inline bytes — dropping it must load that pointer, run the
+// linked node's destructor, and free its box (recursively down the list).
+struct Mark { id: i32 }
+impl Drop for Mark { fn drop(mut self) { println(self.id) } }
+
+enum List {
+    Nil,
+    Cons { mark: Mark, next: List },
+}
+
+fn main() {
+    let tail = List.Nil
+    let mid = List.Cons { mark = Mark { id = 2i32 }, next = tail }
+    let head = List.Cons { mark = Mark { id = 1i32 }, next = mid }
+    println(0i32)
+}

@@ -1,3 +1,4 @@
+trusted mod ptr_mut_to_const
 import std.io.println
 import std.mem.alloc
 import std.ptr.byte_add

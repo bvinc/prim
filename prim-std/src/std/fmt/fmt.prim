@@ -1,4 +1,4 @@
-mod fmt
+trusted mod fmt
 
 import std.vec.Vec
 import std.vec.new
@@ -8,7 +8,7 @@ import std.ptr.byte_add
 
 // A sink that accumulates formatted bytes. `Display` implementations write
 // into it; `to_string` / `print` create one, run the impl, then own its
-// bytes. Held by handle (structs are reference types), so writes from nested
+// bytes. `Formatter` is passed as a `mut`/`read` borrow so writes from nested
 // `fmt` calls all land in the same buffer — no intermediate strings.
 struct Formatter {
     buf: Vec[u8],

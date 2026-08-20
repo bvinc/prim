@@ -1,0 +1,11 @@
+// Enums are fixed-size tagged unions (move values), so `impl Copy` on an enum
+// is rejected: a tagged union with payloads is not `Copy`-validated.
+enum E {
+    A(i32),
+    B,
+}
+
+impl Copy for E {}
+
+fn main() {
+}

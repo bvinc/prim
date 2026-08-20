@@ -1,13 +1,24 @@
-mod string
+trusted mod string
 
 import std.vec.Vec
 import std.ptr.null
+import std.mem.free
 
 @repr("C")
 struct String {
     data: *mut u8,
     len: usize,
     cap: usize,
+}
+
+// String owns its buffer: `impl Drop` frees it (RAII). This is exactly why
+// String deliberately has no `impl Copy` — duplicating a String would alias
+// the buffer and double-free. The buffer is null for a default/empty String,
+// and `free` ignores null.
+impl Drop for String {
+    fn drop(mut self) {
+        free(self.data)
+    }
 }
 
 // Build a String from a byte vector. The buffer is handed over as-is (no copy):

@@ -1,6 +1,6 @@
 import std.io.println
 
-// Small POD structs/tuples are stored inline in their container (no sub-box).
+// Aggregates are stored inline in their container (no per-field sub-box).
 // Exercises deep field reads, inline field reassignment, and a non-literal
 // inline field initializer (the byte-copy path).
 struct Inner { a: i32, b: i32 }

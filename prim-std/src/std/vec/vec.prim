@@ -1,15 +1,18 @@
-mod vec
+trusted mod vec
 
 import std.mem.realloc
 import std.mem.dealloc
+import std.mem.size_of
+import std.mem.alloc_array
+import std.mem.copy_bytes
 import std.ptr.null
 import std.ptr.add
 import std.ptr.drop_in_place
 import std.sys.panic
 
-// A growable array. `ptr` points at `cap` slots of T; the first `len` are
-// live. Passed by handle (structs are reference types), so the mutating
-// functions update the caller's vector in place.
+// A growable array. `ptr` points at `cap` slots of T (each an inline value);
+// the first `len` are live. `Vec` is passed as a `mut`/`read` borrow by the
+// mutating functions, so they update the caller's vector in place.
 struct Vec[T] {
     ptr: *mut T,
     len: usize,
@@ -52,13 +55,12 @@ fn push[T](mut v: Vec[T], own value: T) {
     v.len = v.len + 1
 }
 
-// Read element `i` as a copy. Enforced: the element must be copy-able — a
-// scalar, pointer, or inline (small, no-`Drop`) aggregate — because `*p` is a
-// deref-read of the slot; a boxed element would copy the box pointer and
-// alias the slot (double free on drop), which the compiler rejects at
-// monomorphization. Index loops are the v1 replacement for reference-yielding
-// iterators.
-fn get[T](read v: Vec[T], i: usize) -> T {
+// Read element `i` as a copy. The element must be `Copy` (a scalar/pointer, or
+// an `impl Copy` struct): `*p` is a deref-read of the slot, and a non-`Copy`
+// element is stored as a box pointer, so copying it out would alias the slot
+// and double-free on drop. `T: Copy` makes that a plain type error at the call
+// site. Index loops are the v1 replacement for reference-yielding iterators.
+fn get[T: Copy](read v: Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
@@ -69,5 +71,31 @@ fn set[T](mut v: Vec[T], i: usize, own value: T) {
     if i >= v.len {
         panic("Vec.set: index out of bounds")
     }
+    // Drop the displaced element before overwriting its slot, so replacing a
+    // needs-drop element (e.g. Vec[String]) doesn't leak its box. A no-op for
+    // scalar/inline elements with no destructor.
+    drop_in_place[T](add[T](v.ptr, i))
     *add[T](v.ptr, i) = value
+}
+
+// Swap elements `i` and `j` in place, for *every* element type — including
+// `Drop`-implementing ones. Elements are inline values, so exchanging the two
+// slots' `size_of[T]` raw bytes through a one-slot scratch buffer *is* the
+// value swap: no `T` value is ever formed, no destructor runs, and each value
+// still ends up owned by exactly one slot (just the other one).
+fn swap[T](mut v: Vec[T], i: usize, j: usize) {
+    if i >= v.len || j >= v.len {
+        panic("Vec.swap: index out of bounds")
+    }
+    if i == j {
+        return
+    }
+    let pi = add[T](v.ptr, i)
+    let pj = add[T](v.ptr, j)
+    let n = size_of[T]()
+    let scratch = alloc_array[T](1)
+    copy_bytes[T](scratch, pi, n)
+    copy_bytes[T](pi, pj, n)
+    copy_bytes[T](pj, scratch, n)
+    dealloc[T](scratch)
 }

@@ -1,0 +1,27 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+impl Copy for Point {}
+
+// A `T: Copy` bound makes `T` a `Copy` type *inside the body*: `read x` is a
+// copy, so returning it by value duplicates it rather than moving out of the
+// borrow (which would be "borrow cannot escape").
+fn passthrough[T: Copy](read x: T) -> T {
+    return x
+}
+
+// `let b = a` of a `Copy`-bounded value copies too (both locals stay live).
+fn duplicate[T: Copy](read x: T) -> T {
+    let a = x
+    let b = a
+    return b
+}
+
+fn main() {
+    let p = Point { x = 3, y = 4 }
+    let q = passthrough(p)
+    println(q.x + q.y)          // 7
+    println(p.x + p.y)          // 7 (p still live after the copy)
+    println(duplicate(11i32))   // 11
+}

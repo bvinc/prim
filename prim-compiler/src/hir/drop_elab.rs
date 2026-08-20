@@ -19,7 +19,7 @@
 //! CFG drop action and the apply step both read that id, so the three walks
 //! don't have to visit drops in the same order to agree on which is which.
 
-use super::cfg::{self, DropDecision, DropId};
+use super::cfg::{self, CopyCtx, DropDecision, DropId};
 use super::ownership::{MoveError, MoveErrorKind};
 use super::{
     Block, DropInfo, Expr, ExprKind, Function, MatchArm, PassMode, Pattern, Program, SpanId, Stmt,
@@ -61,7 +61,7 @@ fn elaborate_function(
             droppable.insert(p.name, p.span);
         }
     }
-    collect_droppable_bindings(&func.body, info, &mut droppable);
+    collect_droppable_bindings(&program.copy_types, &func.body, info, &mut droppable);
 
     // Phase 1: insert candidate drops everywhere a droppable local leaves scope.
     let params: Vec<(SymbolId, Type, SpanId)> = func
@@ -72,6 +72,7 @@ fn elaborate_function(
         .collect();
     let mut inserter = Insert {
         droppable: &droppable,
+        copy_types: &program.copy_types,
         scopes: Vec::new(),
         fresh: fresh_base,
         next_id: 0,
@@ -82,7 +83,11 @@ fn elaborate_function(
     // droppable locals. The builder is the single definition of "what is a
     // move", shared with the ownership pass.
     let tracked: HashSet<SymbolId> = droppable.keys().copied().collect();
-    let cfg = cfg::build(&func.body, &tracked);
+    let cfg = cfg::build(
+        &func.body,
+        &tracked,
+        &CopyCtx::concrete(&program.copy_types),
+    );
 
     // Phase 3: decide each candidate.
     let decisions = cfg::analyze(&cfg);
@@ -118,6 +123,7 @@ struct Frame {
 
 struct Insert<'a> {
     droppable: &'a HashMap<SymbolId, SpanId>,
+    copy_types: &'a HashSet<super::MethodOwner>,
     scopes: Vec<Frame>,
     fresh: u32,
     /// Counter for the unique id stamped on each emitted `Stmt::Drop`.
@@ -334,7 +340,7 @@ impl Insert<'_> {
                 // binding moves a payload out); `match own`/`match mut` modes
                 // don't change it. Only a consumed scrutinee's bindings are
                 // owned-and-dropped at arm end.
-                let consuming = cfg::match_consumes(arms);
+                let consuming = cfg::match_consumes(self.copy_types, arms);
                 for arm in arms.iter_mut() {
                     self.arm(arm, consuming);
                 }
@@ -568,7 +574,12 @@ fn produces_value(ty: &Type) -> bool {
 
 /// Record every `let`-bound local of a needs-drop type (including those in
 /// nested blocks, `if`/`match` branches, and loop bodies).
-fn collect_droppable_bindings(block: &Block, info: &DropInfo, out: &mut HashMap<SymbolId, SpanId>) {
+fn collect_droppable_bindings(
+    copy_types: &HashSet<super::MethodOwner>,
+    block: &Block,
+    info: &DropInfo,
+    out: &mut HashMap<SymbolId, SpanId>,
+) {
     for stmt in &block.stmts {
         match stmt {
             Stmt::Let { pattern, value, .. } => {
@@ -579,50 +590,55 @@ fn collect_droppable_bindings(block: &Block, info: &DropInfo, out: &mut HashMap<
                         out.insert(sym, span);
                     }
                 }
-                collect_droppable_expr(value, info, out);
+                collect_droppable_expr(copy_types, value, info, out);
             }
             Stmt::Assign { value, .. }
             | Stmt::Return {
                 value: Some(value), ..
-            } => collect_droppable_expr(value, info, out),
+            } => collect_droppable_expr(copy_types, value, info, out),
             Stmt::DerefAssign { ptr, value, .. } => {
-                collect_droppable_expr(ptr, info, out);
-                collect_droppable_expr(value, info, out);
+                collect_droppable_expr(copy_types, ptr, info, out);
+                collect_droppable_expr(copy_types, value, info, out);
             }
             Stmt::FieldAssign { object, value, .. } => {
-                collect_droppable_expr(object, info, out);
-                collect_droppable_expr(value, info, out);
+                collect_droppable_expr(copy_types, object, info, out);
+                collect_droppable_expr(copy_types, value, info, out);
             }
-            Stmt::Expr(e) => collect_droppable_expr(e, info, out),
-            Stmt::Loop { body, .. } => collect_droppable_bindings(body, info, out),
+            Stmt::Expr(e) => collect_droppable_expr(copy_types, e, info, out),
+            Stmt::Loop { body, .. } => collect_droppable_bindings(copy_types, body, info, out),
             Stmt::While {
                 condition, body, ..
             } => {
-                collect_droppable_expr(condition, info, out);
-                collect_droppable_bindings(body, info, out);
+                collect_droppable_expr(copy_types, condition, info, out);
+                collect_droppable_bindings(copy_types, body, info, out);
             }
             Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Drop { .. } => {}
         }
     }
 }
 
-fn collect_droppable_expr(expr: &Expr, info: &DropInfo, out: &mut HashMap<SymbolId, SpanId>) {
+fn collect_droppable_expr(
+    copy_types: &HashSet<super::MethodOwner>,
+    expr: &Expr,
+    info: &DropInfo,
+    out: &mut HashMap<SymbolId, SpanId>,
+) {
     match &expr.kind {
         ExprKind::If {
             then_branch,
             else_branch,
             ..
         } => {
-            collect_droppable_bindings(then_branch, info, out);
+            collect_droppable_bindings(copy_types, then_branch, info, out);
             if let Some(b) = else_branch {
-                collect_droppable_bindings(b, info, out);
+                collect_droppable_bindings(copy_types, b, info, out);
             }
         }
-        ExprKind::Block(b) => collect_droppable_bindings(b, info, out),
+        ExprKind::Block(b) => collect_droppable_bindings(copy_types, b, info, out),
         ExprKind::Match { mode, arms, .. } => {
             // A consumed scrutinee transfers ownership to the arm bindings, so
             // any needs-drop binding is dropped at its arm's end.
-            let consuming = matches!(mode, PassMode::Own) || cfg::match_consumes(arms);
+            let consuming = matches!(mode, PassMode::Own) || cfg::match_consumes(copy_types, arms);
             for arm in arms {
                 if consuming {
                     let mut binds = Vec::new();
@@ -633,7 +649,7 @@ fn collect_droppable_expr(expr: &Expr, info: &DropInfo, out: &mut HashMap<Symbol
                         }
                     }
                 }
-                collect_droppable_expr(&arm.body, info, out);
+                collect_droppable_expr(copy_types, &arm.body, info, out);
             }
         }
         _ => {}

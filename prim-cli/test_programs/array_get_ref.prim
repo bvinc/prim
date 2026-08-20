@@ -1,15 +1,16 @@
 import std.io.println
 import std.option.Option
+import std.array.get
 
 // Array.get returns Option[T] — a copy of the element (copy-able types only,
-// enforced at monomorphization). The Option is extracted by match; reading an
-// out-of-bounds index yields None.
+// enforced by the `T: Copy` bound). The Option is extracted by match; reading
+// an out-of-bounds index yields None.
 fn main() {
     let a: Array[i32, 2] = [11i32, 22i32]
-    let o = a.get(1usize)
+    let o = get(a, 1usize)
     match o {
-        Option.Some(r) => println(r),    // 22 (the borrowed element)
+        Option.Some(r) => println(r),    // 22
         Option.None => println(0i32),
     }
-    println(a.get(9usize).is_none())     // true
+    println(get(a, 9usize).is_none())    // true
 }

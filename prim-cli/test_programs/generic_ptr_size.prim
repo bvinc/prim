@@ -1,3 +1,4 @@
+trusted mod generic_ptr_size
 import std.io.println
 import std.ptr.null
 import std.ptr.add

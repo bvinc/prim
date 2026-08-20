@@ -46,6 +46,8 @@ pub enum TokenKind {
     Mut,
     Read,
     Own,
+    /// `trusted` — a module marker granting raw-pointer powers to a module.
+    Trusted,
     /// The `view` type-kind modifier on a `struct`/`enum` declaration. Distinct
     /// from the `read` access keyword: `view` classifies a type as holding a
     /// borrow, `read` is a shared-borrow mode.
@@ -551,6 +553,7 @@ impl<'a> Tokenizer<'a> {
             "return" => TokenKind::Return,
             "import" => TokenKind::Import,
             "mod" => TokenKind::Mod,
+            "trusted" => TokenKind::Trusted,
             "for" => TokenKind::For,
             "true" => TokenKind::True,
             "false" => TokenKind::False,

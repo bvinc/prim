@@ -1,0 +1,20 @@
+import std.io.println
+
+// Destructuring a nested `Copy` field must bind an independent *copy* of the
+// value, not an alias of the enclosing value's inline bytes. (Before this fix,
+// `let Outer { p } = o` bound the field's address into `o`'s box, so a write
+// through `p` was observable through `o`.)
+struct Point { x: i32, y: i32 }
+impl Copy for Point {}
+struct Outer { p: Point }
+impl Copy for Outer {}
+
+fn main() {
+    let o = Outer { p = Point { x = 1, y = 2 } }
+    let Outer { mut p } = o
+    p.x = 99
+    println(o.p.x)   // 1  (o.p untouched by the write through p)
+    println(o.p.y)   // 2
+    println(p.x)     // 99
+    println(p.y)     // 2
+}

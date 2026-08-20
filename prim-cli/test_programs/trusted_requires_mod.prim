@@ -1,0 +1,9 @@
+// A stray `trusted` not followed by `mod` (or a `trusted fn`) is invalid — it
+// must not silently mark the whole module trusted.
+trusted
+struct S {
+    x: i32,
+}
+
+fn main() {
+}

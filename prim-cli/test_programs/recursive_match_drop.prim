@@ -1,0 +1,22 @@
+import std.io.println
+
+// A consuming match over a *recursive* type: `next` is a boxed field (List has
+// no finite inline size, so its slot holds a 4-byte box pointer). Wildcarding
+// `next` must load that pointer, run the linked node's destructor, and free its
+// box — not run the destructor against the box-pointer slot's address.
+struct Mark { id: i32 }
+impl Drop for Mark { fn drop(mut self) { println(self.id) } }
+
+enum List {
+    Nil,
+    Cons { mark: Mark, next: List },
+}
+
+fn main() {
+    let tail = List.Cons { mark = Mark { id = 2i32 }, next = List.Nil }
+    let head = List.Cons { mark = Mark { id = 1i32 }, next = tail }
+    match head {
+        List.Cons { mark: own x, next: _ } => println(0i32),
+        List.Nil => println(9i32),
+    }
+}

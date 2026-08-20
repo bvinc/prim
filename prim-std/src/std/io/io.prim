@@ -1,4 +1,4 @@
-mod io
+trusted mod io
 
 import std.sys.write_raw
 import std.sys.read_raw

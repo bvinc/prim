@@ -1,0 +1,44 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.get
+import std.vec.swap
+
+// A needs-drop (boxed) element: its Drop prints its id, so the Vec's drop
+// order below reveals which slot each element landed in after the swap — and
+// a double-free would crash or corrupt that output.
+struct Res { id: i32 }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
+
+// 16 bytes, no Drop — stored inline; swapped as its inline bytes. `impl Copy`
+// lets it also be read back via `get` (which requires `T: Copy`).
+struct Inline16 { a: i32, b: i32, c: i32, d: i32 }
+
+impl Copy for Inline16 {}
+
+fn main() {
+    // Scalars (read back via `get`, which copies).
+    let mut s = new[i32]()
+    push(mut s, own 10)
+    push(mut s, own 20)
+    swap(mut s, 0usize, 1usize)
+    println(get(s, 0usize))   // 20
+    println(get(s, 1usize))   // 10
+
+    // Inline struct elements (no Drop): their 16 bytes are exchanged.
+    let mut p = new[Inline16]()
+    push(mut p, own Inline16 { a = 1, b = 2, c = 3, d = 4 })
+    push(mut p, own Inline16 { a = 5, b = 6, c = 7, d = 8 })
+    swap(mut p, 0usize, 1usize)
+    let x = get(p, 0usize)
+    println(x.a + x.b + x.c + x.d)   // 26
+
+    // Drop elements (boxed): swap the box pointers without dropping either.
+    // Drop order at scope end proves the slots were exchanged: 3, 2, 1.
+    let mut r = new[Res]()
+    push(mut r, own Res { id = 1i32 })
+    push(mut r, own Res { id = 2i32 })
+    push(mut r, own Res { id = 3i32 })
+    swap(mut r, 0usize, 2usize)
+    println(0i32)
+}

@@ -1,0 +1,32 @@
+import std.io.println
+
+// `impl Copy` makes `Point` a value type: `let b = a` and `a = b` copy the
+// value, so writing through one name must not be observable through the other.
+// (Before value semantics, both names aliased the same heap box.)
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Copy for Point {}
+
+fn main() {
+    let a = Point { x = 1, y = 2 }
+    let b = a
+    a.x = 99
+    println(b.x)   // 1  (a copy, not an alias of a)
+    println(b.y)   // 2
+    println(a.x)   // 99
+    println(a.y)   // 2
+
+    b.x = 7
+    println(a.x)   // 99 (b is independent of a)
+    println(b.x)   // 7
+
+    let c = Point { x = 10, y = 20 }
+    let mut d = Point { x = 30, y = 40 }
+    d = c
+    c.y = 500
+    println(d.y)   // 20 (d is a copy of c, not an alias)
+    println(c.y)   // 500
+}

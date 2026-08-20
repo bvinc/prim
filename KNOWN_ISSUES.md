@@ -54,6 +54,16 @@ later feature).
 
 ## Deferred design
 
+- **Deref-read of an inline aggregate copies into a transient box that leaks.**
+  A `*p` where `p: *mut T` and `T` is an inline aggregate (now every
+  non-recursive struct/tuple/enum/array) copies the inline bytes into a fresh
+  heap box (the independent copy the memory model requires), and that box is
+  never freed — `drop_T` is only synthesized for `needs_drop` types, and a
+  `Copy`/no-`Drop` aggregate has no destructor to reclaim it. Sound, but a
+  per-read allocation: `Vec.get`/`Array.get` of an inline struct allocates on
+  every call. A follow-up could represent inline-aggregate *values* without a
+  box (full scalarization) or synthesize a free for non-`Drop` aggregate boxes.
+
 - **Debug derive — structs done, enums unblocked, generics pending.** `Debug`
   is auto-derived for non-generic structs whose fields are all `Debug` (a
   derivability fixpoint; non-`Debug`-field structs are skipped). `@dbg` routes
@@ -108,16 +118,12 @@ later feature).
     argument position too), so this is deferred; storing a borrow in a trait
     object stays rejected.
   - **Non-Copy element reads — enforced.** `Vec.get`/`Array.get` are
-    deref-reads of the slot; a *boxed* element (a `Drop`-implementing, large,
-    or recursive struct; any enum) is stored as a pointer in the slot, so the
-    "copy" would alias the slot and double-free on drop. Monomorphization now
-    rejects deref-reads of boxed aggregates (the plan's "bound `get` to
-    `T: Copy`", enforced precisely): scalars/pointers and inline (≤16-byte,
-    no-`Drop`) aggregates are copy-able; boxed ones are rejected with the
-    offending instantiation named at the call site
-    (`vec_get_noncopy`, `array_get_noncopy`, `vec_get_boxed_struct`,
-    `vec_get_inline_struct` tests). `set`/`swap`/`own` moves and match arms
-    remain the access path for non-Copy elements.
+    deref-reads of the slot and are bounded by `T: Copy` at the signature level
+    (`fn get[T: Copy](read v: Vec[T], i: usize) -> T`), so a `Drop`/non-`Copy`
+    element — which would have to be moved out and could double-free — is a
+    clean type error naming the missing `Copy` bound (`vec_get_noncopy`,
+    `array_get_noncopy` tests). `set`/`swap`/`own` moves and match arms remain
+    the access path for non-Copy elements.
   - **`match mut` on Copy scrutinees** is rejected at typecheck (a Copy value
     has no place to mutate). `mut`-binding writes to scalar payloads and scalar
     aggregate fields are copied back into the scrutinee's place at arm end
@@ -167,35 +173,32 @@ later feature).
   (their names are reserved keywords, and being non-generic the stub buys little).
   Bare `type` (aliases / opaque user types) is parsed but rejected.
 
-- **Drop/RAII — recursive field drops cover structs and tuples, not yet enums.**
+- **Drop/RAII — recursive field drops cover structs, tuples, arrays, and enums.**
   Each concrete needs-drop type gets a synthesized `drop_T(ptr)` function
   (`prim-wasm`): it runs `T`'s own `Drop::drop`, recursively calls `drop_F` on
-  each owned struct field / tuple element that needs dropping, then frees `T`'s
-  box. So a composite holding a `Drop` field (even without its own `Drop` impl)
-  now drops that field correctly. Arrays recurse too (each element is dropped).
-  **Enums are not yet recursed:** a needs-drop enum has its own box freed but its
-  active variant's payload is *not* dropped (sound, just leaky), because that
-  needs discriminant dispatch — the next follow-up.
+  each owned struct field / tuple element / array element that needs dropping
+  **in place** (`ptr + offset`, no per-field box), and does *not* free the box —
+  the drop site (`Stmt::Drop`, `drop_in_place`'s caller, match consume-cleanup)
+  reclaims it, so inline nested fields are never freed twice. Enums use
+  discriminant dispatch: the drop reads the tag and drops only the active
+  variant's payload fields in place.
 
-- **Drop/RAII — `own` in a `match` ends ownership; some payloads still leak.**
+- **Drop/RAII — `own` in a `match` ends ownership.**
   A `read`/`mut` (or bare) arm binding borrows the payload for the arm body; an
   `own` binding moves it out of the scrutinee (`Some { own r }`, positional
   `Some(own v)`, or whole-value `own rest`). An `own` binding consumes the
   scrutinee: the moved-out values are dropped at their arm's end (drop
   elaboration hosts them in the arm's block scope, `hir/drop_elab.rs`) and every
-  box the arm did not move out is freed (`emit::emit_consume_cleanup`), including
-  nested destructured boxes. A payload an arm *returns* is moved out and not
-  double-freed. Remaining gaps, sound but leaky: an **un-owned needs-drop field**
-  in a consuming arm, and the **live payload behind a wildcard arm over an enum**
-  (its box is freed but the variant's payload is not dropped — same discriminant-
-  dispatch gap as enum recursive drop above). Conditionally-moved resources are a
-  *compile error*, not a leak (per-CFG dataflow: `Drop` values must be moved on
-  all paths or none).
+  box the arm did not move out is dropped and freed (`emit::emit_consume_cleanup`),
+  including nested destructured boxes and wildcard/omitted needs-drop fields. A
+  payload an arm *returns* is moved out and not double-freed. Conditionally-moved
+  resources are a *compile error*, not a leak (per-CFG dataflow: `Drop` values
+  must be moved on all paths or none).
 
-- **Drop/RAII — `String` still leaks its buffer.** `Vec` now has full RAII: its
-  `Drop` runs each live element's destructor (via `ptr.drop_in_place`) and frees
-  the buffer, so `Vec[Res]`/`Vec[String]`/`Vec[Vec[_]]` no longer leak; `from_vec`
-  hands off ownership (no use-after-free). `String` is the remaining easy twin —
-  it owns a `*mut u8` buffer with no element destructors, so a one-line
-  `impl Drop for String { dealloc(self.data) }` would close its leak (mind the
-  `from_vec` handoff: the `String` owns the buffer the source `Vec` gave up).
+- **Drop/RAII — `Vec` and `String` both have full RAII.** `Vec`'s `Drop` runs
+  each live element's destructor (via `ptr.drop_in_place`) and frees the buffer,
+  so `Vec[Res]`/`Vec[String]`/`Vec[Vec[_]]` no longer leak; `from_vec` hands off
+  ownership (no use-after-free). `String` owns a `*mut u8` buffer and frees it
+  in its `Drop` (`impl Drop for String { free(self.data) }`), with the
+  `from_vec` handoff respected (the `String` owns the buffer the source `Vec`
+  gave up).

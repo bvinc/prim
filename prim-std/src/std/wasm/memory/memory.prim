@@ -1,4 +1,4 @@
-mod memory
+trusted mod memory
 
 // Direct wasm intrinsics. Do not call from normal code — these are the
 // substrate that the allocator and higher-level memory ops build on.

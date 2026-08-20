@@ -1,4 +1,4 @@
-mod sys
+trusted mod sys
 
 // Low-level runtime primitives with no Prim dependencies. Higher-level modules
 // (vec's bounds checks, io's byte streams) build on these without creating

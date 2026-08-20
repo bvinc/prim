@@ -1,0 +1,19 @@
+import std.io.println
+
+// A Drop field moved out of a consumed struct directly in return position.
+// The partial move consumes `o` (its box is abandoned), and `inner` must be
+// boxed out (its inline bytes copied) so the returned value is independent and
+// drops exactly once — never freed as an interior pointer of `o`'s box.
+struct Inner { id: i32 }
+impl Drop for Inner { fn drop(mut self) { println(self.id) } }
+struct Outer { inner: Inner, tag: i32 }
+
+fn take_inner(own o: Outer) -> Inner {
+    return o.inner
+}
+
+fn main() {
+    let o = Outer { inner = Inner { id = 7 }, tag = 9 }
+    let got = take_inner(own o)
+    println(0i32)
+}

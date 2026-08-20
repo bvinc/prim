@@ -1,3 +1,4 @@
+trusted mod dereference_basic
 import std.io.println
 
 fn test_deref(ptr: *const i32) -> i32 {

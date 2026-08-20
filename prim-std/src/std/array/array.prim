@@ -1,4 +1,4 @@
-mod array
+trusted mod array
 
 import std.ptr.add
 import std.option.Option
@@ -21,16 +21,19 @@ impl Array[T, N] {
     fn len(read self) -> usize {
         return N
     }
+}
 
-    // A copy of element `i`, or `None` if `i` is out of bounds — no panic.
-    // Enforced: the element must be copy-able (scalar, pointer, or inline
-    // aggregate) — a boxed element would alias the slot and double-free on
-    // drop, which the compiler rejects at monomorphization.
-    fn get(read self, i: usize) -> Option[T] {
-        if i < N {
-            let r = *add[T](ptr(self), i)
-            return Option.Some(r)
-        }
-        return Option.None
+// A copy of element `i`, or `None` if `i` is out of bounds — no panic.
+// The element must be `Copy` (a scalar/pointer, or an `impl Copy` struct):
+// `*p` is a deref-read of the slot, and a non-`Copy` element is stored as a
+// box pointer, so copying it out would alias the slot and double-free on drop.
+// `T: Copy` makes that a plain type error at the call site. A free function
+// (rather than an inherent method) because a method shares the whole impl's
+// type parameters and cannot carry its own bound on `T`.
+fn get[T: Copy, const N: usize](read a: Array[T, N], i: usize) -> Option[T] {
+    if i < N {
+        let r = *add[T](ptr(a), i)
+        return Option.Some(r)
     }
+    return Option.None
 }

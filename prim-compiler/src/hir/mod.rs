@@ -21,7 +21,7 @@ pub mod drop_elab;
 pub use drop_elab::elaborate as elaborate_drops;
 
 pub mod inline;
-pub use inline::is_inline;
+pub use inline::{InlinePolicy, is_inline, stored_size};
 
 pub mod usefulness;
 
@@ -74,6 +74,10 @@ pub struct Program {
     /// `value.method()` on such a pair is ambiguous and rejected (the bound
     /// disambiguates a generic call, but a concrete one has no bound).
     pub ambiguous_methods: std::collections::HashSet<(MethodOwner, InternSymbol)>,
+    /// Non-generic struct/enum owners with an explicit `impl Copy`. Scalars and
+    /// raw pointers are `Copy` without a declaration; this set holds the opt-in
+    /// compound types, validated (no `Drop` impl, all fields `Copy`).
+    pub copy_types: std::collections::HashSet<MethodOwner>,
     pub symbols: Vec<Symbol>,
     /// Shared with the loader and all parsed files in this compilation.
     /// `Arc` because `ThreadedRodeo` isn't `Clone` (it holds internal state
@@ -154,6 +158,11 @@ pub struct ImplFn {
 pub struct Module {
     pub id: ModuleId,
     pub name: Vec<String>,
+    /// Whether this module is `trusted` (its `mod` header carries `trusted`).
+    /// Trusted modules may use raw-pointer powers: `*p` deref, pointer
+    /// arithmetic, integer↔pointer reinterpretation, and the allocator. Safe
+    /// modules may name/store pointers but not perform those operations.
+    pub trusted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +175,10 @@ pub struct Function {
     pub body: Block,
     pub span: SpanId,
     pub runtime: Option<RuntimeAbi>,
+    /// `trusted fn`: part of the raw core; may only be called from a trusted
+    /// module. Distinct from a module-level `trusted` (which lets a module's
+    /// bodies use raw powers while still exposing safe APIs).
+    pub trusted_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -875,15 +888,25 @@ impl Type {
         }
     }
 
-    /// In-memory size of a value of this type, in bytes. Structs, enums,
-    /// arrays, traits, and pointers are all 4-byte heap addresses; scalars
-    /// use their natural width. Single source of truth shared by struct
-    /// layout, `size_of`, and pointer arithmetic.
+    /// In-memory size of a value of this type, in bytes, when it is carried as
+    /// a single wasm value. Structs, enums, arrays, traits, and pointers are
+    /// all 4-byte heap addresses; scalars use their natural width. This is the
+    /// *default* width, not the storage stride: an inline (small, no-`Drop`)
+    /// struct/tuple occupies more bytes in a container slot — see
+    /// [`inline::InlinePolicy::stored_size`] for the stride `size_of`/`add`/
+    /// `Deref` actually use.
     pub fn size_bytes(&self) -> u32 {
         match self {
             Type::Bool | Type::I8 | Type::U8 => 1,
             Type::I16 | Type::U16 => 2,
             Type::I64 | Type::U64 | Type::F64 | Type::FloatVar => 8,
+            // 4-byte wasm32 values. `Usize`/`Isize`/`F32` are spelled out
+            // explicitly (rather than falling through the catch-all) so a
+            // future 64-bit target is forced to revisit this width instead of
+            // silently keeping 4.
+            Type::U32 | Type::I32 | Type::Usize | Type::Isize | Type::F32 => 4,
+            // Structs, enums, arrays, traits, and pointers are 4-byte heap
+            // addresses; remaining types are 4-byte wasm values.
             _ => 4,
         }
     }

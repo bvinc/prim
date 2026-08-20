@@ -1,0 +1,1 @@
+ERROR: cannot implement `Copy` for `Node`: it is recursive and has no inline size

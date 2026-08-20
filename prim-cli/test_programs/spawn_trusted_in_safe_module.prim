@@ -1,0 +1,11 @@
+import std.rt.spawn
+
+// `spawn(f)` indirectly runs `f` in a new task, so it must respect the same
+// trusted-only boundary as a direct call: a safe module may not spawn a
+// `trusted fn` (doing so would run raw-core code the module may not call).
+trusted fn worker() {
+}
+
+fn main() {
+    spawn(worker)
+}

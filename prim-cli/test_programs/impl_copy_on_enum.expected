@@ -1,0 +1,1 @@
+ERROR: cannot implement `Copy` for `E`: enums are not `Copy` (a fixed-size tagged union is a move value)

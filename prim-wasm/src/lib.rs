@@ -23,12 +23,12 @@ use crate::emit::{
     emit_user_function, flat_scalar_fields, scalar_abi_params,
 };
 use crate::layout::{
-    EnumLayout, InlinePolicy, STATIC_DATA_START, StructLayout, compute_enum_layout,
-    compute_struct_layout,
+    EnumLayout, STATIC_DATA_START, StructLayout, compute_enum_layout, compute_struct_layout,
 };
 use crate::types::{TypeRegistry, hir_type_to_valtype};
 use crate::walks::collect_str_literals_block;
 use prim_compiler::hir;
+use prim_compiler::hir::inline::InlinePolicy;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use wasm_encoder::{
@@ -69,7 +69,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // needs-drop type must own its box, so it is never inlined), so compute that
     // first; the same `DropInfo` backs the synthesized drop functions below.
     let drop_info = hir::DropInfo::new(program);
-    let inline_policy = InlinePolicy::new(program, &drop_info);
+    let inline_policy = InlinePolicy::new(program);
 
     // Compute memory layout for every struct.
     let mut struct_layouts: HashMap<hir::StructId, StructLayout> = HashMap::new();
@@ -224,12 +224,12 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     let mut scalar_ret: HashMap<hir::FuncId, Vec<ScalarField>> = HashMap::new();
     for func in &program.functions {
         if func.type_params.is_empty() && func.runtime.is_none() && !method_fns.contains(&func.id) {
-            let flags = scalar_abi_params(func, program, &inline_policy);
+            let flags = scalar_abi_params(func, program, &inline_policy, &drop_info);
             if flags.iter().any(|&s| s) {
                 scalar_abi.insert(func.id, flags);
             }
             if let Some(ret) = &func.ret
-                && let Some(fields) = flat_scalar_fields(ret, program, &inline_policy)
+                && let Some(fields) = flat_scalar_fields(ret, program, &inline_policy, &drop_info)
             {
                 scalar_ret.insert(func.id, fields);
             }
@@ -251,7 +251,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             let mut params: Vec<ValType> = Vec::with_capacity(func.params.len());
             for (i, p) in func.params.iter().enumerate() {
                 if abi.is_some_and(|v| v[i]) {
-                    let fields = flat_scalar_fields(&p.ty, program, &inline_policy)
+                    let fields = flat_scalar_fields(&p.ty, program, &inline_policy, &drop_info)
                         .expect("scalar-ABI param must be a flat scalar aggregate");
                     params.extend(fields.iter().map(|sf| sf.valtype));
                 } else {
@@ -630,6 +630,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             let ctx = build_emit_ctx(
                 program,
                 &inline_policy,
+                &drop_info,
                 &scalar_abi,
                 &scalar_ret,
                 func,

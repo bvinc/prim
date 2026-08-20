@@ -404,6 +404,11 @@ pub struct Function {
     pub runtime_binding: Option<String>,
     /// `@entry`: this function is the program's wasm entry point (`_start`).
     pub is_entry: bool,
+    /// `trusted fn`: this function is part of the raw core and may only be
+    /// called from a `trusted` module. Unlike `trusted mod` (which permits a
+    /// module's bodies to use raw powers while still exposing safe APIs), a
+    /// `trusted fn` is itself a raw power that safe code may not call.
+    pub trusted: bool,
     pub span: Span,
 }
 
@@ -462,6 +467,10 @@ pub struct Parameter {
 #[derive(Debug, Clone)]
 pub struct Program {
     pub module_name: Option<Ident>,
+    /// Whether this module is `trusted`: its body may use raw-pointer powers
+    /// (`*p`, pointer arithmetic, integer↔pointer reinterpretation, the
+    /// allocator). Safe modules may name/store pointers but not deref/arith.
+    pub trusted: bool,
     pub imports: Vec<ImportDecl>,
     pub structs: Vec<StructDefinition>,
     pub enums: Vec<EnumDefinition>,

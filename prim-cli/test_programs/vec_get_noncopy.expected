@@ -1,1 +1,1 @@
-ERROR: `get[S]` copies a value of type `S` out of a slot, but `S` is stored as a box pointer — the copy would alias the slot and double-free on drop. Deref-reads are only safe for scalar or inline (small, no-`Drop`) element types; for non-Copy elements use `set`/`swap`, `own` moves, or match arms
+ERROR: type S does not implement trait Copy

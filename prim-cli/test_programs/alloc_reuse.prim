@@ -1,3 +1,4 @@
+trusted mod alloc_reuse
 import std.io.println
 import std.mem.alloc
 import std.mem.free

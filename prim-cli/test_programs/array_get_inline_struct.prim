@@ -1,0 +1,26 @@
+import std.io.println
+import std.option.Option
+import std.array.get
+
+// A `Copy` struct element is stored inline in the array's block at inline-size
+// stride, and `get` reads it back through a deref-read that copies the inline
+// bytes — pinning the corrected size_of/add/Deref representation wiring (index
+// 1 would read the wrong bytes if `add` still scaled by 4). `get` requires
+// `T: Copy`, so the element opts in.
+struct Inline8 { a: i32, b: i32 }
+
+impl Copy for Inline8 {}
+
+fn main() {
+    let a: Array[Inline8, 2] = [Inline8 { a = 10, b = 20 }, Inline8 { a = 30, b = 40 }]
+    let o = get(a, 1usize)
+    match o {
+        Option.Some(r) => println(r.a + r.b),   // 70
+        Option.None => println(0i32),
+    }
+    let p = get(a, 0usize)
+    match p {
+        Option.Some(r) => println(r.a + r.b),   // 30
+        Option.None => println(0i32),
+    }
+}

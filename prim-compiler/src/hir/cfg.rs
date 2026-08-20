@@ -19,7 +19,8 @@
 //!     ownership checker uses (with and without back-edges) for use-after-move.
 
 use super::{
-    Block as HirBlock, Expr, ExprKind, MatchArm, PassMode, Pattern, SpanId, Stmt, SymbolId, Type,
+    Block as HirBlock, Expr, ExprKind, MatchArm, MethodOwner, PassMode, Pattern, Program, SpanId,
+    Stmt, SymbolId, TraitId, Type, TypeParam,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -328,12 +329,13 @@ fn predecessors(cfg: &Cfg, include_back_edges: bool) -> Vec<Vec<BlockId>> {
 /// `tracked` locals (the ownership pass tracks every non-`Copy` local; drop
 /// elaboration tracks the droppable ones). Each `Stmt::Drop`, if present,
 /// becomes a `Drop` action carrying the node's own id.
-pub fn build(body: &HirBlock, tracked: &HashSet<SymbolId>) -> Cfg {
+pub fn build(body: &HirBlock, tracked: &HashSet<SymbolId>, copy_ctx: &CopyCtx) -> Cfg {
     let mut b = Builder {
         cfg: Cfg::new(),
         current: 0,
         loop_exits: Vec::new(),
         tracked,
+        copy_ctx,
     };
     b.cfg.add_block(); // entry = block 0
     b.block(body);
@@ -350,6 +352,10 @@ struct Builder<'a> {
     /// Exit block of each enclosing loop (innermost last) — a `break` target.
     loop_exits: Vec<BlockId>,
     tracked: &'a HashSet<SymbolId>,
+    /// Copy-vs-move policy: opt-in `Copy` types, the `Copy` marker trait (for
+    /// bound resolution), and the current function's type parameters (so a
+    /// `T: Copy` parameter copies in a generic body).
+    copy_ctx: &'a CopyCtx<'a>,
 }
 
 impl Builder<'_> {
@@ -470,7 +476,7 @@ impl Builder<'_> {
     /// An expression in move position: a tracked place is moved out; anything
     /// else (a temporary, or a `Copy` value) is just read for its sub-effects.
     fn moved(&mut self, expr: &Expr) {
-        if !is_copy(&expr.ty)
+        if !self.copy_ctx.is_copy(&expr.ty)
             && let Some(root) = root_symbol(expr)
         {
             if self.tracked.contains(&root) {
@@ -510,7 +516,7 @@ impl Builder<'_> {
                 // optional documentation of that consume and `match mut e` /
                 // bare `match e` are read-only unless an arm moves — so the
                 // mode keyword never changes consumption on its own.
-                let consumes = match_consumes(arms);
+                let consumes = self.copy_ctx.match_consumes(arms);
                 if consumes {
                     self.moved(scrutinee);
                 } else {
@@ -605,7 +611,7 @@ impl Builder<'_> {
     fn read_args(&mut self, args: &[Expr], arg_modes: &[PassMode]) {
         for (i, a) in args.iter().enumerate() {
             let mode = arg_modes.get(i).copied().unwrap_or(PassMode::Read);
-            if effect(mode, &a.ty) == Effect::Move {
+            if self.copy_ctx.effect(mode, &a.ty) == Effect::Move {
                 self.moved(a);
             } else {
                 self.read(a);
@@ -616,29 +622,128 @@ impl Builder<'_> {
 
 // === Shared helpers (the single definition reused by both passes) ===
 
-/// Scalars and raw pointers are `Copy`; aggregates and (conservatively) type
-/// parameters are not.
-pub fn is_copy(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::U8
-            | Type::I8
-            | Type::U16
-            | Type::I16
-            | Type::U32
-            | Type::I32
-            | Type::U64
-            | Type::I64
-            | Type::Usize
-            | Type::Isize
-            | Type::F32
-            | Type::F64
-            | Type::Bool
-            | Type::Pointer { .. }
-            | Type::IntVar
-            | Type::FloatVar
-            | Type::Undetermined
-    )
+/// The `Copy` marker trait's id, resolved once by name. `T: Copy` bounds carry
+/// this id; a type parameter is `Copy` exactly when its bound equals it.
+pub fn copy_trait_id(program: &Program) -> Option<TraitId> {
+    program.traits.iter().find_map(|t| {
+        program
+            .symbols
+            .get(t.name.0 as usize)
+            .filter(|s| program.interner.resolve(&s.name) == "Copy")
+            .map(|_| t.id)
+    })
+}
+
+/// Copy-vs-move policy for one function body: the opt-in `impl Copy` set, the
+/// `Copy` marker trait (for resolving `T: Copy` bounds), and the function's own
+/// type parameters (so a `Copy`-bounded `Type::Param` is treated as `Copy`).
+/// `Copy` values are duplicated (mode is a no-op); non-`Copy` values move on
+/// `own` and borrow on `read`/`mut`.
+///
+/// This is `Copy` so it threads through the pre-walk visitors without lifetime
+/// friction; its references point into the program/function being analyzed.
+#[derive(Clone, Copy)]
+pub struct CopyCtx<'a> {
+    copy_types: &'a HashSet<MethodOwner>,
+    copy_trait: Option<TraitId>,
+    type_params: &'a [TypeParam],
+}
+
+impl<'a> CopyCtx<'a> {
+    /// A context for a generic function body: `type_params` resolves the
+    /// function's `T: Copy` bounds during pre-mono analysis.
+    pub fn new(
+        copy_types: &'a HashSet<MethodOwner>,
+        copy_trait: Option<TraitId>,
+        type_params: &'a [TypeParam],
+    ) -> Self {
+        CopyCtx {
+            copy_types,
+            copy_trait,
+            type_params,
+        }
+    }
+
+    /// A context for concrete (post-mono) types: no type parameters remain, so
+    /// `Copy` is decided purely by `copy_types` (and the always-`Copy` scalars).
+    pub fn concrete(copy_types: &'a HashSet<MethodOwner>) -> Self {
+        CopyCtx {
+            copy_types,
+            copy_trait: None,
+            type_params: &[],
+        }
+    }
+
+    /// Whether a value of `ty` is `Copy`. Scalars and raw pointers are `Copy`
+    /// unconditionally; compound types are `Copy` only with an explicit
+    /// `impl Copy`; a `Type::Param` is `Copy` exactly when it carries the
+    /// `T: Copy` bound.
+    pub fn is_copy(&self, ty: &Type) -> bool {
+        if matches!(
+            ty,
+            Type::U8
+                | Type::I8
+                | Type::U16
+                | Type::I16
+                | Type::U32
+                | Type::I32
+                | Type::U64
+                | Type::I64
+                | Type::Usize
+                | Type::Isize
+                | Type::F32
+                | Type::F64
+                | Type::Bool
+                | Type::Pointer { .. }
+                | Type::IntVar
+                | Type::FloatVar
+                | Type::Undetermined
+        ) {
+            return true;
+        }
+        if let Type::Param(id) = ty {
+            return self.copy_trait.is_some_and(|ct| {
+                self.type_params.get(id.0 as usize).and_then(|p| p.bound) == Some(ct)
+            });
+        }
+        match ty {
+            Type::Struct(sid, args) if args.is_empty() => {
+                self.copy_types.contains(&MethodOwner::Struct(*sid))
+            }
+            Type::Enum(eid, args) if args.is_empty() => {
+                self.copy_types.contains(&MethodOwner::Enum(*eid))
+            }
+            _ => false,
+        }
+    }
+
+    /// Classify a moded binding/argument by its effect on the source.
+    pub fn effect(&self, mode: PassMode, ty: &Type) -> Effect {
+        if self.is_copy(ty) {
+            Effect::Copy
+        } else if matches!(mode, PassMode::Own) {
+            Effect::Move
+        } else {
+            Effect::Borrow
+        }
+    }
+
+    /// Whether a `match` over `arms` consumes (moves) its scrutinee.
+    pub fn match_consumes(&self, arms: &[MatchArm]) -> bool {
+        arms.iter().any(|a| self.pattern_moves(&a.pattern))
+    }
+
+    /// Whether a pattern moves at least one value out of the matched value.
+    pub fn pattern_moves(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Binding { ty, mode, .. } => self.effect(*mode, ty) == Effect::Move,
+            Pattern::Tuple { elems, .. } => elems.iter().any(|p| self.pattern_moves(p)),
+            Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
+                fields.iter().any(|f| self.pattern_moves(&f.pattern))
+            }
+            Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
+        }
+    }
 }
 
 /// What a binding (parameter, `let`, or `match` arm) or call argument does to
@@ -655,16 +760,20 @@ pub enum Effect {
     Borrow,
 }
 
-/// Classify a moded binding/argument by its effect on the source. `Copy` types
-/// ignore the mode; otherwise `take` moves and `read`/`mut` borrow.
-pub fn effect(mode: PassMode, ty: &Type) -> Effect {
-    if is_copy(ty) {
-        Effect::Copy
-    } else if matches!(mode, PassMode::Own) {
-        Effect::Move
-    } else {
-        Effect::Borrow
-    }
+// Concrete (post-mono) shims retained for the passes that never see a
+// `Type::Param`: `inline`, `drop_elab`, and `prim-wasm` emission. A bound-aware
+// caller builds a `CopyCtx` directly instead.
+
+/// Scalars and raw pointers are `Copy`; compound types are `Copy` only with an
+/// explicit `impl Copy` declaration. No type parameters are in scope.
+pub fn is_copy(copy_types: &HashSet<MethodOwner>, ty: &Type) -> bool {
+    CopyCtx::concrete(copy_types).is_copy(ty)
+}
+
+/// Classify a moded binding/argument by its effect on the source, with no type
+/// parameters in scope.
+pub fn effect(copy_types: &HashSet<MethodOwner>, mode: PassMode, ty: &Type) -> Effect {
+    CopyCtx::concrete(copy_types).effect(mode, ty)
 }
 
 /// The local a place expression is rooted at (`x`, `x.f`, `x.0`, `*x`); `None`
@@ -679,26 +788,18 @@ pub fn root_symbol(expr: &Expr) -> Option<SymbolId> {
     }
 }
 
-/// Whether a `match` over `arms` consumes (moves) its scrutinee. True when any
-/// arm `take`s a non-`Copy` value out of the payload — that move ends the
-/// scrutinee's ownership, so the match becomes responsible for freeing its box
-/// and dropping the parts no arm took. The single predicate the move analysis,
-/// drop elaboration, and codegen consult.
-pub fn match_consumes(arms: &[MatchArm]) -> bool {
-    arms.iter().any(|a| pattern_moves(&a.pattern))
+/// Whether a `match` over `arms` consumes (moves) its scrutinee, with no type
+/// parameters in scope. The single predicate the move analysis, drop
+/// elaboration, and codegen consult; a bound-aware caller uses
+/// [`CopyCtx::match_consumes`] instead.
+pub fn match_consumes(copy_types: &HashSet<MethodOwner>, arms: &[MatchArm]) -> bool {
+    CopyCtx::concrete(copy_types).match_consumes(arms)
 }
 
-/// Whether a pattern moves at least one value out of the matched value — i.e.
-/// has a binding whose [`effect`] is [`Effect::Move`].
-pub fn pattern_moves(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Binding { ty, mode, .. } => effect(*mode, ty) == Effect::Move,
-        Pattern::Tuple { elems, .. } => elems.iter().any(pattern_moves),
-        Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
-            fields.iter().any(|f| pattern_moves(&f.pattern))
-        }
-        Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => false,
-    }
+/// Whether a pattern moves at least one value out of the matched value, with no
+/// type parameters in scope.
+pub fn pattern_moves(copy_types: &HashSet<MethodOwner>, pattern: &Pattern) -> bool {
+    CopyCtx::concrete(copy_types).pattern_moves(pattern)
 }
 
 /// Collect every `SymbolId` a pattern binds (recursively through tuples and

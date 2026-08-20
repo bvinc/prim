@@ -56,38 +56,59 @@ impl<'a> DropInfo<'a> {
         if let Some(hit) = self.cache.borrow().get(ty) {
             return *hit;
         }
-        // Insert `false` first so a (pointer-free) recursive type can't loop;
-        // value-field recursion is acyclic, but this is belt-and-suspenders.
-        self.cache.borrow_mut().insert(ty.clone(), false);
-        let result = self.compute_needs_drop(ty);
+        let mut visiting: Vec<Type> = Vec::new();
+        let result = self.compute_needs_drop(ty, &mut visiting);
+        // Cache only the *top-level* result. A recursive edge is visited as
+        // `false` (it does not independently require a drop — the enclosing
+        // value's drop already covers it), so caching an intermediate result
+        // computed under that cycle guard would poison later queries with a
+        // wrong answer for mutually-recursive types (e.g. `Node` ↔
+        // `Option[Node]`).
         self.cache.borrow_mut().insert(ty.clone(), result);
         result
     }
 
-    fn compute_needs_drop(&self, ty: &Type) -> bool {
+    fn compute_needs_drop(&self, ty: &Type, visiting: &mut Vec<Type>) -> bool {
+        if let Some(hit) = self.cache.borrow().get(ty) {
+            return *hit;
+        }
         if self.drop_method(ty).is_some() {
             return true;
         }
-        match ty {
+        if visiting.contains(ty) {
+            // Recursive edge back to a type already being computed: it does not
+            // independently require a drop.
+            return false;
+        }
+        visiting.push(ty.clone());
+        let result = match ty {
             Type::Struct(sid, _) => self
                 .program
                 .structs
                 .get(sid.0 as usize)
-                .map(|s| s.fields.iter().any(|f| self.needs_drop(&f.ty)))
+                .map(|s| {
+                    s.fields
+                        .iter()
+                        .any(|f| self.compute_needs_drop(&f.ty, visiting))
+                })
                 .unwrap_or(false),
             Type::Enum(eid, _) => self
                 .program
                 .enums
                 .get(eid.0 as usize)
                 .map(|e| {
-                    e.variants
-                        .iter()
-                        .any(|v| v.fields.iter().any(|f| self.needs_drop(&f.ty)))
+                    e.variants.iter().any(|v| {
+                        v.fields
+                            .iter()
+                            .any(|f| self.compute_needs_drop(&f.ty, visiting))
+                    })
                 })
                 .unwrap_or(false),
-            Type::Tuple(elems) => elems.iter().any(|t| self.needs_drop(t)),
-            Type::Array(elem, _) => self.needs_drop(elem),
+            Type::Tuple(elems) => elems.iter().any(|t| self.compute_needs_drop(t, visiting)),
+            Type::Array(elem, _) => self.compute_needs_drop(elem, visiting),
             _ => false,
-        }
+        };
+        visiting.pop();
+        result
     }
 }

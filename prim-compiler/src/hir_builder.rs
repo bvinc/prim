@@ -87,6 +87,48 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    /// `impl Copy for T { ... }` declared methods — `Copy` is a marker trait.
+    CopyImplHasMethods {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// `impl Copy` on a generic type — not yet supported (needs `T: Copy`
+    /// bounds), so it is rejected rather than silently treated as non-Copy.
+    CopyOnGenericType {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// `impl Copy` on a type that also implements `Drop` — a dropped value owns
+    /// a resource, so duplicating it would double-free.
+    CopyOnDropType {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// `impl Copy` on a type with a non-`Copy` field — duplication would alias
+    /// the field's box.
+    CopyOnNonCopyField {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// `impl Copy` on an enum — enums are fixed-size tagged unions and not
+    /// `Copy`-validated (a move value), so `Copy` is refused.
+    CopyOnEnum {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// `impl Copy` on a recursive (non-inline) type — its value has no finite
+    /// size, so a `Copy` would fall back to a shallow box-pointer copy that
+    /// aliases the recursive field.
+    CopyOnRecursiveType {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -147,6 +189,46 @@ impl std::fmt::Display for LoweringError {
                 write!(f, "refutable pattern not allowed in `let` binding")
             }
             LoweringError::VariantConstruction { message, .. } => write!(f, "{message}"),
+            LoweringError::CopyImplHasMethods { name, .. } => {
+                write!(
+                    f,
+                    "`Copy` is a marker trait: `impl Copy for {name}` cannot declare methods"
+                )
+            }
+            LoweringError::CopyOnGenericType { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement `Copy` for generic type `{name}` yet: \
+                     generic `Copy` needs `T: Copy` bounds"
+                )
+            }
+            LoweringError::CopyOnDropType { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement `Copy` for `{name}`: it implements `Drop`, \
+                     so duplicating it would double-free"
+                )
+            }
+            LoweringError::CopyOnNonCopyField { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement `Copy` for `{name}`: a field is not `Copy`"
+                )
+            }
+            LoweringError::CopyOnEnum { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement `Copy` for `{name}`: enums are not `Copy` \
+                     (a fixed-size tagged union is a move value)"
+                )
+            }
+            LoweringError::CopyOnRecursiveType { name, .. } => {
+                write!(
+                    f,
+                    "cannot implement `Copy` for `{name}`: it is recursive and has no \
+                     inline size, so a copy would alias its fields"
+                )
+            }
         }
     }
 }
@@ -169,7 +251,13 @@ impl LoweringError {
             | LoweringError::InvalidImplTarget { span, .. }
             | LoweringError::NotAssociatedFn { span, .. }
             | LoweringError::RefutablePattern { span, .. }
-            | LoweringError::VariantConstruction { span, .. } => *span,
+            | LoweringError::VariantConstruction { span, .. }
+            | LoweringError::CopyImplHasMethods { span, .. }
+            | LoweringError::CopyOnGenericType { span, .. }
+            | LoweringError::CopyOnDropType { span, .. }
+            | LoweringError::CopyOnNonCopyField { span, .. }
+            | LoweringError::CopyOnEnum { span, .. }
+            | LoweringError::CopyOnRecursiveType { span, .. } => *span,
         }
     }
 
@@ -188,7 +276,13 @@ impl LoweringError {
             | LoweringError::InvalidImplTarget { file, .. }
             | LoweringError::NotAssociatedFn { file, .. }
             | LoweringError::RefutablePattern { file, .. }
-            | LoweringError::VariantConstruction { file, .. } => *file,
+            | LoweringError::VariantConstruction { file, .. }
+            | LoweringError::CopyImplHasMethods { file, .. }
+            | LoweringError::CopyOnGenericType { file, .. }
+            | LoweringError::CopyOnDropType { file, .. }
+            | LoweringError::CopyOnNonCopyField { file, .. }
+            | LoweringError::CopyOnEnum { file, .. }
+            | LoweringError::CopyOnRecursiveType { file, .. } => *file,
         }
     }
 }
@@ -205,6 +299,7 @@ pub fn lower_to_hir(
     let mut ctx = LoweringContext::new(program, module_scopes, source_map);
     ctx.declare_modules_and_items();
     ctx.populate_items();
+    ctx.collect_copy_impls();
     ctx.derive_debug();
     if ctx.errors.is_empty() {
         Ok(ctx.finish())
@@ -318,6 +413,8 @@ struct LoweringContext<'a> {
     /// Owner is the implementing type (struct, enum, or primitive). Vtables
     /// back dynamic dispatch, which is struct-only for now.
     impls: HashMap<(hir::TraitId, hir::MethodOwner), Vec<FuncId>>,
+    /// Non-generic struct/enum owners that declared `impl Copy`.
+    copy_types: std::collections::HashSet<hir::MethodOwner>,
     stdlib_string_struct: Option<StructId>,
     /// The `@builtin type Array[T, const N]` stub's struct id — the nominal home
     /// for array type params and the `impl Array[T, N]` methods.
@@ -367,6 +464,7 @@ impl<'a> LoweringContext<'a> {
             impl_method_fid: HashMap::new(),
             ambiguous_methods: std::collections::HashSet::new(),
             impls: HashMap::new(),
+            copy_types: std::collections::HashSet::new(),
             stdlib_string_struct: None,
             array_builtin_struct: None,
             debug_trait: None,
@@ -386,9 +484,11 @@ impl<'a> LoweringContext<'a> {
         // here.
         for module in &self.program.modules {
             let module_id = module.id;
+            let trusted = module.files.iter().any(|f| f.ast.trusted);
             self.modules.push(Module {
                 id: module_id,
                 name: module.name.clone(),
+                trusted,
             });
 
             for file in &module.files {
@@ -471,6 +571,7 @@ impl<'a> LoweringContext<'a> {
                         },
                         span,
                         runtime,
+                        trusted_only: f.trusted,
                     });
                 }
                 for g in &file.ast.globals {
@@ -610,6 +711,7 @@ impl<'a> LoweringContext<'a> {
                             },
                             span,
                             runtime,
+                            trusted_only: false,
                         });
                         // Each method's FuncId, keyed by its unique declaration
                         // span — survives same-name clashes across traits.
@@ -1182,6 +1284,242 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Collect and validate explicit `impl Copy` declarations.
+    ///
+    /// `Copy` is a marker trait: `impl Copy for T {}` marks a non-generic
+    /// struct as copyable (its values are duplicated on assignment/argument
+    /// passing instead of moved). Scalars and raw pointers are already `Copy`
+    /// without a declaration. Validation rejects a type that also implements
+    /// `Drop` (duplication would double-free) or whose fields are not all
+    /// `Copy`. Enums are rejected for now: a fixed-size tagged union is a move
+    /// value (not `Copy`-validated), so `impl Copy` is refused.
+    fn collect_copy_impls(&mut self) {
+        // Phase A: collect the declared owners (with source spans for later
+        // diagnostics). Collecting first lets a struct whose field is another
+        // `impl Copy` struct validate in any declaration order.
+        let mut declared: Vec<(hir::MethodOwner, FileId, Span)> = Vec::new();
+        for module in &self.program.modules {
+            let module_id = module.id;
+            for file in &module.files {
+                for im in &file.ast.impls {
+                    let Some(t) = &im.trait_name else { continue };
+                    if self.interner.resolve(&t.sym) != "Copy" {
+                        continue;
+                    }
+                    let owner = match self.resolve_target_owner(&im.target, module_id) {
+                        Ok(o) => o,
+                        Err(_) => continue, // already reported during impl lowering
+                    };
+                    let name = self.owner_name(&owner);
+                    if !im.methods.is_empty() {
+                        self.errors.push(LoweringError::CopyImplHasMethods {
+                            name,
+                            file: file.file_id,
+                            span: im.span,
+                        });
+                        continue;
+                    }
+                    if self.owner_is_generic(&owner) {
+                        self.errors.push(LoweringError::CopyOnGenericType {
+                            name,
+                            file: file.file_id,
+                            span: im.span,
+                        });
+                        continue;
+                    }
+                    if matches!(owner, hir::MethodOwner::Enum(_)) {
+                        self.errors.push(LoweringError::CopyOnEnum {
+                            name,
+                            file: file.file_id,
+                            span: im.span,
+                        });
+                        continue;
+                    }
+                    declared.push((owner, file.file_id, im.span));
+                }
+            }
+        }
+
+        let drop_tid = self
+            .traits
+            .iter()
+            .find(|t| self.interner.resolve(&self.symbols[t.name.0 as usize].name) == "Drop")
+            .map(|t| t.id);
+
+        // Phase B: compute the *valid* `Copy` set as a least fixpoint over the
+        // type graph, independent of declaration order. An owner is valid iff
+        // it has no `Drop` impl, is not recursive, and every field is `Copy`
+        // under the set validated so far. Iterating to a fixpoint means an
+        // owner can't observe a field as `Copy` that is later (or transitively)
+        // rejected.
+        let mut valid: std::collections::HashSet<hir::MethodOwner> =
+            std::collections::HashSet::new();
+        loop {
+            let mut changed = false;
+            for &(owner, _, _) in &declared {
+                if valid.contains(&owner) {
+                    continue;
+                }
+                // Structural hard-failures stay out of the fixpoint entirely.
+                if let Some(dt) = drop_tid
+                    && self.impls.contains_key(&(dt, owner))
+                {
+                    continue;
+                }
+                if let hir::MethodOwner::Struct(sid) = owner
+                    && self.struct_is_recursive(sid)
+                {
+                    continue;
+                }
+                if self.owner_fields_copy(&owner, &valid) {
+                    valid.insert(owner);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        // Phase C: one diagnostic per rejected declaration, with the most
+        // specific cause (Drop > recursive > non-Copy field). An owner whose
+        // field is itself a rejected owner reports "non-Copy field" here; the
+        // field's own declaration reports its root cause.
+        for (owner, file, span) in declared {
+            if valid.contains(&owner) {
+                continue;
+            }
+            let name = self.owner_name(&owner);
+            if let Some(dt) = drop_tid
+                && self.impls.contains_key(&(dt, owner))
+            {
+                self.errors
+                    .push(LoweringError::CopyOnDropType { name, file, span });
+            } else if let hir::MethodOwner::Struct(sid) = owner
+                && self.struct_is_recursive(sid)
+            {
+                self.errors
+                    .push(LoweringError::CopyOnRecursiveType { name, file, span });
+            } else {
+                self.errors
+                    .push(LoweringError::CopyOnNonCopyField { name, file, span });
+            }
+        }
+
+        self.copy_types = valid;
+    }
+
+    fn owner_name(&self, owner: &hir::MethodOwner) -> String {
+        match owner {
+            hir::MethodOwner::Struct(sid) => self
+                .interner
+                .resolve(&self.symbols[self.structs[sid.0 as usize].name.0 as usize].name)
+                .to_string(),
+            hir::MethodOwner::Enum(eid) => self
+                .interner
+                .resolve(&self.symbols[self.enums[eid.0 as usize].name.0 as usize].name)
+                .to_string(),
+            _ => String::from("?"),
+        }
+    }
+
+    fn owner_is_generic(&self, owner: &hir::MethodOwner) -> bool {
+        match owner {
+            hir::MethodOwner::Struct(sid) => !self.structs[sid.0 as usize].type_params.is_empty(),
+            hir::MethodOwner::Enum(eid) => !self.enums[eid.0 as usize].type_params.is_empty(),
+            _ => false,
+        }
+    }
+
+    fn owner_fields_copy(
+        &self,
+        owner: &hir::MethodOwner,
+        copy_types: &std::collections::HashSet<hir::MethodOwner>,
+    ) -> bool {
+        match owner {
+            hir::MethodOwner::Struct(sid) => {
+                let s = &self.structs[sid.0 as usize];
+                s.fields
+                    .iter()
+                    .all(|f| Self::type_is_copy(&f.ty, copy_types))
+            }
+            hir::MethodOwner::Enum(eid) => {
+                let e = &self.enums[eid.0 as usize];
+                e.variants.iter().all(|v| {
+                    v.fields
+                        .iter()
+                        .all(|f| Self::type_is_copy(&f.ty, copy_types))
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a (concrete, non-generic) field type is `Copy`: a scalar/raw
+    /// pointer, a struct/enum in the given validated `Copy` set, a `Copy`
+    /// tuple, or unit.
+    fn type_is_copy(
+        ty: &hir::Type,
+        copy_types: &std::collections::HashSet<hir::MethodOwner>,
+    ) -> bool {
+        match ty {
+            hir::Type::U8
+            | hir::Type::I8
+            | hir::Type::U16
+            | hir::Type::I16
+            | hir::Type::U32
+            | hir::Type::I32
+            | hir::Type::U64
+            | hir::Type::I64
+            | hir::Type::Usize
+            | hir::Type::Isize
+            | hir::Type::F32
+            | hir::Type::F64
+            | hir::Type::Bool
+            | hir::Type::Pointer { .. }
+            | hir::Type::Unit => true,
+            hir::Type::Struct(sid, args) if args.is_empty() => {
+                copy_types.contains(&hir::MethodOwner::Struct(*sid))
+            }
+            hir::Type::Enum(eid, args) if args.is_empty() => {
+                copy_types.contains(&hir::MethodOwner::Enum(*eid))
+            }
+            hir::Type::Tuple(elems) => elems.iter().all(|t| Self::type_is_copy(t, copy_types)),
+            _ => false,
+        }
+    }
+
+    /// Whether a (non-generic) struct's value graph is recursive — it contains
+    /// itself through its fields (directly, or transitively through tuples),
+    /// so it has no finite inline size. Such a type must not be `Copy`: its
+    /// `is_copy` predicate and the codegen copy path would treat it as a
+    /// 4-byte box pointer, making `let b = a` alias `a`'s recursive field.
+    fn struct_is_recursive(&self, sid: hir::StructId) -> bool {
+        fn walk(b: &LoweringContext, ty: &hir::Type, path: &mut Vec<u32>) -> bool {
+            match ty {
+                hir::Type::Struct(sid, args) if args.is_empty() => {
+                    if path.contains(&sid.0) {
+                        return true;
+                    }
+                    let Some(s) = b.structs.get(sid.0 as usize) else {
+                        return false;
+                    };
+                    path.push(sid.0);
+                    for field in &s.fields {
+                        if walk(b, &field.ty, path) {
+                            return true;
+                        }
+                    }
+                    path.pop();
+                    false
+                }
+                hir::Type::Tuple(elems) => elems.iter().any(|t| walk(b, t, path)),
+                _ => false,
+            }
+        }
+        walk(self, &hir::Type::Struct(sid, vec![]), &mut Vec::new())
+    }
+
     /// Auto-derive `Debug` for every non-generic struct whose fields are all
     /// themselves `Debug`. Synthesizes a `Debug::fmt` that writes
     /// `Name { field: <debug>, ... }` via the formatter, calling `write_debug`
@@ -1333,6 +1671,7 @@ impl<'a> LoweringContext<'a> {
                 body: hir::Block { stmts, expr: None },
                 span,
                 runtime: None,
+                trusted_only: false,
             });
             self.impls
                 .insert((debug_tid, hir::MethodOwner::Struct(sid)), vec![fid]);
@@ -1350,6 +1689,7 @@ impl<'a> LoweringContext<'a> {
             impl_methods: self.impl_methods,
             impls: self.impls,
             ambiguous_methods: self.ambiguous_methods,
+            copy_types: self.copy_types,
             symbols: self.symbols,
             interner: self.interner,
             main: self.main,

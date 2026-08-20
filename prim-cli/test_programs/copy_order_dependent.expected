@@ -1,0 +1,1 @@
+ERROR: cannot implement `Copy` for `Inner`: a field is not `Copy`

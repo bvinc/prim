@@ -4,12 +4,13 @@
 use crate::WasmError;
 use crate::builtins::Builtins;
 use crate::layout::{
-    CLOCK_SCRATCH, EnumLayout, InlinePolicy, POLL_NEVENTS, StructLayout, compute_struct_layout,
-    compute_tuple_layout, emit_field_load, emit_field_store,
+    CLOCK_SCRATCH, EnumLayout, POLL_NEVENTS, StructLayout, compute_enum_layout,
+    compute_struct_layout, compute_tuple_layout, emit_field_load, emit_field_store,
 };
 use crate::types::{hir_type_to_valtype, is_signed_int, produces_value};
 use crate::walks::{collect_locals, collect_scratch_types_body};
 use prim_compiler::hir;
+use prim_compiler::hir::inline::InlinePolicy;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use wasm_encoder::{BlockType, Function, Instruction, MemArg, ValType};
@@ -37,6 +38,9 @@ pub(crate) struct EmitCtx<'a> {
     pub program: &'a hir::Program,
     /// Which aggregate types are stored inline vs. boxed. Shared with layout.
     pub policy: &'a InlinePolicy<'a>,
+    /// Drop impls, for the scalar-ABI flatness check (a needs-drop type must
+    /// stay a box so its destructor runs).
+    pub info: &'a hir::DropInfo<'a>,
     /// Per-function: which parameters use the by-value scalar ABI (phase 3).
     /// Consulted when emitting call arguments.
     scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
@@ -97,6 +101,7 @@ pub(crate) struct EmitCtx<'a> {
 pub(crate) fn build_emit_ctx<'a>(
     program: &'a hir::Program,
     policy: &'a InlinePolicy<'a>,
+    info: &'a hir::DropInfo<'a>,
     scalar_abi: &'a HashMap<hir::FuncId, Vec<bool>>,
     scalar_ret: &'a HashMap<hir::FuncId, Vec<ScalarField>>,
     func: &hir::Function,
@@ -122,7 +127,7 @@ pub(crate) fn build_emit_ctx<'a>(
     let mut next = 0u32;
     for (i, param) in func.params.iter().enumerate() {
         if abi.is_some_and(|v| v[i]) {
-            let fields = flat_scalar_fields(&param.ty, program, policy)
+            let fields = flat_scalar_fields(&param.ty, program, policy, info)
                 .expect("scalar-ABI param must be a flat scalar aggregate");
             let base = next;
             next += fields.len() as u32;
@@ -136,7 +141,7 @@ pub(crate) fn build_emit_ctx<'a>(
     // Assign body-local slots after the params. A scalarized aggregate expands to
     // one slot per leaf field (recorded in `scalarized`, absent from `locals`);
     // every other local takes a single slot.
-    let scalar_fields = scalarizable_locals(func, program, policy, scalar_abi, scalar_ret);
+    let scalar_fields = scalarizable_locals(func, program, policy, info, scalar_abi, scalar_ret);
     let mut body_local_valtypes: Vec<ValType> = Vec::new();
     for (sym, vt) in collect_locals(&func.body) {
         if let Some(fields) = scalar_fields.get(&sym) {
@@ -178,6 +183,7 @@ pub(crate) fn build_emit_ctx<'a>(
         global_wasm_idx,
         dyn_call_types,
         vtable_addr,
+        info,
         scratch_base,
         scratch_counter: Cell::new(0),
         ctrl_depth: Cell::new(0),
@@ -228,12 +234,20 @@ pub(crate) fn flat_scalar_fields(
     ty: &hir::Type,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
 ) -> Option<Vec<ScalarField>> {
-    if !policy.is_inline(ty) {
+    // A needs-drop value must stay a single owned box so its destructor runs
+    // (and is passed as a pointer); only a non-Drop flat aggregate may be
+    // scalarized into independent wasm values.
+    if !policy.is_inline(ty) || info.needs_drop(ty) {
         return None;
     }
+    // "Flat" means every leaf is a scalar or raw pointer — never a nested
+    // aggregate (even a `Copy` one). A nested aggregate is stored inline as
+    // *bytes*, so it cannot be flattened into a single wasm value here; those
+    // types fall back to the box/place path (Phase 2) instead of scalarization.
     let scalar = |t: &hir::Type| -> Option<ValType> {
-        if hir::cfg::is_copy(t) {
+        if matches!(t, hir::Type::Pointer { .. }) || is_scalar_ty(t) {
             Some(hir_type_to_valtype(t))
         } else {
             None
@@ -287,11 +301,19 @@ fn scalarizable_locals(
     func: &hir::Function,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
     scalar_abi: &HashMap<hir::FuncId, Vec<bool>>,
     scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
 ) -> HashMap<hir::SymbolId, Vec<ScalarField>> {
     let mut candidates: HashMap<hir::SymbolId, Vec<ScalarField>> = HashMap::new();
-    scalar_candidates_block(&func.body, program, policy, scalar_ret, &mut candidates);
+    scalar_candidates_block(
+        &func.body,
+        program,
+        policy,
+        info,
+        scalar_ret,
+        &mut candidates,
+    );
     if candidates.is_empty() {
         return candidates;
     }
@@ -314,6 +336,7 @@ pub(crate) fn scalar_abi_params(
     func: &hir::Function,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
 ) -> Vec<bool> {
     // No scalar-ABI map yet (this computes it); use the unrelaxed walk, where
     // any whole-value argument disqualifies. A parameter therefore qualifies
@@ -326,7 +349,7 @@ pub(crate) fn scalar_abi_params(
         .map(|p| {
             p.mode != hir::PassMode::Mut
                 && !disq.contains(&p.name)
-                && flat_scalar_fields(&p.ty, program, policy).is_some()
+                && flat_scalar_fields(&p.ty, program, policy, info).is_some()
         })
         .collect()
 }
@@ -337,6 +360,7 @@ fn scalar_candidates_block(
     block: &hir::Block,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
     scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
@@ -355,14 +379,14 @@ fn scalar_candidates_block(
                 hir::ExprKind::Call { func, .. } => scalar_ret.contains_key(func),
                 _ => false,
             };
-            if init_ok && let Some(fields) = flat_scalar_fields(ty, program, policy) {
+            if init_ok && let Some(fields) = flat_scalar_fields(ty, program, policy, info) {
                 out.insert(*symbol, fields);
             }
         }
-        scalar_candidates_stmt(stmt, program, policy, scalar_ret, out);
+        scalar_candidates_stmt(stmt, program, policy, info, scalar_ret, out);
     }
     if let Some(e) = &block.expr {
-        scalar_candidates_expr(e, program, policy, scalar_ret, out);
+        scalar_candidates_expr(e, program, policy, info, scalar_ret, out);
     }
 }
 
@@ -370,6 +394,7 @@ fn scalar_candidates_stmt(
     stmt: &hir::Stmt,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
     scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
@@ -379,23 +404,23 @@ fn scalar_candidates_stmt(
         | hir::Stmt::Expr(value)
         | hir::Stmt::Return {
             value: Some(value), ..
-        } => scalar_candidates_expr(value, program, policy, scalar_ret, out),
+        } => scalar_candidates_expr(value, program, policy, info, scalar_ret, out),
         hir::Stmt::DerefAssign { ptr, value, .. } => {
-            scalar_candidates_expr(ptr, program, policy, scalar_ret, out);
-            scalar_candidates_expr(value, program, policy, scalar_ret, out);
+            scalar_candidates_expr(ptr, program, policy, info, scalar_ret, out);
+            scalar_candidates_expr(value, program, policy, info, scalar_ret, out);
         }
         hir::Stmt::FieldAssign { object, value, .. } => {
-            scalar_candidates_expr(object, program, policy, scalar_ret, out);
-            scalar_candidates_expr(value, program, policy, scalar_ret, out);
+            scalar_candidates_expr(object, program, policy, info, scalar_ret, out);
+            scalar_candidates_expr(value, program, policy, info, scalar_ret, out);
         }
         hir::Stmt::Loop { body, .. } => {
-            scalar_candidates_block(body, program, policy, scalar_ret, out)
+            scalar_candidates_block(body, program, policy, info, scalar_ret, out)
         }
         hir::Stmt::While {
             condition, body, ..
         } => {
-            scalar_candidates_expr(condition, program, policy, scalar_ret, out);
-            scalar_candidates_block(body, program, policy, scalar_ret, out);
+            scalar_candidates_expr(condition, program, policy, info, scalar_ret, out);
+            scalar_candidates_block(body, program, policy, info, scalar_ret, out);
         }
         hir::Stmt::Return { value: None, .. }
         | hir::Stmt::Break { .. }
@@ -407,6 +432,7 @@ fn scalar_candidates_expr(
     expr: &hir::Expr,
     program: &hir::Program,
     policy: &InlinePolicy,
+    info: &hir::DropInfo,
     scalar_ret: &HashMap<hir::FuncId, Vec<ScalarField>>,
     out: &mut HashMap<hir::SymbolId, Vec<ScalarField>>,
 ) {
@@ -416,21 +442,23 @@ fn scalar_candidates_expr(
             then_branch,
             else_branch,
         } => {
-            scalar_candidates_expr(condition, program, policy, scalar_ret, out);
-            scalar_candidates_block(then_branch, program, policy, scalar_ret, out);
+            scalar_candidates_expr(condition, program, policy, info, scalar_ret, out);
+            scalar_candidates_block(then_branch, program, policy, info, scalar_ret, out);
             if let Some(b) = else_branch {
-                scalar_candidates_block(b, program, policy, scalar_ret, out);
+                scalar_candidates_block(b, program, policy, info, scalar_ret, out);
             }
         }
-        hir::ExprKind::Block(b) => scalar_candidates_block(b, program, policy, scalar_ret, out),
+        hir::ExprKind::Block(b) => {
+            scalar_candidates_block(b, program, policy, info, scalar_ret, out)
+        }
         hir::ExprKind::Match {
             mode: _,
             scrutinee,
             arms,
         } => {
-            scalar_candidates_expr(scrutinee, program, policy, scalar_ret, out);
+            scalar_candidates_expr(scrutinee, program, policy, info, scalar_ret, out);
             for arm in arms {
-                scalar_candidates_expr(&arm.body, program, policy, scalar_ret, out);
+                scalar_candidates_expr(&arm.body, program, policy, info, scalar_ret, out);
             }
         }
         _ => {}
@@ -696,6 +724,7 @@ pub(crate) fn emit_user_function(
         ctx.scalar_abi,
         ctx.scalar_ret,
         ctx.ret_fields.is_some(),
+        ctx.policy,
         &mut scratch_types,
     );
     // Body locals (scalarized aggregates already expanded to one slot per leaf
@@ -794,14 +823,36 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             if let Some(symbol) = scalar {
                 emit_scalar_let(f, symbol, value, ctx)?;
             } else {
-                emit_expr(f, value, ctx)?;
+                // A simple `let x = <Copy aggregate>` binds a *copy* of the
+                // value (the source stays alive), and a simple `let x = <field>`
+                // of an inline aggregate moves its bytes out into a fresh box —
+                // either way deep-copy rather than alias the source's box.
+                // Destructuring patterns bind scalar fields (already independent
+                // copies) and need no deep copy here.
+                let copy = matches!(pattern, hir::Pattern::Binding { .. })
+                    && needs_value_copy(value, ctx.policy);
+                if copy {
+                    emit_copy_value(f, value, ctx)?;
+                } else {
+                    emit_expr(f, value, ctx)?;
+                }
                 // `let` patterns never bind `mut` (mode `Read`), so the
                 // write-back list stays empty by construction.
-                emit_test_bind(f, Src::Stack, &value.ty, pattern, ctx, &mut Vec::new());
+                emit_test_bind(
+                    f,
+                    Src::Stack,
+                    &value.ty,
+                    pattern,
+                    ctx,
+                    &mut Vec::new(),
+                    true,
+                );
             }
         }
         hir::Stmt::Assign { target, value, .. } => {
-            emit_expr(f, value, ctx)?;
+            // `a = b` for a `Copy` aggregate copies the value; deep-copy its
+            // box so the assignment doesn't alias `b`'s box.
+            emit_copy_value(f, value, ctx)?;
             if let Some(&idx) = ctx.locals.get(target) {
                 f.instruction(&Instruction::LocalSet(idx));
             } else if let Some(g_idx) = global_wasm_index(ctx, *target) {
@@ -815,7 +866,7 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
                 if ctx.ret_fields.is_some() {
                     emit_scalar_value(f, expr, ctx)?;
                 } else {
-                    emit_expr(f, expr, ctx)?;
+                    emit_move_value(f, expr, ctx)?;
                 }
             }
             f.instruction(&Instruction::Return);
@@ -824,13 +875,42 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
             emit_drop(f, *sym, ty, ctx);
         }
         hir::Stmt::DerefAssign { ptr, value, .. } => {
-            emit_expr(f, ptr, ctx)?;
-            emit_expr(f, value, ctx)?;
             let pointee = match &ptr.ty {
                 hir::Type::Pointer { pointee, .. } => (**pointee).clone(),
                 _ => hir::Type::U8,
             };
-            emit_field_store(f, &pointee, 0);
+            emit_expr(f, ptr, ctx)?;
+            emit_expr(f, value, ctx)?;
+            if ctx.policy.is_inline(&pointee) {
+                // Inline pointee: copy the value's bytes into the slot
+                // (dest = slot address, src = value box/place, len = size).
+                let size = ctx.policy.inline_size(&pointee) as i32;
+                if store_orphans_box(value, ctx.policy) {
+                    // `value` is a whole moved box: stash its pointer, copy its
+                    // bytes into the slot, then free the now-orphaned box (the
+                    // move checker consumed `value`, so drop elaboration won't).
+                    let stash = ctx.scratch_base + ctx.scratch_counter.get();
+                    ctx.scratch_counter.set(ctx.scratch_counter.get() + 1);
+                    f.instruction(&Instruction::LocalTee(stash));
+                    f.instruction(&Instruction::I32Const(size));
+                    f.instruction(&Instruction::MemoryCopy {
+                        src_mem: 0,
+                        dst_mem: 0,
+                    });
+                    f.instruction(&Instruction::LocalGet(stash));
+                    f.instruction(&Instruction::Call(ctx.builtins.free));
+                } else {
+                    // `value` is an inline field read: an address into its
+                    // parent box (nothing orphaned), so just copy those bytes.
+                    f.instruction(&Instruction::I32Const(size));
+                    f.instruction(&Instruction::MemoryCopy {
+                        src_mem: 0,
+                        dst_mem: 0,
+                    });
+                }
+            } else {
+                emit_field_store(f, &pointee, 0);
+            }
         }
         hir::Stmt::FieldAssign {
             object,
@@ -856,12 +936,31 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
                         f.instruction(&Instruction::I32Const(offset as i32));
                         f.instruction(&Instruction::I32Add);
                     }
-                    emit_expr(f, value, ctx)?;
-                    f.instruction(&Instruction::I32Const(ctx.policy.inline_size(&ty) as i32));
-                    f.instruction(&Instruction::MemoryCopy {
-                        src_mem: 0,
-                        dst_mem: 0,
-                    });
+                    let size = ctx.policy.inline_size(&ty) as i32;
+                    if store_orphans_box(value, ctx.policy) {
+                        // `value` is a whole moved box: stash its pointer, copy
+                        // its bytes into the field, then free the orphaned box.
+                        emit_expr(f, value, ctx)?;
+                        let stash = ctx.scratch_base + ctx.scratch_counter.get();
+                        ctx.scratch_counter.set(ctx.scratch_counter.get() + 1);
+                        f.instruction(&Instruction::LocalTee(stash));
+                        f.instruction(&Instruction::I32Const(size));
+                        f.instruction(&Instruction::MemoryCopy {
+                            src_mem: 0,
+                            dst_mem: 0,
+                        });
+                        f.instruction(&Instruction::LocalGet(stash));
+                        f.instruction(&Instruction::Call(ctx.builtins.free));
+                    } else {
+                        // An inline field read is an address into its parent
+                        // box (nothing orphaned), so just copy those bytes.
+                        emit_expr(f, value, ctx)?;
+                        f.instruction(&Instruction::I32Const(size));
+                        f.instruction(&Instruction::MemoryCopy {
+                            src_mem: 0,
+                            dst_mem: 0,
+                        });
+                    }
                 }
                 Some((offset, ty)) => {
                     emit_expr(f, value, ctx)?;
@@ -955,7 +1054,12 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             emit_expr(f, right, ctx)?;
             emit_binary_op(f, *op, &left.ty);
         }
-        hir::ExprKind::Call { func, args, .. } => {
+        hir::ExprKind::Call {
+            func,
+            args,
+            arg_modes,
+            ..
+        } => {
             if let Some(&runtime) = ctx.runtime.get(func) {
                 if runtime == hir::RuntimeAbi::DropInPlace {
                     emit_drop_in_place(f, &args[0], ctx)?;
@@ -963,7 +1067,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                     emit_runtime_call(f, runtime, args, ctx)?;
                 }
             } else if ctx.funcs.contains_key(func) {
-                emit_raw_call(f, func, args, ctx)?;
+                emit_raw_call(f, func, args, arg_modes, ctx)?;
                 // A scalar-ABI return arrives as N stack values; in this general
                 // context, materialize them into a box so the value reads as the
                 // usual aggregate pointer.
@@ -1107,8 +1211,23 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             emit_str_lit(f, &expr.ty, ctx);
         }
         hir::ExprKind::Deref(operand) => {
+            // An inline-aggregate pointee is stored as its bytes in the slot;
+            // reading it must produce an independent copy, so allocate a fresh
+            // box and copy the slot's bytes into it. Two scratch i32 slots are
+            // claimed up front (matching the pre-order walk in `walks.rs`).
+            let (slot_local, box_local) = if ctx.policy.is_inline(&expr.ty) {
+                let c = ctx.scratch_counter.get();
+                ctx.scratch_counter.set(c + 2);
+                (ctx.scratch_base + c, ctx.scratch_base + c + 1)
+            } else {
+                (0, 0)
+            };
             emit_expr(f, operand, ctx)?;
-            emit_field_load(f, &expr.ty, 0);
+            if ctx.policy.is_inline(&expr.ty) {
+                emit_inline_deref_read(f, &expr.ty, slot_local, box_local, ctx)?;
+            } else {
+                emit_field_load(f, &expr.ty, 0);
+            }
         }
         hir::ExprKind::Coerce {
             value,
@@ -1344,10 +1463,14 @@ fn emit_str_lit(f: &mut Function, ty: &hir::Type, ctx: &EmitCtx) {
 /// Emit a user-function call: its arguments (each by-value if the callee's
 /// parameter uses the scalar ABI, else as a pointer), then the `call`. Leaves
 /// the callee's results on the stack — N values for a scalar-ABI return.
+/// An `own` argument that is a read of an inline-aggregate field is moved out
+/// of its parent box and must be boxed out (deep-copied) rather than aliased;
+/// `read`/`mut` args alias their field.
 fn emit_raw_call(
     f: &mut Function,
     func: &hir::FuncId,
     args: &[hir::Expr],
+    arg_modes: &[hir::PassMode],
     ctx: &EmitCtx,
 ) -> Result<(), WasmError> {
     let idx = *ctx
@@ -1358,6 +1481,10 @@ fn emit_raw_call(
     for (i, arg) in args.iter().enumerate() {
         if abi.is_some_and(|v| v.get(i).copied().unwrap_or(false)) {
             emit_scalar_value(f, arg, ctx)?;
+        } else if arg_modes.get(i).copied() == Some(hir::PassMode::Own) {
+            // A moved field read needs an independent box; a whole value moves
+            // as its pointer.
+            emit_move_value(f, arg, ctx)?;
         } else {
             emit_expr(f, arg, ctx)?;
         }
@@ -1419,9 +1546,10 @@ fn materialize_scalar_box(
 /// through; any other value is realized as a box (an existing local, a freshly
 /// built literal, or a stashed pointer) and its fields are loaded.
 fn emit_scalar_value(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
-    let fields = flat_scalar_fields(&arg.ty, ctx.program, ctx.policy).ok_or_else(|| {
-        WasmError::Internal("scalar-ABI value is not a flat scalar aggregate".into())
-    })?;
+    let fields =
+        flat_scalar_fields(&arg.ty, ctx.program, ctx.policy, ctx.info).ok_or_else(|| {
+            WasmError::Internal("scalar-ABI value is not a flat scalar aggregate".into())
+        })?;
     // A scalarized local/param: push its leaf-field locals directly (no box).
     if let hir::ExprKind::Ident(sym) = &arg.kind
         && let Some(scalar) = ctx.scalarized.get(sym)
@@ -1439,7 +1567,7 @@ fn emit_scalar_value(f: &mut Function, arg: &hir::Expr, ctx: &EmitCtx) -> Result
     if let hir::ExprKind::Call { func, args, .. } = &arg.kind
         && ctx.scalar_ret.contains_key(func)
     {
-        return emit_raw_call(f, func, args, ctx);
+        return emit_raw_call(f, func, args, &[], ctx);
     }
     // Otherwise the value lives in a box; find a local holding its pointer.
     let box_local = match &arg.kind {
@@ -1567,7 +1695,7 @@ fn emit_scalar_let(
         // locals (the last field is on top), then skip the N+1 materialize temps
         // that `collect_scratch_types` reserved for this call.
         hir::ExprKind::Call { func, args, .. } if ctx.scalar_ret.contains_key(func) => {
-            emit_raw_call(f, func, args, ctx)?;
+            emit_raw_call(f, func, args, &[], ctx)?;
             let scalar = ctx
                 .scalarized
                 .get(&symbol)
@@ -1900,7 +2028,7 @@ fn emit_match(
     // bound, the match owns the box(es) the arm did not move out and frees them.
     // Consumption is always inferred from the arms (`match own`/`match mut`
     // modes don't force it) — an `own` binding moves a payload out.
-    let consuming = hir::cfg::match_consumes(arms);
+    let consuming = hir::cfg::match_consumes(&ctx.program.copy_types, arms);
     let mut mut_wb: Vec<MutWriteBack> = Vec::new();
     for arm in arms {
         // `$fail`: a mismatch in this arm's test branches to its end, falling
@@ -1914,11 +2042,15 @@ fn emit_match(
             &arm.pattern,
             ctx,
             &mut mut_wb,
+            false,
         );
+        emit_expr(f, &arm.body, ctx)?;
+        // A consumed scrutinee transfers ownership into the arm; after the arm
+        // body (and its bindings' drops) ran, reclaim the scrutinee's box(es)
+        // for the fields the arm did not move out.
         if consuming {
             emit_consume_cleanup(f, scrutinee_local, &[], &scrutinee.ty, &arm.pattern, ctx);
         }
-        emit_expr(f, &arm.body, ctx)?;
         // `match mut`: scalar `mut` bindings are copies, so copy them back into
         // the scrutinee's place at arm end (aggregate bindings alias and need
         // no copy-back). Skipped when the scrutinee is consumed — the boxes
@@ -1956,6 +2088,154 @@ fn emit_field_value(f: &mut Function, ty: &hir::Type, offset: u32, ctx: &EmitCtx
     }
 }
 
+/// Deep-copy the inline bytes of a `Copy` aggregate field (`src = Src::Field`)
+/// into a fresh heap box and leave the box pointer on the stack. This is the
+/// value-semantics counterpart to `emit_field_value`'s aliasing address: used
+/// when a destructuring pattern binds a nested `Copy` field as a value. Claims
+/// two scratch locals (`addr`/`dst`), reserved by the pattern walk.
+fn emit_field_copy_out(f: &mut Function, src: &Src, ty: &hir::Type, ctx: &EmitCtx) {
+    let Src::Field { base, offset } = src else {
+        return; // only field bindings need a box-out; others are already boxes
+    };
+    let size = ctx.policy.inline_size(ty) as i32;
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + 2);
+    let addr = ctx.scratch_base + counter;
+    let dst = ctx.scratch_base + counter + 1;
+
+    // source address = base + offset
+    f.instruction(&Instruction::LocalGet(*base));
+    if *offset != 0 {
+        f.instruction(&Instruction::I32Const(*offset as i32));
+        f.instruction(&Instruction::I32Add);
+    }
+    f.instruction(&Instruction::LocalSet(addr));
+    f.instruction(&Instruction::I32Const(size));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalTee(dst));
+    f.instruction(&Instruction::LocalGet(addr));
+    f.instruction(&Instruction::I32Const(size));
+    f.instruction(&Instruction::MemoryCopy {
+        src_mem: 0,
+        dst_mem: 0,
+    });
+    f.instruction(&Instruction::LocalGet(dst));
+}
+
+/// Deref-read of an inline-aggregate pointee: the slot address is on the stack;
+/// allocate a fresh box of the inline size, copy the slot's bytes into it, and
+/// leave the box pointer as the result (an independent copy, so dropping it can
+/// never alias the slot). `slot_local`/`box_local` are the two scratch locals
+/// claimed by the `Deref` arm before evaluating the operand.
+fn emit_inline_deref_read(
+    f: &mut Function,
+    ty: &hir::Type,
+    slot_local: u32,
+    box_local: u32,
+    ctx: &EmitCtx,
+) -> Result<(), WasmError> {
+    let size = ctx.policy.inline_size(ty) as i32;
+    // stack: [slot_addr]
+    f.instruction(&Instruction::LocalSet(slot_local));
+    f.instruction(&Instruction::I32Const(size));
+    f.instruction(&Instruction::Call(ctx.builtins.alloc));
+    f.instruction(&Instruction::LocalSet(box_local));
+    // dest = box, src = slot, len = size
+    f.instruction(&Instruction::LocalGet(box_local));
+    f.instruction(&Instruction::LocalGet(slot_local));
+    f.instruction(&Instruction::I32Const(size));
+    f.instruction(&Instruction::MemoryCopy {
+        src_mem: 0,
+        dst_mem: 0,
+    });
+    f.instruction(&Instruction::LocalGet(box_local));
+    Ok(())
+}
+
+/// Whether `ty` is a `Copy` *aggregate* (a struct with `impl Copy`), carried as
+/// a heap-box pointer. A `Copy` value stays alive after a copy site, so copying
+/// the box pointer would alias — it needs a deep copy of the box bytes instead.
+/// Scalars and raw pointers are also `Copy`, but their value is already
+/// self-contained (no box); tuples/enums are never `Copy` today.
+pub(crate) fn is_boxed_copy_aggregate(ty: &hir::Type, policy: &InlinePolicy) -> bool {
+    matches!(ty, hir::Type::Struct(..)) && policy.is_copy(ty)
+}
+
+/// Whether a move/copy site must deep-copy `value` into a fresh box instead of
+/// moving its pointer: a `Copy` aggregate (the source stays alive), or an
+/// inline-aggregate field/tuple-index whose bytes live inside the parent box
+/// (moving them out requires an independent copy).
+pub(crate) fn needs_value_copy(value: &hir::Expr, policy: &InlinePolicy) -> bool {
+    is_boxed_copy_aggregate(&value.ty, policy) || is_inline_field_read(value, policy)
+}
+
+/// Whether `value` is a read of an inline-aggregate field/tuple element — an
+/// address into the parent box rather than an independently-owned box.
+pub(crate) fn is_inline_field_read(value: &hir::Expr, policy: &InlinePolicy) -> bool {
+    policy.is_inline(&value.ty)
+        && matches!(
+            value.kind,
+            hir::ExprKind::Field { .. } | hir::ExprKind::TupleIndex { .. }
+        )
+}
+
+/// Whether copying `value` into an inline slot/field (`*p = value` or
+/// `x.f = value`) orphans a whole heap box that must be freed afterwards:
+/// `value` is an inline aggregate but *not* an inline field read (which is an
+/// address into its parent's box, with no allocation of its own). The move
+/// checker consumes `value` at both sites, so drop elaboration won't reclaim
+/// the box — the store must.
+pub(crate) fn store_orphans_box(value: &hir::Expr, policy: &InlinePolicy) -> bool {
+    policy.is_inline(&value.ty) && !is_inline_field_read(value, policy)
+}
+
+/// Evaluate `value` and leave an *independent* copy on the stack. For a `Copy`
+/// aggregate or an inline-aggregate field read, that is a fresh heap box whose
+/// bytes are copied from the evaluated value's box/place; for anything else it
+/// is just `emit_expr` (the value is already self-contained).
+///
+/// This is the codegen side of value semantics: `let b = a`, `a = b`, and a
+/// moved-out field must not alias the source's box. Consumes two scratch locals
+/// (`src`/`dst`), which the matching `walks` reservation provides.
+fn emit_copy_value(f: &mut Function, value: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
+    if !needs_value_copy(value, ctx.policy) {
+        return emit_expr(f, value, ctx);
+    }
+    let size = ctx.policy.inline_size(&value.ty) as i32;
+    let counter = ctx.scratch_counter.get();
+    ctx.scratch_counter.set(counter + 2);
+    let src = ctx.scratch_base + counter;
+    let dst = ctx.scratch_base + counter + 1;
+
+    emit_expr(f, value, ctx)?; // [src]
+    f.instruction(&Instruction::LocalSet(src)); // []
+    f.instruction(&Instruction::I32Const(size)); // [size]
+    f.instruction(&Instruction::Call(ctx.builtins.alloc)); // [dst]
+    f.instruction(&Instruction::LocalTee(dst)); // [dst] and dst = dst
+    f.instruction(&Instruction::LocalGet(src)); // [dst, src]
+    f.instruction(&Instruction::I32Const(size)); // [dst, src, size]
+    f.instruction(&Instruction::MemoryCopy {
+        src_mem: 0,
+        dst_mem: 0,
+    }); // []
+    f.instruction(&Instruction::LocalGet(dst)); // [dst]
+    Ok(())
+}
+
+/// Evaluate a *move* of `value` onto the stack: a read of an inline-aggregate
+/// field/tuple element must be boxed out (its bytes live in the parent, which
+/// may outlive or be freed independently), while any other value is already a
+/// self-contained box and moves as its pointer. Used at `return` and `own` call
+/// arguments, where a `Copy` value needn't be copied (the source dies) but a
+/// field address must be.
+fn emit_move_value(f: &mut Function, value: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
+    if is_inline_field_read(value, ctx.policy) {
+        emit_copy_value(f, value, ctx)
+    } else {
+        emit_expr(f, value, ctx)
+    }
+}
+
 fn push_src(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) {
     match src {
         Src::Local(idx) => {
@@ -1975,6 +2255,8 @@ fn push_src(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) {
 /// Recursively test a value (`src`, of type `ty`) against `pattern`, branching
 /// to the enclosing `$fail` block (relative depth 0 — no blocks are opened
 /// here) on any mismatch, and binding any sub-bindings along the matching path.
+/// `owning` is true for a `let` pattern (every binding takes ownership) and
+/// false for a `match` arm (bare/`read`/`mut` bindings borrow; `own` moves).
 /// `mut_wb` collects the arm's `mut` bindings of scalar payloads (see
 /// [`MutWriteBack`]) so `emit_match` can copy their writes back.
 fn emit_test_bind(
@@ -1984,6 +2266,7 @@ fn emit_test_bind(
     pattern: &hir::Pattern,
     ctx: &EmitCtx,
     mut_wb: &mut Vec<MutWriteBack>,
+    owning: bool,
 ) {
     match pattern {
         hir::Pattern::Wildcard { .. } => {
@@ -1995,11 +2278,25 @@ fn emit_test_bind(
         }
         hir::Pattern::Binding { symbol, mode, .. } => {
             if let Some(&local) = ctx.locals.get(symbol) {
-                push_src(f, src, ty, ctx);
+                // A field binding of an inline aggregate is an *alias* of the
+                // enclosing value's bytes unless the binding takes ownership
+                // (a `let`, an `own` match binding, or a `Copy` value) — in
+                // which case it is a value and must be deep-copied out.
+                let field_copy = matches!(src, Src::Field { .. })
+                    && ctx.policy.is_inline(ty)
+                    && (ctx.policy.is_copy(ty) || *mode == hir::PassMode::Own || owning);
+                if field_copy {
+                    emit_field_copy_out(f, &src, ty, ctx);
+                } else {
+                    push_src(f, src, ty, ctx);
+                }
                 f.instruction(&Instruction::LocalSet(local));
-                // A `mut` binding of a scalar payload is a copy (aggregates
-                // alias); record it so the writes copy back to the scrutinee.
-                if *mode == hir::PassMode::Mut && is_scalar_ty(ty) {
+                // A `mut` binding of a scalar or `Copy` aggregate payload is a
+                // copy (a plain aggregate binding aliases); record it so the
+                // writes copy back to the scrutinee.
+                if *mode == hir::PassMode::Mut
+                    && (is_scalar_ty(ty) || is_boxed_copy_aggregate(ty, ctx.policy))
+                {
                     mut_wb.push(MutWriteBack {
                         src,
                         ty: ty.clone(),
@@ -2046,6 +2343,7 @@ fn emit_test_bind(
                     elem,
                     ctx,
                     mut_wb,
+                    owning,
                 );
             }
         }
@@ -2096,6 +2394,7 @@ fn emit_test_bind(
                     &fp.pattern,
                     ctx,
                     mut_wb,
+                    owning,
                 );
             }
         }
@@ -2127,6 +2426,7 @@ fn emit_test_bind(
                     &fp.pattern,
                     ctx,
                     mut_wb,
+                    owning,
                 );
             }
         }
@@ -2153,16 +2453,14 @@ fn aggregate_base(f: &mut Function, src: Src, ty: &hir::Type, ctx: &EmitCtx) -> 
     }
 }
 
-/// Free the heap box(es) of a consumed match value `base` (a local holding the
-/// box pointer), reached by `path` — a chain of field byte-offsets from `base`.
-/// Run after the arm bound the fields it took: any nested destructure recurses
-/// (freeing its own box first), and this value's box is freed last. Bound leaves
-/// are dropped by drop elaboration, so they are skipped here. Pointers are
-/// re-derived from `base` each time, so no scratch locals are needed.
-///
-/// Un-taken (wildcard/omitted) needs-drop fields, and the live payload behind a
-/// wildcard arm over an enum, are not dropped yet — the same recursive-drop gap
-/// documented for enum payloads, to be closed by the synthesized-drop follow-up.
+/// Drop the un-moved-out fields of a consumed match value `base` (a local
+/// holding the value's box pointer), reached by `path` — a chain of inline
+/// field byte-offsets from `base`. Run after the arm body ran (so a binding
+/// taken by the arm drops first): a destructured field recurses, a
+/// wildcard/omitted needs-drop field is dropped in place, and — only at the
+/// top level (`path` empty) — the scrutinee's own box is freed last. Bound
+/// leaves are dropped by drop elaboration, so they are skipped here. Places
+/// are re-derived from `base` each time, so no scratch locals are needed.
 fn emit_consume_cleanup(
     f: &mut Function,
     base: u32,
@@ -2190,69 +2488,145 @@ fn emit_consume_cleanup(
                 .get(eid)
                 .and_then(|l| l.variants.get(*variant_idx as usize))
             {
-                for fp in fields {
-                    if is_destructure(&fp.pattern)
-                        && let Some((payload_offset, field_ty)) = variant.fields.get(&fp.field)
-                    {
-                        let mut child = path.to_vec();
-                        child.push(8 + *payload_offset);
-                        emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
-                    }
+                for (name, (payload_offset, field_ty)) in &variant.fields {
+                    let sub = fields
+                        .iter()
+                        .find(|fp| fp.field == *name)
+                        .map(|fp| &fp.pattern);
+                    cleanup_field(f, base, path, 8 + *payload_offset, field_ty, sub, ctx);
                 }
             }
         }
         (hir::Type::Struct(sid, _), hir::Pattern::Struct { fields, .. }) => {
             if let Some(layout) = ctx.struct_layouts.get(sid) {
-                for fp in fields {
-                    if is_destructure(&fp.pattern)
-                        && let Some((offset, field_ty)) = layout.fields.get(&fp.field)
-                    {
-                        let mut child = path.to_vec();
-                        child.push(*offset);
-                        emit_consume_cleanup(f, base, &child, field_ty, &fp.pattern, ctx);
-                    }
+                for (name, (offset, field_ty)) in &layout.fields {
+                    let sub = fields
+                        .iter()
+                        .find(|fp| fp.field == *name)
+                        .map(|fp| &fp.pattern);
+                    cleanup_field(f, base, path, *offset, field_ty, sub, ctx);
                 }
             }
         }
         (hir::Type::Tuple(ts), hir::Pattern::Tuple { elems, .. }) => {
             let layout = compute_tuple_layout(ts, ctx.policy);
-            for (elem, (offset, elem_ty)) in elems.iter().zip(layout.elems.iter()) {
-                if is_destructure(elem) {
-                    let mut child = path.to_vec();
-                    child.push(*offset);
-                    emit_consume_cleanup(f, base, &child, elem_ty, elem, ctx);
-                }
+            for (i, (offset, elem_ty)) in layout.elems.iter().enumerate() {
+                let sub = elems.get(i);
+                cleanup_field(f, base, path, *offset, elem_ty, sub, ctx);
             }
         }
         _ => {}
     }
-    // Free this value's own box, after its fields were read.
-    push_box_path(f, base, path);
-    f.instruction(&Instruction::Call(ctx.builtins.free));
+    // Free the consumed value's own box — but only the outermost one: nested
+    // inline fields have no separate allocation.
+    if path.is_empty() {
+        f.instruction(&Instruction::LocalGet(base));
+        f.instruction(&Instruction::Call(ctx.builtins.free));
+    }
 }
 
-/// Push the box pointer reached from local `base` by following `path` (a chain
-/// of field byte-offsets, each an i32 pointer load). An empty `path` pushes
-/// `base` itself.
-fn push_box_path(f: &mut Function, base: u32, path: &[u32]) {
+/// Handle one field of a consumed value during match cleanup: a bound leaf is
+/// taken (its binding drops it), a destructured field recurses, and a
+/// wildcard/omitted field is dropped in place if it needs a destructor.
+fn cleanup_field(
+    f: &mut Function,
+    base: u32,
+    path: &[u32],
+    offset: u32,
+    field_ty: &hir::Type,
+    sub: Option<&hir::Pattern>,
+    ctx: &EmitCtx,
+) {
+    match sub {
+        // Taken whole: the binding owns it and drops it.
+        Some(hir::Pattern::Binding { .. }) => {}
+        // Destructured in place: recurse so its own (sub-)fields are handled.
+        Some(p) if is_destructure(p) => {
+            if ctx.policy.is_inline(field_ty) {
+                // Inline field: its bytes live at `base + path + offset`.
+                let mut child = path.to_vec();
+                child.push(offset);
+                emit_consume_cleanup(f, base, &child, field_ty, p, ctx);
+            } else {
+                // Boxed (recursive) field: the slot holds a 4-byte box pointer.
+                // Load it as the new base and recurse with an empty path, so the
+                // nested box's own fields are cleaned and its box freed.
+                let new_base = aggregate_base(f, Src::Field { base, offset }, field_ty, ctx);
+                emit_consume_cleanup(f, new_base, &[], field_ty, p, ctx);
+            }
+        }
+        // Wildcard or omitted: drop the untaken value in place.
+        _ => drop_value_at_path(f, base, path, offset, field_ty, ctx),
+    }
+}
+
+/// Drop an untaken field: run its synthesized drop on the place at
+/// `base` + `path` + `offset`. An inline field is dropped in place there; a
+/// boxed (recursive) field's slot holds a box pointer, so it is loaded, the
+/// pointed-to box dropped, the pointer reloaded, and the box freed (mirroring
+/// `emit_drop_in_place`). A no-op for scalars (no destructor).
+fn drop_value_at_path(
+    f: &mut Function,
+    base: u32,
+    path: &[u32],
+    offset: u32,
+    ty: &hir::Type,
+    ctx: &EmitCtx,
+) {
+    let Some(&didx) = ctx.drop_fns.get(ty) else {
+        return;
+    };
+    let mut child = path.to_vec();
+    child.push(offset);
+    if ctx.policy.is_inline(ty) {
+        push_place_path(f, base, &child);
+        f.instruction(&Instruction::Call(didx));
+    } else {
+        // Boxed recursive aggregate: load the box pointer, drop its box, reload
+        // the pointer, and free the box (the drop call consumed the pointer).
+        push_place_path(f, base, &child);
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::Call(didx));
+        push_place_path(f, base, &child);
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::Call(ctx.builtins.free));
+    }
+}
+
+/// Push the address reached from local `base` by adding `path` (a chain of
+/// inline field byte-offsets). An empty `path` pushes `base` itself.
+fn push_place_path(f: &mut Function, base: u32, path: &[u32]) {
     f.instruction(&Instruction::LocalGet(base));
+    let mut total: i32 = 0;
     for &offset in path {
-        emit_field_load(f, &hir::Type::U32, offset);
+        total += offset as i32;
+    }
+    if total != 0 {
+        f.instruction(&Instruction::I32Const(total));
+        f.instruction(&Instruction::I32Add);
     }
 }
 
 /// Whether a pattern destructures an aggregate in place (vs. binding/ignoring
-/// the whole value) — the patterns whose own box must be freed on consume.
-fn is_destructure(pattern: &hir::Pattern) -> bool {
+/// the whole value) — the patterns whose own fields must be cleaned on consume.
+pub(crate) fn is_destructure(pattern: &hir::Pattern) -> bool {
     matches!(
         pattern,
         hir::Pattern::Variant { .. } | hir::Pattern::Struct { .. } | hir::Pattern::Tuple { .. }
     )
 }
 
-/// Emit RAII drop of owned local `sym` of type `ty`: a call to the type's
-/// synthesized `drop_T` function, which runs the value's own `Drop::drop`,
-/// recursively drops its owned fields, and frees its box.
+/// Emit RAII drop of owned local `sym` of type `ty`: call the type's
+/// synthesized `drop_T` (which runs the value's own `Drop::drop` and recursively
+/// drops its fields in place), then free the box.
 fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx) {
     let Some(&local) = ctx.locals.get(&sym) else {
         return;
@@ -2260,6 +2634,8 @@ fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx
     if let Some(&drop_fn) = ctx.drop_fns.get(ty) {
         f.instruction(&Instruction::LocalGet(local));
         f.instruction(&Instruction::Call(drop_fn));
+        f.instruction(&Instruction::LocalGet(local));
+        f.instruction(&Instruction::Call(ctx.builtins.free));
     }
 }
 
@@ -2288,14 +2664,25 @@ pub(crate) fn collect_drop_types(
         for (_, fty) in recursable_fields(&ty, program, policy) {
             work.push(fty);
         }
+        // An enum's drop branches on the discriminant and drops the active
+        // variant's payload, so its payload field types need drop fns too.
+        if let hir::Type::Enum(eid, _) = &ty {
+            for (_, fty) in enum_payload_fields(*eid, program, policy) {
+                work.push(fty);
+            }
+        }
     }
     order
 }
 
 /// Synthesize the body of `drop_T(ptr: i32)`: run `T`'s own `Drop::drop` (if
 /// any) while its fields are still valid, then recursively drop each owned
-/// field, then free `T`'s box. Each box is freed exactly once, by its own
-/// `drop_T`.
+/// field. The place is NOT freed here — the owned value's drop site (and
+/// `drop_in_place` for buffer elements) frees it. An inline field is dropped
+/// *in place* at `ptr + offset`; a recursive (non-inline) aggregate field is
+/// stored as a 4-byte box pointer in the slot, so it is loaded, dropped, and
+/// freed (mirroring `emit_drop_in_place`). For an enum, drop only the active
+/// variant's payload (chosen by the inline discriminant).
 pub(crate) fn emit_drop_fn(
     ty: &hir::Type,
     drop_fns: &HashMap<hir::Type, u32>,
@@ -2305,37 +2692,127 @@ pub(crate) fn emit_drop_fn(
     policy: &InlinePolicy,
     free_idx: u32,
 ) -> Function {
-    let mut f = Function::new(vec![]); // param 0 is the box pointer
+    let mut f = Function::new(vec![]); // param 0 is the place pointer
     if let Some(drop_method) = info.drop_method(ty)
         && let Some(&widx) = func_map.get(&drop_method)
     {
         f.instruction(&Instruction::LocalGet(0));
         f.instruction(&Instruction::Call(widx));
     }
-    for (offset, fty) in recursable_fields(ty, program, policy) {
-        // Present only for needs-drop field types; scalars are skipped.
-        if let Some(&didx) = drop_fns.get(&fty) {
-            f.instruction(&Instruction::LocalGet(0));
-            emit_field_load(&mut f, &fty, offset); // load the field's box pointer
-            f.instruction(&Instruction::Call(didx));
+    match ty {
+        // Inline tagged union: `[u32 discr][inline payload]`. Drop only the
+        // active variant's needs-drop payload fields, in place.
+        hir::Type::Enum(eid, _) => {
+            if let Some(e) = program.enums.get(eid.0 as usize) {
+                let layout = compute_enum_layout(e, policy);
+                for (variant_idx, variant) in e.variants.iter().enumerate() {
+                    let Some(vlayout) = layout.variants.get(variant_idx) else {
+                        continue;
+                    };
+                    let droppable: Vec<(u32, hir::Type)> = variant
+                        .fields
+                        .iter()
+                        .filter_map(|field| {
+                            let (off, fty) = vlayout.fields.get(&field.name)?.clone();
+                            drop_fns.get(&fty).map(|_| (8 + off, fty))
+                        })
+                        .collect();
+                    if droppable.is_empty() {
+                        continue;
+                    }
+                    f.instruction(&Instruction::Block(BlockType::Empty));
+                    // `if discr != variant_idx: skip this variant's payload`.
+                    f.instruction(&Instruction::LocalGet(0));
+                    f.instruction(&Instruction::I32Load(MemArg {
+                        offset: 0,
+                        align: 2,
+                        memory_index: 0,
+                    }));
+                    f.instruction(&Instruction::I32Const(variant_idx as i32));
+                    f.instruction(&Instruction::I32Ne);
+                    f.instruction(&Instruction::BrIf(0));
+                    for (offset, fty) in droppable {
+                        emit_drop_field(&mut f, offset, &fty, drop_fns, free_idx, policy);
+                    }
+                    f.instruction(&Instruction::End);
+                }
+            }
+        }
+        // Struct/tuple/array: a static inline field list, each dropped in place.
+        _ => {
+            for (offset, fty) in recursable_fields(ty, program, policy) {
+                emit_drop_field(&mut f, offset, &fty, drop_fns, free_idx, policy);
+            }
         }
     }
-    f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::Call(free_idx));
     f.instruction(&Instruction::End);
     f
 }
 
+/// Drop one owned field of `drop_T`'s place (param 0) at `offset`. An inline
+/// field's bytes live at `ptr + offset`, so `drop_fty` is called on that
+/// address. A recursive (non-inline) aggregate is stored in the slot as a box
+/// pointer: load it, run `drop_fty` on the box, reload the pointer, and free
+/// the box — the same treatment `emit_drop_in_place` gives a buffer element.
+fn emit_drop_field(
+    f: &mut Function,
+    offset: u32,
+    fty: &hir::Type,
+    drop_fns: &HashMap<hir::Type, u32>,
+    free_idx: u32,
+    policy: &InlinePolicy,
+) {
+    // Present only for needs-drop field types; scalars/pointers are skipped.
+    let Some(&didx) = drop_fns.get(fty) else {
+        return;
+    };
+    if policy.is_inline(fty) {
+        f.instruction(&Instruction::LocalGet(0));
+        if offset != 0 {
+            f.instruction(&Instruction::I32Const(offset as i32));
+            f.instruction(&Instruction::I32Add);
+        }
+        f.instruction(&Instruction::Call(didx));
+    } else {
+        // Boxed recursive field: load the box pointer out of the slot.
+        f.instruction(&Instruction::LocalGet(0));
+        if offset != 0 {
+            f.instruction(&Instruction::I32Const(offset as i32));
+            f.instruction(&Instruction::I32Add);
+        }
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::Call(didx));
+        // The call consumed the box pointer; reload it to free the box.
+        f.instruction(&Instruction::LocalGet(0));
+        if offset != 0 {
+            f.instruction(&Instruction::I32Const(offset as i32));
+            f.instruction(&Instruction::I32Add);
+        }
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::Call(free_idx));
+    }
+}
+
 /// The owned fields a `drop_T` recurses into, as `(byte offset, type)` in
-/// declaration order. Structs and tuples have a static field list; enums and
-/// arrays are not yet recursed (their payloads/elements are left to a
-/// follow-up), so they contribute none.
+/// declaration order. Structs and tuples have a static field list, and an
+/// array recurses into each element (laid out as a homogeneous tuple). Enums
+/// are handled separately — `emit_drop_fn` dispatches on the discriminant and
+/// drops only the active variant's payload, and `enum_payload_fields` registers
+/// the payload types — so they contribute none here.
 /// The concrete length of an array length-type. After monomorphization every
 /// array length is a `ConstInt`; anything else would be a compiler bug.
 fn array_const_len(len: &hir::Type) -> usize {
     match len {
         hir::Type::ConstInt(v) => *v as usize,
-        _ => 0,
+        other => panic!("array length should be a ConstInt after monomorphization, got {other}"),
     }
 }
 
@@ -2367,6 +2844,33 @@ fn recursable_fields(
         }
         _ => Vec::new(),
     }
+}
+
+/// The payload fields an enum's drop must be prepared to run, flattened across
+/// every variant as `(8 + payload offset, type)`. The emitted drop branches on
+/// the discriminant and drops only the active variant's fields; this list just
+/// ensures the payload types get synthesized drop functions.
+fn enum_payload_fields(
+    eid: hir::EnumId,
+    program: &hir::Program,
+    policy: &InlinePolicy,
+) -> Vec<(u32, hir::Type)> {
+    let Some(e) = program.enums.get(eid.0 as usize) else {
+        return Vec::new();
+    };
+    let layout = compute_enum_layout(e, policy);
+    let mut out = Vec::new();
+    for (variant_idx, variant) in e.variants.iter().enumerate() {
+        let Some(vlayout) = layout.variants.get(variant_idx) else {
+            continue;
+        };
+        for field in &variant.fields {
+            if let Some((off, fty)) = vlayout.fields.get(&field.name) {
+                out.push((8 + off, fty.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// Walk a body collecting the type of every `Stmt::Drop` it contains.
@@ -2411,9 +2915,18 @@ fn collect_drop_sites_expr(expr: &hir::Expr, program: &hir::Program, out: &mut V
             }
         }
         hir::ExprKind::Block(b) => collect_drop_sites(b, program, out),
-        hir::ExprKind::Match { arms, .. } => {
+        hir::ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
+            let consuming = hir::cfg::match_consumes(&program.copy_types, arms);
             for arm in arms {
                 collect_drop_sites_expr(&arm.body, program, out);
+                // A consumed match's cleanup drops the un-moved-out fields in
+                // place (and recurses into destructured ones); those types need
+                // drop functions even though no `Stmt::Drop` reaches them.
+                if consuming {
+                    collect_consume_cleanup_types(&scrutinee.ty, &arm.pattern, program, out);
+                }
             }
         }
         // `drop_in_place[T](p)` drops `T` in place — so `T` needs a `drop_T`
@@ -2430,24 +2943,129 @@ fn collect_drop_sites_expr(expr: &hir::Expr, program: &hir::Program, out: &mut V
     }
 }
 
-/// `drop_in_place[T](p)`: run `T`'s destructor on the value at `p`. The element
-/// type is the pointee of the `*mut T` argument. A needs-drop `T` is a boxed
-/// aggregate, so the slot holds its box pointer — load it and call `drop_T`.
-/// For a `T` with no destructor this is a no-op (just discard the pointer).
+/// Enqueue the field types `emit_consume_cleanup` will need drop functions for
+/// when cleaning up a consumed match arm. Mirrors that function's recursion:
+/// a binding takes ownership (nothing here), a destructured field recurses, and
+/// a wildcard/omitted field is dropped in place (so its own `drop_T` is needed).
+fn collect_consume_cleanup_types(
+    ty: &hir::Type,
+    pattern: &hir::Pattern,
+    program: &hir::Program,
+    out: &mut Vec<hir::Type>,
+) {
+    if matches!(pattern, hir::Pattern::Binding { .. }) {
+        return;
+    }
+    match (ty, pattern) {
+        (
+            hir::Type::Enum(eid, _),
+            hir::Pattern::Variant {
+                variant_idx,
+                fields,
+                ..
+            },
+        ) => {
+            let Some(e) = program.enums.get(eid.0 as usize) else {
+                return;
+            };
+            let Some(variant) = e.variants.get(*variant_idx as usize) else {
+                return;
+            };
+            for field in &variant.fields {
+                let sub = fields
+                    .iter()
+                    .find(|fp| fp.field == field.name)
+                    .map(|fp| &fp.pattern);
+                collect_cleanup_field_types(&field.ty, sub, program, out);
+            }
+        }
+        (hir::Type::Struct(sid, _), hir::Pattern::Struct { fields, .. }) => {
+            let Some(s) = program.structs.get(sid.0 as usize) else {
+                return;
+            };
+            for field in &s.fields {
+                let sub = fields
+                    .iter()
+                    .find(|fp| fp.field == field.name)
+                    .map(|fp| &fp.pattern);
+                collect_cleanup_field_types(&field.ty, sub, program, out);
+            }
+        }
+        (hir::Type::Tuple(ts), hir::Pattern::Tuple { elems, .. }) => {
+            for (i, ety) in ts.iter().enumerate() {
+                let sub = elems.get(i);
+                collect_cleanup_field_types(ety, sub, program, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_cleanup_field_types(
+    field_ty: &hir::Type,
+    sub: Option<&hir::Pattern>,
+    program: &hir::Program,
+    out: &mut Vec<hir::Type>,
+) {
+    match sub {
+        // Taken whole: the binding owns it and drops it — no cleanup drop.
+        Some(hir::Pattern::Binding { .. }) => {}
+        // Destructured in place: its sub-fields are cleaned instead.
+        Some(p) if is_destructure(p) => {
+            collect_consume_cleanup_types(field_ty, p, program, out);
+        }
+        // Wildcard or omitted: dropped in place, so its `drop_T` is needed.
+        _ => out.push(field_ty.clone()),
+    }
+}
+
+/// `drop_in_place[T](p)`: run `T`'s destructor on the value at `p`, without
+/// reclaiming the slot (it lives in a `Vec`/`Array` buffer). The element type
+/// is the pointee of the `*mut T` argument. There are three cases:
+///
+/// - An *inline* aggregate's bytes live at `p` itself, so `drop_T` is called
+///   on the slot address (and the slot itself is reclaimed with the buffer).
+/// - A *self-referential* aggregate has no finite inline size, so the slot
+///   holds a 4-byte box pointer: load it, run `drop_T` on the box, then free
+///   the box (its destructor runs in place, it does not free itself).
+/// - A scalar/pointer element has no destructor: discard the address.
 fn emit_drop_in_place(f: &mut Function, ptr: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
     let elem_ty = match &ptr.ty {
         hir::Type::Pointer { pointee, .. } => (**pointee).clone(),
         _ => return Err(WasmError::Internal("drop_in_place on a non-pointer".into())),
     };
     emit_expr(f, ptr, ctx)?; // the slot address (*mut T)
-    if let Some(&didx) = ctx.drop_fns.get(&elem_ty) {
+    if ctx.policy.is_inline(&elem_ty) {
+        // The slot address is the value: drop its contents in place.
+        if let Some(&didx) = ctx.drop_fns.get(&elem_ty) {
+            f.instruction(&Instruction::Call(didx));
+        } else {
+            f.instruction(&Instruction::Drop);
+        }
+    } else if matches!(
+        &elem_ty,
+        hir::Type::Struct(..) | hir::Type::Tuple(..) | hir::Type::Enum(..) | hir::Type::Array(..)
+    ) {
+        // Recursive aggregate: the slot holds a box pointer. Load it, drop the
+        // pointed-to box, then free the box (drop_T drops in place only).
         f.instruction(&Instruction::I32Load(MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
-        f.instruction(&Instruction::Call(didx));
+        if let Some(&didx) = ctx.drop_fns.get(&elem_ty) {
+            f.instruction(&Instruction::Call(didx));
+            // The call consumed the box pointer; reload it to free the box.
+            emit_expr(f, ptr, ctx)?;
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+        }
+        f.instruction(&Instruction::Call(ctx.builtins.free));
     } else {
+        // Scalar/pointer element: no destructor and nothing to free.
         f.instruction(&Instruction::Drop);
     }
     Ok(())
