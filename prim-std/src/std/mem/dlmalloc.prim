@@ -1,4 +1,4 @@
-mod mem
+trusted mod mem
 
 // The raw pointer intrinsics, declared locally rather than imported from
 // std.ptr: std.ptr depends on std.mem (for size_of), so the allocator — which
@@ -758,7 +758,7 @@ fn tmalloc_large(nb: usize) -> *mut u8 {
 
 // alloc(n) — a pointer to n freshly allocated bytes (8-byte aligned), or null
 // if memory is exhausted.
-fn alloc(nbytes: usize) -> *mut u8 {
+trusted fn alloc(nbytes: usize) -> *mut u8 {
     init_if_needed()
     let nb = request2size(nbytes)
 
@@ -820,7 +820,7 @@ fn alloc(nbytes: usize) -> *mut u8 {
 }
 
 // free(mem) — release a prior allocation, coalescing with free neighbours.
-fn free(mem: *mut u8) {
+trusted fn free(mem: *mut u8) {
     if is_null(mem) {
         return
     }
@@ -880,15 +880,15 @@ fn free(mem: *mut u8) {
 
 // Typed allocation conveniences. at[T] views the fresh bytes as T; dealloc
 // drops back to a raw pointer (from_addr of the address) to free.
-fn alloc_bytes[T](n: usize) -> *mut T {
+trusted fn alloc_bytes[T](n: usize) -> *mut T {
     return at[T](alloc(n), 0usize)
 }
 
-fn dealloc[T](p: *mut T) {
+trusted fn dealloc[T](p: *mut T) {
     free(from_addr[u8](addr[T](p)))
 }
 
-fn alloc_array[T](count: usize) -> *mut T {
+trusted fn alloc_array[T](count: usize) -> *mut T {
     return alloc_bytes[T](count * size_of[T]())
 }
 
@@ -896,7 +896,7 @@ fn alloc_array[T](count: usize) -> *mut T {
 // `keep_count` from the old buffer, free the old pointer, and return the new
 // one. `keep_count` is the number of live elements to preserve (not the old
 // capacity). A null `ptr` (keep_count 0) is fine — `dealloc` ignores it.
-fn realloc[T](ptr: *mut T, keep_count: usize, new_count: usize) -> *mut T {
+trusted fn realloc[T](ptr: *mut T, keep_count: usize, new_count: usize) -> *mut T {
     let new_ptr = alloc_array[T](new_count)
     if keep_count > 0usize {
         copy_bytes[T](new_ptr, ptr, keep_count * size_of[T]())

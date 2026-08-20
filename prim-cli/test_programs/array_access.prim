@@ -1,12 +1,13 @@
 import std.io.println
+import std.array.get
 
-// Array[T, N] element access as methods on the builtin array. `get` returns
-// Option[read T] — a tracked borrow of the element, or None when out of bounds
-// (no panic). Reading auto-derefs through the borrow; no raw `*mut`.
+// Array[T, N] element access. `get` returns Option[T] — a copy of the element
+// (copy-able types only), or None when out of bounds (no panic). Reading
+// copies the element out; no raw `*mut`.
 fn main() {
     let a: Array[i32, 4] = [10i32, 20i32, 30i32, 40i32]
     println(a.len())              // 4
-    println(a.get(0).unwrap())    // 10
-    println(a.get(3).unwrap())    // 40
-    println(a.get(9).is_none())   // true
+    println(get(a, 0).unwrap())   // 10
+    println(get(a, 3).unwrap())   // 40
+    println(get(a, 9).is_none())  // true
 }

@@ -28,8 +28,10 @@
 //!
 //! Modes are erased after this pass; mono/codegen ignore them.
 
-use super::cfg::{self, Action, Effect, effect, is_copy, root_symbol};
-use super::{Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId};
+use super::cfg::{self, Action, CopyCtx, Effect, copy_trait_id, root_symbol};
+use super::{
+    Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId, TraitId,
+};
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -97,9 +99,11 @@ impl std::error::Error for MoveError {}
 
 pub fn check(program: &Program) -> Result<(), MoveError> {
     let mut errors = Vec::new();
+    let copy_trait = copy_trait_id(program);
     for func in &program.functions {
         let mut checker = Checker {
             program,
+            copy_trait,
             errors: Vec::new(),
         };
         checker.check_moves(func);
@@ -116,10 +120,12 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
 
 struct Checker<'a> {
     program: &'a Program,
+    /// The `Copy` marker trait, for resolving `T: Copy` bounds in generic bodies.
+    copy_trait: Option<TraitId>,
     errors: Vec<MoveError>,
 }
 
-impl Checker<'_> {
+impl<'a> Checker<'a> {
     fn emit(&mut self, span_id: SpanId, kind: MoveErrorKind) {
         let (file, span) = self
             .program
@@ -143,16 +149,17 @@ impl Checker<'_> {
 
     /// Use-after-move, move-in-loop, and borrow-escape via a forward may-moved
     /// dataflow over the shared CFG.
-    fn check_moves(&mut self, func: &super::Function) {
+    fn check_moves(&mut self, func: &'a super::Function) {
         // Track every non-`Copy` local: parameters plus all `let`/`match`
         // bindings. `own` params are owned (movable); `read`/`mut` params are
         // borrows that may not be moved out. Match-arm `read`/`mut`/bare
         // bindings of non-`Copy` payloads are borrows too (second-class, like a
         // parameter) — unmovable, dying at the arm's end.
+        let copy_ctx = CopyCtx::new(&self.program.copy_types, self.copy_trait, &func.type_params);
         let mut tracked: HashSet<SymbolId> = HashSet::new();
         let mut borrow_params: HashSet<SymbolId> = HashSet::new();
         for p in &func.params {
-            match effect(p.mode, &p.ty) {
+            match copy_ctx.effect(p.mode, &p.ty) {
                 // Copy params aren't tracked; `own` params are owned (movable);
                 // `read`/`mut` params are borrows that may not be moved out.
                 Effect::Copy => {}
@@ -165,10 +172,10 @@ impl Checker<'_> {
                 }
             }
         }
-        collect_tracked(&func.body, &mut tracked);
-        collect_borrow_bindings(&func.body, &mut borrow_params);
+        collect_tracked(copy_ctx, &func.body, &mut tracked);
+        collect_borrow_bindings(copy_ctx, &func.body, &mut borrow_params);
 
-        let cfg = cfg::build(&func.body, &tracked);
+        let cfg = cfg::build(&func.body, &tracked, &copy_ctx);
         let fwd = cfg::may_in_sets(&cfg, false);
         let full = cfg::may_in_sets(&cfg, true);
 
@@ -237,26 +244,30 @@ impl Checker<'_> {
     /// Per-call rules that don't depend on control flow (rules 4, 5, 7), plus
     /// the second-class guard: a borrow (`read`/`mut` parameter or arm binding)
     /// may never be boxed into a trait object.
-    fn check_borrows(&mut self, func: &super::Function) {
+    fn check_borrows(&mut self, func: &'a super::Function) {
         // `read_borrows` = every *read-only* borrow in scope: `read` parameters
         // (rule 4: no `mut` through them) plus the `read`/bare bindings of the
         // match arm being walked. `borrowed` = every borrow parameter, `read`
         // or `mut` (for the Coerce-of-borrow rule). Only non-`Copy` parameters
         // are real borrows.
+        let copy_ctx = CopyCtx::new(&self.program.copy_types, self.copy_trait, &func.type_params);
         let read_borrows: HashSet<SymbolId> = func
             .params
             .iter()
-            .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::Read))
+            .filter(|p| !copy_ctx.is_copy(&p.ty) && matches!(p.mode, PassMode::Read))
             .map(|p| p.name)
             .collect();
         let borrowed: HashSet<SymbolId> = func
             .params
             .iter()
-            .filter(|p| !is_copy(&p.ty) && matches!(p.mode, PassMode::Read | PassMode::Mut))
+            .filter(|p| {
+                !copy_ctx.is_copy(&p.ty) && matches!(p.mode, PassMode::Read | PassMode::Mut)
+            })
             .map(|p| p.name)
             .collect();
         BorrowWalk {
             chk: self,
+            copy_ctx,
             read_borrows,
             borrowed,
         }
@@ -267,7 +278,13 @@ impl Checker<'_> {
         self.program
             .functions
             .get(func.0 as usize)
-            .map(|f| f.params.iter().map(|p| (p.mode, is_copy(&p.ty))).collect())
+            .map(|f| {
+                let ctx = CopyCtx::new(&self.program.copy_types, self.copy_trait, &f.type_params);
+                f.params
+                    .iter()
+                    .map(|p| (p.mode, ctx.is_copy(&p.ty)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -277,6 +294,9 @@ impl Checker<'_> {
 /// the default `Visitor` recursion.
 struct BorrowWalk<'a, 'p> {
     chk: &'a mut Checker<'p>,
+    /// The caller's copy-vs-move policy, so `is_copy` on argument types treats
+    /// the caller's `T: Copy` bounds correctly.
+    copy_ctx: CopyCtx<'p>,
     /// Every *read-only* borrow in scope: `read` parameters, plus the `read`/
     /// bare bindings of the match arm currently being walked. Rule 4: a `mut`
     /// borrow (at a call or `match mut`) may not go through any of these.
@@ -376,7 +396,12 @@ impl Visitor for BorrowWalk<'_, '_> {
                 let mut entered: Vec<SymbolId> = Vec::new();
                 let mut entered_read: Vec<SymbolId> = Vec::new();
                 for arm in arms {
-                    collect_pattern_borrows(&arm.pattern, &mut entered, &mut entered_read);
+                    collect_pattern_borrows(
+                        &self.copy_ctx,
+                        &arm.pattern,
+                        &mut entered,
+                        &mut entered_read,
+                    );
                     for &sym in &entered {
                         self.borrowed.insert(sym);
                     }
@@ -429,7 +454,7 @@ impl BorrowWalk<'_, '_> {
             // place to move from, so any mode is fine.
             if let Some((decl_mode, _)) = param_modes.get(i).copied()
                 && root_symbol(arg).is_some()
-                && !is_copy(&arg.ty)
+                && !self.copy_ctx.is_copy(&arg.ty)
                 && mode != decl_mode
             {
                 self.chk.emit(arg.span, MoveErrorKind::ModeMismatch);
@@ -452,6 +477,7 @@ impl BorrowWalk<'_, '_> {
 /// `read_only` receives the subset that are *read-only* borrows (mode `read` or
 /// bare) — `mut` bindings are exclusive and excluded from it.
 fn collect_pattern_borrows(
+    copy_ctx: &CopyCtx,
     pattern: &Pattern,
     out: &mut Vec<SymbolId>,
     read_only: &mut Vec<SymbolId>,
@@ -460,7 +486,7 @@ fn collect_pattern_borrows(
         Pattern::Binding {
             symbol, ty, mode, ..
         } => {
-            if effect(*mode, ty) == Effect::Borrow {
+            if copy_ctx.effect(*mode, ty) == Effect::Borrow {
                 out.push(*symbol);
                 if *mode != PassMode::Mut {
                     read_only.push(*symbol);
@@ -469,12 +495,12 @@ fn collect_pattern_borrows(
         }
         Pattern::Tuple { elems, .. } => {
             for e in elems {
-                collect_pattern_borrows(e, out, read_only);
+                collect_pattern_borrows(copy_ctx, e, out, read_only);
             }
         }
         Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                collect_pattern_borrows(&f.pattern, out, read_only);
+                collect_pattern_borrows(copy_ctx, &f.pattern, out, read_only);
             }
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
@@ -493,8 +519,8 @@ fn walk_expr_scrutinee_only<V: Visitor>(v: &mut V, expr: &Expr) {
 /// Collect every non-`Copy` local bound in a body (`let` and `match`-arm
 /// patterns, recursively). Parameters are added by the caller. These are exactly
 /// the locals the CFG must track.
-fn collect_tracked(block: &Block, out: &mut HashSet<SymbolId>) {
-    TrackedCollector { out }.visit_block(block);
+fn collect_tracked<'a>(copy_ctx: CopyCtx<'a>, block: &Block, out: &'a mut HashSet<SymbolId>) {
+    TrackedCollector { copy_ctx, out }.visit_block(block);
 }
 
 /// Collect the second-class borrow bindings a function's match arms introduce:
@@ -502,11 +528,16 @@ fn collect_tracked(block: &Block, out: &mut HashSet<SymbolId>) {
 /// bare). Moving one out of the arm would move a value out of the still-live
 /// scrutinee, so it is unmovable for the arm's body — exactly like a borrow
 /// parameter.
-fn collect_borrow_bindings(block: &Block, out: &mut HashSet<SymbolId>) {
-    BorrowBindingCollector { out }.visit_block(block);
+fn collect_borrow_bindings<'a>(
+    copy_ctx: CopyCtx<'a>,
+    block: &Block,
+    out: &'a mut HashSet<SymbolId>,
+) {
+    BorrowBindingCollector { copy_ctx, out }.visit_block(block);
 }
 
 struct BorrowBindingCollector<'a> {
+    copy_ctx: CopyCtx<'a>,
     out: &'a mut HashSet<SymbolId>,
 }
 
@@ -519,7 +550,7 @@ impl Visitor for BorrowBindingCollector<'_> {
             // Nested matches in the scrutinee expression are visited too.
             self.visit_expr(scrutinee);
             for arm in arms {
-                borrow_binding_pattern(&arm.pattern, self.out);
+                borrow_binding_pattern(&self.copy_ctx, &arm.pattern, self.out);
                 // Nested matches in the arm body have their own borrow
                 // bindings.
                 self.visit_expr(&arm.body);
@@ -533,23 +564,23 @@ impl Visitor for BorrowBindingCollector<'_> {
 /// A binding is a second-class borrow when it borrows (`read`/`mut`, or a bare
 /// binding which defaults to `read`) a non-`Copy` payload. `own` bindings move
 /// and are owned.
-fn borrow_binding_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
+fn borrow_binding_pattern(copy_ctx: &CopyCtx, pattern: &Pattern, out: &mut HashSet<SymbolId>) {
     match pattern {
         Pattern::Binding {
             symbol, ty, mode, ..
         } => {
-            if effect(*mode, ty) == Effect::Borrow {
+            if copy_ctx.effect(*mode, ty) == Effect::Borrow {
                 out.insert(*symbol);
             }
         }
         Pattern::Tuple { elems, .. } => {
             for e in elems {
-                borrow_binding_pattern(e, out);
+                borrow_binding_pattern(copy_ctx, e, out);
             }
         }
         Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                borrow_binding_pattern(&f.pattern, out);
+                borrow_binding_pattern(copy_ctx, &f.pattern, out);
             }
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}
@@ -557,31 +588,32 @@ fn borrow_binding_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
 }
 
 struct TrackedCollector<'a> {
+    copy_ctx: CopyCtx<'a>,
     out: &'a mut HashSet<SymbolId>,
 }
 
 impl Visitor for TrackedCollector<'_> {
     fn visit_pattern(&mut self, pattern: &Pattern) {
-        tracked_pattern(pattern, self.out);
+        tracked_pattern(&self.copy_ctx, pattern, self.out);
     }
 }
 
 /// Add every non-`Copy` binding a pattern introduces to the tracked set.
-fn tracked_pattern(pattern: &Pattern, out: &mut HashSet<SymbolId>) {
+fn tracked_pattern(copy_ctx: &CopyCtx, pattern: &Pattern, out: &mut HashSet<SymbolId>) {
     match pattern {
         Pattern::Binding { symbol, ty, .. } => {
-            if !is_copy(ty) {
+            if !copy_ctx.is_copy(ty) {
                 out.insert(*symbol);
             }
         }
         Pattern::Tuple { elems, .. } => {
             for e in elems {
-                tracked_pattern(e, out);
+                tracked_pattern(copy_ctx, e, out);
             }
         }
         Pattern::Variant { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                tracked_pattern(&f.pattern, out);
+                tracked_pattern(copy_ctx, &f.pattern, out);
             }
         }
         Pattern::Wildcard { .. } | Pattern::Int { .. } | Pattern::Bool { .. } => {}

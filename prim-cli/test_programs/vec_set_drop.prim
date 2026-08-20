@@ -1,0 +1,21 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.set
+
+// Replacing a needs-drop element stores the new value by copying its inline
+// bytes into the slot and freeing the now-orphaned value box (not the slot's
+// old value's buffer). The Drop markers below pin both the displaced element's
+// in-place drop and the surviving elements' drops — a double-free of the
+// stored value would crash or corrupt this order.
+struct Res { id: i32 }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
+
+fn main() {
+    let mut v = new[Res]()
+    push(mut v, own Res { id = 1i32 })
+    push(mut v, own Res { id = 2i32 })
+    println(0i32)
+    set(mut v, 0usize, own Res { id = 3i32 })
+    println(4i32)
+}

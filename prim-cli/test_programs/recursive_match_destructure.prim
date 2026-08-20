@@ -1,0 +1,23 @@
+import std.io.println
+
+// Destructuring a *boxed* recursive field (`next`) in a consuming match must
+// load the box pointer and clean its sub-fields from that box, then free the
+// nested box — not treat the box-pointer slot as inline bytes at the slot
+// address.
+struct Mark { id: i32 }
+impl Drop for Mark { fn drop(mut self) { println(self.id) } }
+
+enum List {
+    Nil,
+    Cons { mark: Mark, next: List },
+}
+
+fn main() {
+    let tail = List.Cons { mark = Mark { id = 2i32 }, next = List.Nil }
+    let head = List.Cons { mark = Mark { id = 1i32 }, next = tail }
+    match head {
+        List.Cons { mark: own x, next: List.Cons { mark: own y, next: _ } } => println(0i32),
+        List.Cons { mark: own x2, next: List.Nil } => println(1i32),
+        List.Nil => println(2i32),
+    }
+}

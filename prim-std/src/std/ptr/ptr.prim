@@ -1,4 +1,4 @@
-mod ptr
+trusted mod ptr
 
 import std.mem.size_of
 
@@ -136,10 +136,10 @@ fn addr[T](p: *mut T) -> usize;
 @runtime("prim_rt_at")
 fn at[T](base: *mut u8, off: usize) -> *mut T;
 
-fn add[T](p: *mut T, n: usize) -> *mut T {
+trusted fn add[T](p: *mut T, n: usize) -> *mut T {
     return byte_add[T](p, n * size_of[T]())
 }
 
-fn sub[T](p: *mut T, n: usize) -> *mut T {
+trusted fn sub[T](p: *mut T, n: usize) -> *mut T {
     return byte_sub[T](p, n * size_of[T]())
 }

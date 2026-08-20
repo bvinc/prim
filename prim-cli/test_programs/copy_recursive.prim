@@ -1,0 +1,11 @@
+// A recursive type has no finite inline size, so `impl Copy` must be rejected:
+// a value copy would shallow-copy the box pointer and alias `next`.
+struct Node {
+    next: Node,
+    value: i32,
+}
+
+impl Copy for Node {}
+
+fn main() {
+}

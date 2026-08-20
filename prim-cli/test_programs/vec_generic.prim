@@ -5,6 +5,8 @@ import std.vec.get
 
 struct Point { x: i32, y: i32 }
 
+impl Copy for Point {}
+
 fn main() {
     // Vec[u64] — 8-byte elements (exercises size_of scaling)
     let nums = new[u64]()

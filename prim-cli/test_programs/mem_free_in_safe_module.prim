@@ -1,0 +1,11 @@
+// The allocator is a raw-core power: freeing a pointer a safe module holds
+// (e.g. a `Vec`'s `ptr` field) would double-free when the owner drops, so
+// `std.mem.free` is trusted-only.
+import std.mem.free
+
+fn do_free(p: *mut u8) {
+    free(p)
+}
+
+fn main() {
+}

@@ -7,12 +7,13 @@ struct Pair {
 }
 
 // size_of[T]() folds to a constant per type: scalars use their natural
-// width; structs are 4-byte heap references.
+// width; an aggregate reports its inline byte layout (the storage stride of
+// an array/Vec element).
 fn main() {
     println(size_of[u8]())     // 1
     println(size_of[u16]())    // 2
     println(size_of[u32]())    // 4
     println(size_of[u64]())    // 8
     println(size_of[bool]())   // 1
-    println(size_of[Pair]())   // 4
+    println(size_of[Pair]())   // 8
 }

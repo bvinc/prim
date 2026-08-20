@@ -1,0 +1,24 @@
+import std.io.println
+import std.vec.Vec
+import std.vec.new
+import std.vec.push
+import std.vec.get
+
+struct Point { x: i32, y: i32 }
+
+impl Copy for Point {}
+
+// A user generic function bounded by `T: Copy`: it calls `Vec.get[T]`, whose
+// own `T: Copy` bound is satisfied by *forwarding* this function's bound. The
+// call-site bound check also rejects instantiating `first` with a non-`Copy`
+// element (see vec_get_noncopy / copy_bound_missing).
+fn first[T: Copy](read v: Vec[T]) -> T {
+    return get(v, 0usize)
+}
+
+fn main() {
+    let mut v = new[Point]()
+    push(mut v, own Point { x = 7, y = 8 })
+    let p = first(v)
+    println(p.x)                       // 7
+}

@@ -1,8 +1,11 @@
-mod mem
+trusted mod mem
 
-// size_of[T]() — the in-memory size of T in bytes. Resolved to a constant
-// during monomorphization once T is concrete, so it costs nothing at
-// runtime. Backs generic pointer arithmetic and allocation sizing.
+// size_of[T]() — the number of bytes a value of T occupies in a container
+// slot: an aggregate's inline byte layout, else a scalar/pointer's natural
+// width. Resolved to a constant during monomorphization once T is concrete,
+// so it costs nothing at runtime. Backs generic pointer arithmetic and
+// allocation sizing, so it is the stride `add[T]`/`sub[T]` scale element
+// indices by.
 @runtime("prim_rt_size_of")
 fn size_of[T]() -> usize;
 

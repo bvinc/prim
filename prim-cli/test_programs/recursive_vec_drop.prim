@@ -1,0 +1,23 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.option.Option
+
+// A recursive type with a needs-drop field. `Node` is not inline (it contains
+// itself through `next`), so a `Vec[Node]` stores a box pointer per element.
+// Dropping the Vec must load that box pointer, run the destructor on the box
+// (dropping `mark`), and free the box — not run the destructor against the
+// pointer bytes stored in the slot.
+struct Mark { id: i32 }
+impl Drop for Mark { fn drop(mut self) { println(self.id) } }
+
+struct Node {
+    next: Option[Node],
+    mark: Mark,
+}
+
+fn main() {
+    let mut v = new[Node]()
+    push(mut v, own Node { next = Option.None, mark = Mark { id = 7i32 } })
+    println(0i32)
+}

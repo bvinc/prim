@@ -1,0 +1,10 @@
+// Generic `Copy` needs `T: Copy` bounds, which don't exist yet. Declaring it
+// on a generic type is rejected rather than silently treating it as non-Copy.
+struct Box[T] {
+    ptr: *mut T,
+}
+
+impl Copy for Box {}
+
+fn main() {
+}

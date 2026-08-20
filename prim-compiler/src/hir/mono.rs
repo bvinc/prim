@@ -14,8 +14,8 @@
 //! cloned body / fields are processed.
 
 use super::{
-    Block, DropInfo, EnumId, Expr, ExprKind, FuncId, PassMode, Program, SpanId, Stmt, StructId,
-    Type, TypeCheckError, TypeCheckKind, inline,
+    Block, EnumId, Expr, ExprKind, FuncId, PassMode, Program, Stmt, StructId, Type, TypeCheckError,
+    inline,
 };
 use std::collections::HashMap;
 
@@ -26,9 +26,6 @@ pub fn monomorphize(program: &mut Program) -> Result<(), TypeCheckError> {
         struct_mono_map: HashMap::new(),
         enum_mono_map: HashMap::new(),
         errors: Vec::new(),
-        current_func: FuncId(u32::MAX),
-        clone_origin: HashMap::new(),
-        instantiation_sites: HashMap::new(),
     };
     // Process every non-generic function. Calls to generic functions in
     // their bodies kick off instantiation; calls inside generic bodies
@@ -62,8 +59,8 @@ pub fn monomorphize(program: &mut Program) -> Result<(), TypeCheckError> {
         pass.program.impls.remove(&key);
     }
 
-    // Semantic errors discovered during monomorphization (once types are
-    // concrete): deref-reads of boxed aggregates. Report the first.
+    // Semantic errors discovered during monomorphization (reserved). None are
+    // produced today; report the first if a future pass adds one.
     pass.errors.into_iter().next().map_or(Ok(()), Err)
 }
 
@@ -77,18 +74,8 @@ struct Mono<'a> {
     struct_mono_map: HashMap<(StructId, Vec<Type>), StructId>,
     /// Same dedup for generic enums.
     enum_mono_map: HashMap<(EnumId, Vec<Type>), EnumId>,
-    /// Semantic errors found while rewriting (deref-read of a boxed value).
+    /// Semantic errors found while rewriting (reserved for future passes).
     errors: Vec<TypeCheckError>,
-    /// The function whose body is being rewritten (a clone for instantiations;
-    /// used to attribute deref errors to the call site that caused them).
-    current_func: FuncId,
-    /// `clone id` → `(original generic id, concrete type args)`, so a deref
-    /// error inside an instantiated body can name the generic function and
-    /// its element type.
-    clone_origin: HashMap<FuncId, (FuncId, Vec<Type>)>,
-    /// `(original generic id, concrete type args)` → span of the first call
-    /// that instantiated it — the user-visible rejection site.
-    instantiation_sites: HashMap<(FuncId, Vec<Type>), SpanId>,
 }
 
 impl Mono<'_> {
@@ -99,10 +86,6 @@ impl Mono<'_> {
     /// empty for non-generic functions, populated for specialized
     /// clones.
     fn substitute_and_rewrite(&mut self, fid: FuncId, subst: &[Type]) {
-        // Track the function being rewritten so a deref-read error inside an
-        // instantiated body can be attributed to the call that caused it.
-        let prev = self.current_func;
-        self.current_func = fid;
         // Substitute the signature.
         let mut params = std::mem::take(&mut self.program.functions[fid.0 as usize].params);
         for p in &mut params {
@@ -126,7 +109,6 @@ impl Mono<'_> {
         self.substitute_block(&mut body, subst);
         self.rewrite_block(&mut body, subst);
         self.program.functions[fid.0 as usize].body = body;
-        self.current_func = prev;
     }
 
     fn rewrite_block(&mut self, block: &mut Block, subst: &[Type]) {
@@ -194,7 +176,6 @@ impl Mono<'_> {
             ExprKind::Field { base, .. } => self.rewrite_expr(base, subst),
             ExprKind::Deref(operand) => {
                 self.rewrite_expr(operand, subst);
-                self.check_deref_read(expr);
             }
             ExprKind::BitNot(operand) => self.rewrite_expr(operand, subst),
             ExprKind::Neg(operand) => self.rewrite_expr(operand, subst),
@@ -291,12 +272,17 @@ impl Mono<'_> {
                     self.rewrite_expr(a, subst);
                 }
                 // `size_of[T]()` is an intrinsic, not a real function to
-                // specialize: fold it to its concrete byte count.
+                // specialize: fold it to its concrete storage stride — an
+                // inline aggregate's byte layout, else its natural width (4 for
+                // a boxed-aggregate pointer). This is what element access
+                // (`add`/`Deref`) scales by, so it must agree with how the
+                // value is stored in a container slot.
                 if self.program.functions[func.0 as usize].runtime
                     == Some(super::RuntimeAbi::SizeOf)
                 {
                     let concrete = self.substitute_type(&type_args[0], subst);
-                    expr.kind = ExprKind::Int(concrete.size_bytes() as i64);
+                    let size = inline::stored_size(self.program, &concrete);
+                    expr.kind = ExprKind::Int(size as i64);
                     expr.ty = Type::Usize;
                     return;
                 }
@@ -305,7 +291,7 @@ impl Mono<'_> {
                         .iter()
                         .map(|t| self.substitute_type(t, subst))
                         .collect();
-                    let new_fid = self.instantiate_function(*func, concrete, Some(expr.span));
+                    let new_fid = self.instantiate_function(*func, concrete);
                     *func = new_fid;
                     type_args.clear();
                 }
@@ -367,12 +353,7 @@ impl Mono<'_> {
         }
     }
 
-    fn instantiate_function(
-        &mut self,
-        orig: FuncId,
-        type_args: Vec<Type>,
-        instantiated_at: Option<SpanId>,
-    ) -> FuncId {
+    fn instantiate_function(&mut self, orig: FuncId, type_args: Vec<Type>) -> FuncId {
         let key = (orig, type_args);
         if let Some(&existing) = self.func_mono_map.get(&key) {
             return existing;
@@ -380,14 +361,6 @@ impl Mono<'_> {
         let new_fid = FuncId(self.program.functions.len() as u32);
         self.func_mono_map.insert(key.clone(), new_fid);
         let (_, type_args) = key;
-        // For deref-error attribution: remember what this clone specializes
-        // and which call site (if any) first asked for it.
-        self.clone_origin.insert(new_fid, (orig, type_args.clone()));
-        if let Some(span) = instantiated_at {
-            self.instantiation_sites
-                .entry((orig, type_args.clone()))
-                .or_insert(span);
-        }
         let mut clone = self.program.functions[orig.0 as usize].clone();
         clone.id = new_fid;
         clone.type_params = Vec::new();
@@ -396,102 +369,8 @@ impl Mono<'_> {
         new_fid
     }
 
-    /// A deref-read (`*p`) copies the pointed-to value out of memory. That is
-    /// a true copy only when the value is stored *inline*: scalars/pointers,
-    /// and small no-`Drop` aggregates. Reading a *boxed* aggregate copies the
-    /// box pointer itself — the result would alias the slot it came from, so
-    /// both the slot and the returned value drop the same box (double free /
-    /// use-after-free). `Vec.get`/`Array.get` are exactly such reads, so this
-    /// enforces the plan's "bound `get` to `T: Copy`" — precisely: inline
-    /// element types are copy-able, boxed ones are not.
-    fn check_deref_read(&mut self, expr: &Expr) {
-        let boxed = match &expr.ty {
-            // Structs/tuples are safe to read out only when stored inline.
-            Type::Struct(..) | Type::Tuple(..) => {
-                let drop_info = DropInfo::new(self.program);
-                !inline::is_inline(self.program, &drop_info, &expr.ty)
-            }
-            // Enums and arrays are always boxed (a heap pointer in the slot).
-            Type::Enum(..) | Type::Array(..) => true,
-            // Scalars, pointers, params, and exotic types: not this hazard.
-            _ => false,
-        };
-        if !boxed {
-            return;
-        }
-        let elem = self.type_display(&expr.ty);
-        // Attribute the error to the call site that instantiated the
-        // containing function (e.g. the user's `get(v, 0)`), falling back to
-        // the deref expression itself for non-generic functions.
-        let (report_span, subject) = match self.clone_origin.get(&self.current_func) {
-            Some((orig, args)) => {
-                let site = self
-                    .instantiation_sites
-                    .get(&(*orig, args.clone()))
-                    .copied();
-                let name = self
-                    .program
-                    .functions
-                    .get(orig.0 as usize)
-                    .and_then(|f| self.program.symbols.get(f.name.0 as usize))
-                    .map(|sym| self.program.interner.resolve(&sym.name).to_string())
-                    .unwrap_or_default();
-                let args_str = args
-                    .iter()
-                    .map(|t| self.type_display(t))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                (
-                    site.unwrap_or(expr.span),
-                    format!("`{name}[{args_str}]` copies a value of type `{elem}` out of a slot"),
-                )
-            }
-            None => (
-                expr.span,
-                format!("cannot copy a value of type `{elem}` out of a deref"),
-            ),
-        };
-        let (file, span) = self
-            .program
-            .spans
-            .get(report_span.0 as usize)
-            .copied()
-            .expect("missing span");
-        let msg = format!(
-            "{subject}, but `{elem}` is stored as a box pointer — the copy would alias the \
-             slot and double-free on drop. Deref-reads are only safe for scalar or inline \
-             (small, no-`Drop`) element types; for non-Copy elements use `set`/`swap`, \
-             `own` moves, or match arms"
-        );
-        self.errors.push(TypeCheckError {
-            file,
-            span,
-            kind: TypeCheckKind::Legacy(msg),
-        });
-    }
-
     /// Resolve a type to a user-facing name (structs/enums by their declared
     /// name, not their internal id). Mirrors `typecheck::type_name`.
-    fn type_display(&self, ty: &Type) -> String {
-        match ty {
-            Type::Struct(sid, _) => self
-                .program
-                .structs
-                .get(sid.0 as usize)
-                .and_then(|s| self.program.symbols.get(s.name.0 as usize))
-                .map(|sym| self.program.interner.resolve(&sym.name).to_string())
-                .unwrap_or_else(|| format!("{}", ty)),
-            Type::Enum(eid, _) => self
-                .program
-                .enums
-                .get(eid.0 as usize)
-                .and_then(|e| self.program.symbols.get(e.name.0 as usize))
-                .map(|sym| self.program.interner.resolve(&sym.name).to_string())
-                .unwrap_or_else(|| format!("{}", ty)),
-            _ => format!("{}", ty),
-        }
-    }
-
     fn instantiate_struct(&mut self, orig: StructId, type_args: Vec<Type>) -> StructId {
         let key = (orig, type_args);
         if let Some(&existing) = self.struct_mono_map.get(&key) {
@@ -575,7 +454,7 @@ impl Mono<'_> {
                     if fid.0 == u32::MAX {
                         fid
                     } else {
-                        self.instantiate_function(fid, type_args.to_vec(), None)
+                        self.instantiate_function(fid, type_args.to_vec())
                     }
                 })
                 .collect();

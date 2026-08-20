@@ -1,3 +1,4 @@
+trusted mod pointer_ops
 import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.ptr_byte_add_mut_u8

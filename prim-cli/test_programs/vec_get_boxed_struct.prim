@@ -2,10 +2,10 @@ import std.vec.new
 import std.vec.push
 import std.vec.get
 
-// 20 bytes — past the inline cutoff (MAX_INLINE_BYTES = 16), so the struct is
-// stored as a box pointer in the Vec slot. `get`'s deref-read would copy that
-// pointer: the returned value would alias the slot (double free on drop).
-// Pins the unsafe side of the boundary — rejected at mono time.
+// 20 bytes, no `impl Copy` — stored as a box pointer in the Vec slot. `get`
+// requires `T: Copy`, so `get[Boxed20]` is rejected as a bound error: the
+// deref-read would otherwise copy the box pointer and alias the slot (double
+// free on drop).
 struct Boxed20 { a: i32, b: i32, c: i32, d: i32, e: i32 }
 
 fn main() {

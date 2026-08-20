@@ -1,0 +1,15 @@
+// `Copy` duplicates a value; a type with `Drop` owns a resource, so marking
+// it `Copy` would double-free. The declaration is rejected at lowering time.
+struct S {
+    n: i32,
+}
+
+impl Drop for S {
+    fn drop(mut self) {
+    }
+}
+
+impl Copy for S {}
+
+fn main() {
+}

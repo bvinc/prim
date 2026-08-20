@@ -2,7 +2,7 @@ use super::{
     BinaryOp, Block, Expr, ExprKind, FuncId, Function, InternSymbol, PassMode, Program, SpanId,
     Stmt, StructId, SymbolId, Type,
 };
-use crate::hir::cfg::is_copy;
+use crate::hir::cfg::{CopyCtx, is_copy};
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -61,6 +61,12 @@ pub enum TypeCheckKind {
     /// A `match` arm that can never be reached (a prior arm already covers
     /// everything it would).
     UnreachablePattern,
+    /// A raw-pointer power (`*p` deref, pointer arithmetic, reinterpret, or
+    /// allocator primitive) used in a non-`trusted` module.
+    RawPointerInSafeModule {
+        module: String,
+        what: String,
+    },
     Legacy(String),
 }
 
@@ -133,6 +139,12 @@ impl std::fmt::Display for TypeCheckError {
                     "unreachable match arm: already covered by an earlier arm"
                 )
             }
+            TypeCheckKind::RawPointerInSafeModule { module, what } => write!(
+                f,
+                "{} is a raw-pointer power; module `{}` is not `trusted` \
+                 (mark it `trusted mod {}` to opt into the raw core)",
+                what, module, module
+            ),
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
     }
@@ -143,6 +155,7 @@ impl std::error::Error for TypeCheckError {}
 pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
     let mut checker = Checker::new(program);
     checker.collect_signatures()?;
+    checker.check_trusted_bodies()?;
     checker.check_functions()
 }
 
@@ -172,6 +185,10 @@ struct Checker<'a> {
     /// Functions whose runtime ABI is `Trap` (they never return); a call to
     /// one diverges, satisfying a function's return obligation.
     trap_funcs: std::collections::HashSet<FuncId>,
+    /// The `Copy` marker trait's id, resolved once by name. Used to give
+    /// `T: Copy` bounds their special semantics (satisfied by `is_copy`,
+    /// not by an impl-table entry — scalars/pointers are `Copy` with no impl).
+    copy_trait: Option<crate::hir::TraitId>,
     loop_depth: usize,
     /// Return type of the function currently being checked. Used by
     /// `Stmt::Return` to validate the value type.
@@ -194,6 +211,13 @@ enum BoundCheckMode {
 
 impl<'a> Checker<'a> {
     fn new(program: &'a mut Program) -> Self {
+        let copy_trait = program.traits.iter().find_map(|t| {
+            program
+                .symbols
+                .get(t.name.0 as usize)
+                .filter(|s| program.interner.resolve(&s.name) == "Copy")
+                .map(|_| t.id)
+        });
         Self {
             program,
             func_sigs: HashMap::new(),
@@ -204,10 +228,22 @@ impl<'a> Checker<'a> {
             enum_type_params: HashMap::new(),
             enum_variant_fields: HashMap::new(),
             trap_funcs: std::collections::HashSet::new(),
+            copy_trait,
             loop_depth: 0,
             current_ret: None,
             current_type_params: Vec::new(),
         }
+    }
+
+    /// Copy-vs-move policy for the function currently being checked: resolves
+    /// `T: Copy` bounds through `current_type_params`, so a `Copy`-bounded type
+    /// parameter is treated as `Copy` in a generic body.
+    fn copy_ctx(&self) -> CopyCtx<'_> {
+        CopyCtx::new(
+            &self.program.copy_types,
+            self.copy_trait,
+            &self.current_type_params,
+        )
     }
 
     /// If `symbol` resolves to a module-level global, return its declared
@@ -396,6 +432,45 @@ impl<'a> Checker<'a> {
         mode: BoundCheckMode,
         span: SpanId,
     ) -> Result<(), TypeCheckError> {
+        // `Copy` is a marker trait with special satisfaction rules: a type is
+        // `Copy` iff `is_copy` says so (scalars/pointers unconditionally, and
+        // structs with an explicit `impl Copy`). It is not backed by an
+        // impl-table entry (there is no `impl Copy for u8`), so it's handled
+        // before the generic impl-table lookup below.
+        if Some(bound) == self.copy_trait {
+            // A forwarded type parameter carries the same bound: allowed.
+            if let Type::Param(id) = ty {
+                if matches!(mode, BoundCheckMode::AllowForwardedParam) {
+                    let caller_bound = self
+                        .current_type_params
+                        .get(id.0 as usize)
+                        .and_then(|p| p.bound);
+                    if caller_bound == Some(bound) {
+                        return Ok(());
+                    }
+                    // A param forwarded without the bound: name the missing
+                    // bound rather than claiming the param isn't `Copy`.
+                    return Err(self.error(
+                        span,
+                        TypeCheckKind::Legacy(format!(
+                            "forwarded type parameter must carry bound {}",
+                            self.type_name(&Type::Trait(bound))
+                        )),
+                    ));
+                }
+            }
+            if is_copy(&self.program.copy_types, ty) {
+                return Ok(());
+            }
+            return Err(self.error(
+                span,
+                TypeCheckKind::Legacy(format!(
+                    "type {} does not implement trait {}",
+                    self.type_name(ty),
+                    self.type_name(&Type::Trait(bound))
+                )),
+            ));
+        }
         match ty {
             _ if crate::hir::MethodOwner::of_type(ty)
                 .is_some_and(|owner| self.program.impls.contains_key(&(bound, owner))) =>
@@ -941,6 +1016,30 @@ impl<'a> Checker<'a> {
             }
             if matches!(f.runtime, Some(crate::hir::RuntimeAbi::Trap)) {
                 self.trap_funcs.insert(f.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforce the safe/trusted boundary: a non-`trusted` module may not use
+    /// raw-pointer powers (`*p`, pointer arithmetic, reinterpret, allocator).
+    /// Runs before bodies are checked so the violation points at the same
+    /// source the rest of typecheck would otherwise process.
+    fn check_trusted_bodies(&self) -> Result<(), TypeCheckError> {
+        for func in &self.program.functions {
+            let symbol = &self.program.symbols[func.name.0 as usize];
+            let module = &self.program.modules[symbol.module.0 as usize];
+            if module.trusted {
+                continue;
+            }
+            if let Some((span, what)) = trusted_violation(self.program, &func.body) {
+                return Err(self.error(
+                    span,
+                    TypeCheckKind::RawPointerInSafeModule {
+                        module: module.name.join("::"),
+                        what,
+                    },
+                ));
             }
         }
         Ok(())
@@ -2257,7 +2356,7 @@ impl<'a> Checker<'a> {
                 // place to borrow), and the arms' `mut` bindings write back to
                 // it. Checked against the actual scrutinee type: `mut` requires
                 // a non-`Copy` value the caller owns.
-                if *mode == PassMode::Mut && is_copy(&scrut_ty) {
+                if *mode == PassMode::Mut && self.copy_ctx().is_copy(&scrut_ty) {
                     return Err(self.error(
                         *span,
                         TypeCheckKind::Legacy(format!(
@@ -2317,7 +2416,7 @@ impl<'a> Checker<'a> {
                 // documentation of that consume — it must not claim a consume
                 // the arms don't make (the move checker, drop-elaboration and
                 // codegen would otherwise disagree about the same bindings).
-                let consumes = crate::hir::cfg::match_consumes(arms);
+                let consumes = self.copy_ctx().match_consumes(arms);
                 if *mode == PassMode::Own && !consumes {
                     return Err(self.error(
                         *span,
@@ -2334,7 +2433,9 @@ impl<'a> Checker<'a> {
                 // borrow would dangle / be dropped as owned). Move with `own`.
                 if consumes {
                     for arm in arms.iter() {
-                        if let Some(binding) = pattern_first_borrow_binding(&arm.pattern) {
+                        if let Some(binding) =
+                            pattern_first_borrow_binding(self.copy_ctx(), &arm.pattern)
+                        {
                             return Err(self.error(
                                 binding.1,
                                 TypeCheckKind::Legacy(
@@ -2842,6 +2943,177 @@ impl<'a> Checker<'a> {
     }
 }
 
+/// Whether a runtime intrinsic is a raw-pointer power: raw byte I/O (which
+/// reads/writes linear memory through a pointer host-side), deref/load/store,
+/// pointer arithmetic, integer↔pointer reinterpretation, or the allocator.
+/// These are only callable from `trusted` modules.
+fn is_raw_power_runtime(abi: &crate::hir::RuntimeAbi) -> bool {
+    use crate::hir::RuntimeAbi as R;
+    matches!(
+        abi,
+        R::Write
+            | R::Read
+            | R::PathOpen
+            | R::Close
+            | R::Poll
+            | R::Null
+            | R::PtrByteAdd
+            | R::PtrByteSub
+            | R::PtrByteOffset
+            | R::PtrAddr
+            | R::At
+            | R::FromAddr
+            | R::ArrayPtr
+            | R::DropInPlace
+            | R::MemoryGrow
+            | R::MemoryCopy
+            | R::MemoryFill
+            | R::NullMutU8
+            | R::NullMutU32
+            | R::NullMutUsize
+            | R::PtrAddMutU8
+            | R::PtrAddMutU32
+            | R::PtrAddMutUsize
+            | R::PtrSubMutU8
+            | R::PtrSubMutU32
+            | R::PtrSubMutUsize
+            | R::PtrOffsetMutU8
+            | R::PtrOffsetMutU32
+            | R::PtrOffsetMutUsize
+            | R::PtrByteAddMutU8
+            | R::PtrByteAddMutU32
+            | R::PtrByteAddMutUsize
+            | R::PtrByteSubMutU8
+            | R::PtrByteSubMutU32
+            | R::PtrByteSubMutUsize
+            | R::PtrByteOffsetMutU8
+            | R::PtrByteOffsetMutU32
+            | R::PtrByteOffsetMutUsize
+            | R::PtrAddrMutU8
+            | R::PtrAddrMutU32
+            | R::PtrAddrMutUsize
+    )
+}
+
+/// First raw-pointer-power violation in a block, as `(span, description)`.
+fn trusted_violation(program: &Program, block: &Block) -> Option<(SpanId, String)> {
+    for stmt in &block.stmts {
+        if let Some(v) = trusted_violation_stmt(program, stmt) {
+            return Some(v);
+        }
+    }
+    block
+        .expr
+        .as_deref()
+        .and_then(|e| trusted_violation_expr(program, e))
+}
+
+fn trusted_violation_stmt(program: &Program, stmt: &Stmt) -> Option<(SpanId, String)> {
+    match stmt {
+        Stmt::DerefAssign { span, .. } => Some((*span, "*p = v (raw pointer store)".to_string())),
+        Stmt::Let { value, .. } => trusted_violation_expr(program, value),
+        Stmt::Assign { value, .. } => trusted_violation_expr(program, value),
+        Stmt::FieldAssign { object, value, .. } => trusted_violation_expr(program, object)
+            .or_else(|| trusted_violation_expr(program, value)),
+        Stmt::Expr(e) => trusted_violation_expr(program, e),
+        Stmt::Loop { body, .. } => trusted_violation(program, body),
+        Stmt::While {
+            condition, body, ..
+        } => {
+            trusted_violation_expr(program, condition).or_else(|| trusted_violation(program, body))
+        }
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .and_then(|e| trusted_violation_expr(program, e)),
+        Stmt::Break { .. } | Stmt::Drop { .. } => None,
+    }
+}
+
+fn trusted_violation_expr(program: &Program, expr: &Expr) -> Option<(SpanId, String)> {
+    match &expr.kind {
+        ExprKind::Deref(_) => Some((expr.span, "*p (raw pointer load)".to_string())),
+        ExprKind::Call { func, args, .. } => {
+            let callee = program.functions.get(func.0 as usize);
+            let raw = callee
+                .and_then(|f| f.runtime.as_ref())
+                .is_some_and(is_raw_power_runtime);
+            if raw {
+                return Some((expr.span, "raw-pointer intrinsic".to_string()));
+            }
+            if callee.is_some_and(|f| f.trusted_only) {
+                let name = callee
+                    .and_then(|f| program.symbols.get(f.name.0 as usize))
+                    .map(|s| program.interner.resolve(&s.name).to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                return Some((expr.span, format!("call to trusted-only function `{name}`")));
+            }
+            args.iter().find_map(|a| trusted_violation_expr(program, a))
+        }
+        ExprKind::Binary { left, right, .. } => {
+            trusted_violation_expr(program, left).or_else(|| trusted_violation_expr(program, right))
+        }
+        ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
+            trusted_violation_expr(program, base)
+        }
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => trusted_violation_expr(program, scrutinee).or_else(|| {
+            arms.iter()
+                .find_map(|a| trusted_violation_expr(program, &a.body))
+        }),
+        ExprKind::MethodCall { receiver, args, .. }
+        | ExprKind::DynCall { receiver, args, .. }
+        | ExprKind::TraitBoundCall { receiver, args, .. } => {
+            trusted_violation_expr(program, receiver)
+                .or_else(|| args.iter().find_map(|a| trusted_violation_expr(program, a)))
+        }
+        ExprKind::Coerce { value, .. } => trusted_violation_expr(program, value),
+        ExprKind::StructLit { fields, .. } => fields
+            .iter()
+            .find_map(|(_, e)| trusted_violation_expr(program, e)),
+        ExprKind::VariantLit { fields, .. } => fields
+            .iter()
+            .find_map(|(_, e)| trusted_violation_expr(program, e)),
+        ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => elems
+            .iter()
+            .find_map(|e| trusted_violation_expr(program, e)),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => trusted_violation_expr(program, condition)
+            .or_else(|| trusted_violation(program, then_branch))
+            .or_else(|| {
+                else_branch
+                    .as_ref()
+                    .and_then(|b| trusted_violation(program, b))
+            }),
+        ExprKind::Block(b) => trusted_violation(program, b),
+        ExprKind::BitNot(e) | ExprKind::Neg(e) => trusted_violation_expr(program, e),
+        // `spawn(f)` indirectly invokes `f` in a new task, so it must observe
+        // the same trusted-only boundary as a direct call: a safe module may
+        // not spawn a `trusted fn`.
+        ExprKind::Spawn { func } => {
+            let callee = program.functions.get(func.0 as usize);
+            if callee.is_some_and(|f| f.trusted_only) {
+                let name = callee
+                    .and_then(|f| program.symbols.get(f.name.0 as usize))
+                    .map(|s| program.interner.resolve(&s.name).to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                return Some((expr.span, format!("spawn of trusted-only function `{name}`")));
+            }
+            None
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Ident(_)
+        | ExprKind::ConstParam(_)
+        | ExprKind::Error => None,
+    }
+}
+
 /// Whether a match-arm pattern binds any `mut` binding. A `mut` arm binding is
 /// an exclusive borrow of the scrutinee (its writes copy back into the
 /// scrutinee's place), so it is only legal under an explicit `match mut`.
@@ -2865,6 +3137,7 @@ fn pattern_has_mut_binding(pattern: &crate::hir::Pattern) -> bool {
 /// `(symbol, span)`; used to reject borrows in consuming matches. Copy
 /// bindings are not borrows.
 fn pattern_first_borrow_binding(
+    copy_ctx: CopyCtx<'_>,
     pattern: &crate::hir::Pattern,
 ) -> Option<(crate::hir::SymbolId, SpanId)> {
     match pattern {
@@ -2874,19 +3147,19 @@ fn pattern_first_borrow_binding(
             mode,
             span,
         } => {
-            if crate::hir::cfg::effect(*mode, ty) == crate::hir::cfg::Effect::Borrow {
+            if copy_ctx.effect(*mode, ty) == crate::hir::cfg::Effect::Borrow {
                 Some((*symbol, *span))
             } else {
                 None
             }
         }
-        crate::hir::Pattern::Tuple { elems, .. } => {
-            elems.iter().find_map(pattern_first_borrow_binding)
-        }
+        crate::hir::Pattern::Tuple { elems, .. } => elems
+            .iter()
+            .find_map(|p| pattern_first_borrow_binding(copy_ctx, p)),
         crate::hir::Pattern::Variant { fields, .. }
         | crate::hir::Pattern::Struct { fields, .. } => fields
             .iter()
-            .find_map(|f| pattern_first_borrow_binding(&f.pattern)),
+            .find_map(|f| pattern_first_borrow_binding(copy_ctx, &f.pattern)),
         crate::hir::Pattern::Wildcard { .. }
         | crate::hir::Pattern::Int { .. }
         | crate::hir::Pattern::Bool { .. } => None,

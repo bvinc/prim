@@ -1,0 +1,32 @@
+import std.io.println
+import std.mem.size_of
+import std.vec.new
+import std.vec.push
+import std.vec.get
+
+// A flat `Copy` struct *larger* than the legacy 16-byte inline cutoff (5 x i32
+// = 20 bytes, 4-aligned). `impl Copy` makes it an inline value regardless of
+// size: size_of reports its byte layout, and Vec stores its elements inline at
+// that stride (a 4-byte pointer stride would alias slots).
+struct Big5 {
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+    e: i32,
+}
+
+impl Copy for Big5 {}
+
+fn main() {
+    println(size_of[Big5]())   // 20
+
+    let mut v = new[Big5]()
+    push(mut v, own Big5 { a = 1, b = 2, c = 3, d = 4, e = 5 })
+    push(mut v, own Big5 { a = 6, b = 7, c = 8, d = 9, e = 10 })
+
+    let x = get(v, 0usize)
+    let y = get(v, 1usize)
+    println(x.a + x.b + x.c + x.d + x.e)   // 15
+    println(y.a + y.b + y.c + y.d + y.e)   // 40
+}

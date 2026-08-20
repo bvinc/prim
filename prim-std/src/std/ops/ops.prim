@@ -9,3 +9,12 @@ mod ops
 trait Drop {
     fn drop(mut self);
 }
+
+// `Copy` is a marker trait: `impl Copy for T {}` declares that values of `T`
+// are duplicated on assignment/argument passing instead of moved. It has no
+// methods and no vtable — the compiler treats it specially (it validates that
+// `T` has no `Drop` impl and all its fields are `Copy`, and it makes `T`
+// usable as a `T: Copy` bound). Scalars and raw pointers are `Copy`
+// unconditionally; `String` deliberately omits `impl Copy` because it owns its
+// buffer and must drop it.
+trait Copy {}

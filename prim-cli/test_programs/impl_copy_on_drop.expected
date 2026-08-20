@@ -1,0 +1,1 @@
+ERROR: cannot implement `Copy` for `S`: it implements `Drop`
