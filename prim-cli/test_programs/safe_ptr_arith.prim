@@ -1,0 +1,17 @@
+import std.io.println
+import std.ptr.null
+import std.ptr.add
+import std.ptr.byte_add
+import std.ptr.addr
+
+// Address computation is safe: `null`, `add`, `byte_add`, and `addr` only
+// produce or inspect a pointer's numeric address. They touch no memory and
+// claim no pointee lives there, so they need no `unsafe` context. (The
+// arithmetic wraps; safe code can't deref the result anyway.)
+fn main() {
+    let a = add[u8](null[u8](), 5usize)
+    println(addr[u8](a))              // 5
+
+    let b = byte_add[u8](null[u8](), 100usize)
+    println(addr[u8](b))              // 100
+}

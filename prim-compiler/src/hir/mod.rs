@@ -158,11 +158,6 @@ pub struct ImplFn {
 pub struct Module {
     pub id: ModuleId,
     pub name: Vec<String>,
-    /// Whether this module is `trusted` (its `mod` header carries `trusted`).
-    /// Trusted modules may use raw-pointer powers: `*p` deref, pointer
-    /// arithmetic, integer↔pointer reinterpretation, and the allocator. Safe
-    /// modules may name/store pointers but not perform those operations.
-    pub trusted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -175,10 +170,9 @@ pub struct Function {
     pub body: Block,
     pub span: SpanId,
     pub runtime: Option<RuntimeAbi>,
-    /// `trusted fn`: part of the raw core; may only be called from a trusted
-    /// module. Distinct from a module-level `trusted` (which lets a module's
-    /// bodies use raw powers while still exposing safe APIs).
-    pub trusted_only: bool,
+    /// `unsafe fn`: part of the raw core; its body is an implicit `unsafe`
+    /// block, and it may only be called from an `unsafe` context.
+    pub unsafe_fn: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -720,6 +714,10 @@ pub enum ExprKind {
         else_branch: Option<Block>,
     },
     Block(Block),
+    /// `unsafe { ... }` — grants raw-pointer powers to the enclosed block.
+    /// Erased to a plain `Block` at codegen; only the unsafe-checking pass
+    /// treats it specially.
+    UnsafeBlock(Block),
     /// Placeholder for expressions that failed during lowering.
     Error,
 }

@@ -1,4 +1,4 @@
-// Raw-pointer deref is a trusted-core power. Safe modules may name and store
+// Raw-pointer deref is an unsafe power. Safe code may name and store
 // pointers (the parameter type below is fine), but may not load through them.
 fn load(ptr: *mut i32) -> i32 {
     return *ptr

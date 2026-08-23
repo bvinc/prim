@@ -329,7 +329,7 @@ impl Insert<'_> {
                     self.block(b, false, &[]);
                 }
             }
-            ExprKind::Block(b) => self.block(b, false, &[]),
+            ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => self.block(b, false, &[]),
             ExprKind::Match {
                 mode: _,
                 scrutinee,
@@ -505,7 +505,7 @@ impl Filter<'_> {
                     self.block(b);
                 }
             }
-            ExprKind::Block(b) => self.block(b),
+            ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => self.block(b),
             ExprKind::Match {
                 mode: _,
                 scrutinee,
@@ -634,7 +634,9 @@ fn collect_droppable_expr(
                 collect_droppable_bindings(copy_types, b, info, out);
             }
         }
-        ExprKind::Block(b) => collect_droppable_bindings(copy_types, b, info, out),
+        ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => {
+            collect_droppable_bindings(copy_types, b, info, out)
+        }
         ExprKind::Match { mode, arms, .. } => {
             // A consumed scrutinee transfers ownership to the arm bindings, so
             // any needs-drop binding is dropped at its arm's end.

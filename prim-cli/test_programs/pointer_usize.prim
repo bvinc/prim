@@ -1,11 +1,11 @@
-trusted mod pointer_usize
+mod pointer_usize
 import std.io.println
 import std.ptr.null_mut_usize
 import std.ptr.ptr_add_mut_usize
 import std.ptr.ptr_byte_add_mut_usize
 import std.ptr.ptr_addr_mut_usize
 
-fn main() {
+unsafe fn main() {
     let base = ptr_byte_add_mut_usize(null_mut_usize(), 32768usize)
     println(ptr_addr_mut_usize(base))                              // 32768
 

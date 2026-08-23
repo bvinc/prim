@@ -729,7 +729,7 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
                 v.visit_block(b);
             }
         }
-        ExprKind::Block(b) => v.visit_block(b),
+        ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => v.visit_block(b),
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)

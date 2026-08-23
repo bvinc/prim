@@ -1,1 +1,1 @@
-ERROR: spawn of trusted-only function `worker`
+ERROR: spawn of unsafe function `worker`

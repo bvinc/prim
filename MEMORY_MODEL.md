@@ -298,7 +298,7 @@ Semantically, `mut T` *is* copy-in/copy-out — `fn bump(c: mut Counter)` means
 `Counter -> Counter`. In-place mutation is an optimization the program cannot
 detect. This is the master property the checker exists to preserve: **every
 accepted program can be rewritten to copy-in/copy-out form with identical
-meaning.** The hypotheses are `Shared[T]`, FFI, and the small trusted core
+meaning.** The hypotheses are `Shared[T]`, FFI, and the small unsafe core
 (allocator, buffer primitive, raw `*mut T`).
 
 ## 10. Panics and destruction

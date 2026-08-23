@@ -1,0 +1,11 @@
+import std.ptr.at
+
+// `at[T]` reinterprets a raw byte region as a typed `*mut T` — it asserts
+// a `T` lives at `base + off`. That reinterpretation is an unsafe power, so
+// safe code may not call it (even though it lowers to a single address add).
+fn do_at(p: *mut u8) -> *mut usize {
+    return at[usize](p, 0usize)
+}
+
+fn main() {
+}

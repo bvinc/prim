@@ -1,4 +1,4 @@
-trusted mod ptr_mut_to_const
+mod ptr_mut_to_const
 import std.io.println
 import std.mem.alloc
 import std.ptr.byte_add
@@ -8,7 +8,7 @@ import std.string.String
 // the buffer is *mut u8. The implicit *mut -> *const coercion is what makes
 // this assignment type-check — the exact step needed to format strings in
 // Prim instead of relying on per-type runtime intrinsics.
-fn main() {
+unsafe fn main() {
     let buf = alloc(2usize)
     *buf = 72u8                          // 'H'
     *byte_add[u8](buf, 1usize) = 73u8    // 'I'

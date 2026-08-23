@@ -1,9 +1,9 @@
-trusted mod copy_pointer_reuse
+mod copy_pointer_reuse
 import std.io.println
 import std.ptr.null
 
 // Raw pointers are Copy too; copying one leaves the original live.
-fn main() {
+unsafe fn main() {
     let p = null[i32]()
     let q = p
     let r = p

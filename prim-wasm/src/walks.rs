@@ -100,7 +100,9 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_block(eb, locals);
             }
         }
-        hir::ExprKind::Block(block) => collect_locals_block(block, locals),
+        hir::ExprKind::Block(block) | hir::ExprKind::UnsafeBlock(block) => {
+            collect_locals_block(block, locals)
+        }
         hir::ExprKind::Binary { left, right, .. } => {
             collect_locals_expr(left, locals);
             collect_locals_expr(right, locals);
@@ -738,9 +740,11 @@ fn collect_scratch_types_expr(
                 );
             }
         }
-        hir::ExprKind::Block(block) => collect_scratch_types_block(
-            block, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
-        ),
+        hir::ExprKind::Block(block) | hir::ExprKind::UnsafeBlock(block) => {
+            collect_scratch_types_block(
+                block, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
+            )
+        }
         _ => {}
     }
 }
@@ -853,7 +857,9 @@ fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
                 collect_str_literals_block(eb, out);
             }
         }
-        hir::ExprKind::Block(block) => collect_str_literals_block(block, out),
+        hir::ExprKind::Block(block) | hir::ExprKind::UnsafeBlock(block) => {
+            collect_str_literals_block(block, out)
+        }
         _ => {}
     }
 }

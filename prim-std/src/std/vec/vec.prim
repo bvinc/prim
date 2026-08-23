@@ -1,4 +1,4 @@
-trusted mod vec
+mod vec
 
 import std.mem.realloc
 import std.mem.dealloc
@@ -27,15 +27,21 @@ impl Drop for Vec {
     fn drop(mut self) {
         let mut i = 0usize
         while i < self.len {
-            drop_in_place[T](add[T](self.ptr, i))
+            unsafe {
+                drop_in_place[T](add[T](self.ptr, i))
+            }
             i = i + 1usize
         }
-        dealloc[T](self.ptr)
+        unsafe {
+            dealloc[T](self.ptr)
+        }
     }
 }
 
 fn new[T]() -> Vec[T] {
-    return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
+    unsafe {
+        return Vec { ptr = null[T](), len = 0usize, cap = 0usize }
+    }
 }
 
 fn len[T](read v: Vec[T]) -> usize {
@@ -55,10 +61,14 @@ fn push[T](mut v: Vec[T], own value: T) {
                 panic("Vec.push: capacity overflow")
             }
         }
-        v.ptr = realloc[T](v.ptr, v.len, new_cap)
+        unsafe {
+            v.ptr = realloc[T](v.ptr, v.len, new_cap)
+        }
         v.cap = new_cap
     }
-    *add[T](v.ptr, v.len) = value
+    unsafe {
+        *add[T](v.ptr, v.len) = value
+    }
     v.len = v.len + 1
 }
 
@@ -71,7 +81,9 @@ fn get[T: Copy](read v: Vec[T], i: usize) -> T {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
-    return *add[T](v.ptr, i)
+    unsafe {
+        return *add[T](v.ptr, i)
+    }
 }
 
 fn set[T](mut v: Vec[T], i: usize, own value: T) {
@@ -81,8 +93,10 @@ fn set[T](mut v: Vec[T], i: usize, own value: T) {
     // Drop the displaced element before overwriting its slot, so replacing a
     // needs-drop element (e.g. Vec[String]) doesn't leak its box. A no-op for
     // scalar/inline elements with no destructor.
-    drop_in_place[T](add[T](v.ptr, i))
-    *add[T](v.ptr, i) = value
+    unsafe {
+        drop_in_place[T](add[T](v.ptr, i))
+        *add[T](v.ptr, i) = value
+    }
 }
 
 // Swap elements `i` and `j` in place, for *every* element type — including
@@ -97,12 +111,14 @@ fn swap[T](mut v: Vec[T], i: usize, j: usize) {
     if i == j {
         return
     }
-    let pi = add[T](v.ptr, i)
-    let pj = add[T](v.ptr, j)
-    let n = size_of[T]()
-    let scratch = alloc_array[T](1)
-    copy_bytes[T](scratch, pi, n)
-    copy_bytes[T](pi, pj, n)
-    copy_bytes[T](pj, scratch, n)
-    dealloc[T](scratch)
+    unsafe {
+        let pi = add[T](v.ptr, i)
+        let pj = add[T](v.ptr, j)
+        let n = size_of[T]()
+        let scratch = alloc_array[T](1)
+        copy_bytes[T](scratch, pi, n)
+        copy_bytes[T](pi, pj, n)
+        copy_bytes[T](pj, scratch, n)
+        dealloc[T](scratch)
+    }
 }

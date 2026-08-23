@@ -1,4 +1,4 @@
-trusted mod array
+mod array
 
 import std.ptr.add
 import std.option.Option
@@ -14,7 +14,7 @@ import std.option.Option
 
 // A pointer to the array's first element. No-op reinterpret at the wasm level.
 @runtime("prim_rt_array_ptr")
-fn ptr[T, const N: usize](read a: Array[T, N]) -> *mut T;
+unsafe fn ptr[T, const N: usize](read a: Array[T, N]) -> *mut T;
 
 impl Array[T, N] {
     // The number of elements (a compile-time constant).
@@ -32,8 +32,9 @@ impl Array[T, N] {
 // type parameters and cannot carry its own bound on `T`.
 fn get[T: Copy, const N: usize](read a: Array[T, N], i: usize) -> Option[T] {
     if i < N {
-        let r = *add[T](ptr(a), i)
-        return Option.Some(r)
+        unsafe {
+            return Option.Some(*add[T](ptr(a), i))
+        }
     }
     return Option.None
 }

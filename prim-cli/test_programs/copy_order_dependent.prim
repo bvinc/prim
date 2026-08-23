@@ -1,6 +1,6 @@
 // A `Copy` field's own `impl Copy` must be *validated*, not just declared,
 // before the containing struct is accepted. `Outer` is declared first; if
-// field-Copy-ness trusted the pre-validation registry, `Outer` would see
+// field-Copy-ness relied on the pre-validation registry, `Outer` would see
 // `Inner` as `Copy` before `Inner` is rejected for its non-`Copy` `String`
 // field, and an `Outer` copy would alias `Inner`'s buffer.
 struct Outer {

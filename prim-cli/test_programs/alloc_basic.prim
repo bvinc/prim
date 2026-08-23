@@ -1,4 +1,4 @@
-trusted mod alloc_basic
+mod alloc_basic
 import std.io.println
 import std.mem.alloc
 import std.mem.free
@@ -9,7 +9,7 @@ import std.ptr.addr
 // that a second allocation is disjoint from the first. The two allocations
 // are taken back-to-back (before any printing, since println itself now
 // allocates a scratch buffer).
-fn main() {
+unsafe fn main() {
     let buf = alloc(4usize)
     let other = alloc(4usize)
     let gap = addr[u8](other) - addr[u8](buf)        // 16 (minimum chunk size)

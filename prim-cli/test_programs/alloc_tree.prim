@@ -1,4 +1,4 @@
-trusted mod alloc_tree
+mod alloc_tree
 import std.io.println
 import std.mem.alloc
 import std.mem.free
@@ -10,7 +10,7 @@ import std.ptr.at
 // trees with varied sizes and same-size sibling lists. The blocks are then
 // freed in a scrambled order (exercising root/child/sibling removal) and the
 // space reallocated and checked.
-fn main() {
+unsafe fn main() {
     let k = 40usize
     let big = alloc(k * 4usize) // table of block pointers
 

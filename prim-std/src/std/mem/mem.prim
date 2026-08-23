@@ -1,4 +1,4 @@
-trusted mod mem
+mod mem
 
 // size_of[T]() — the number of bytes a value of T occupies in a container
 // slot: an aggregate's inline byte layout, else a scalar/pointer's natural
@@ -13,4 +13,4 @@ fn size_of[T]() -> usize;
 // and its public alloc/free/alloc_bytes/dealloc/alloc_array live alongside
 // this module in dlmalloc.prim.
 @runtime("prim_rt_memory_copy")
-fn copy_bytes[T](dst: *mut T, src: *mut T, n: usize);
+unsafe fn copy_bytes[T](dst: *mut T, src: *mut T, n: usize);

@@ -1,4 +1,4 @@
-trusted mod alloc_stress
+mod alloc_stress
 import std.io.println
 import std.mem.alloc
 import std.mem.free
@@ -8,7 +8,7 @@ import std.ptr.at
 // sys_alloc, writing a distinct sentinel into each block and reading it back
 // to confirm the blocks are real, distinct, and survive growth. Keeping every
 // block live (no frees) guarantees fresh memory each time.
-fn main() {
+unsafe fn main() {
     let n = 400usize
     let mut blocks = alloc(n * 4usize) // array of n block pointers (as usize)
     let mut i = 0usize
