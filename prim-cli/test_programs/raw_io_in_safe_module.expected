@@ -1,1 +1,1 @@
-ERROR: raw-pointer intrinsic
+ERROR: unsafe operation outside `unsafe` context: call to unsafe function `read_raw`

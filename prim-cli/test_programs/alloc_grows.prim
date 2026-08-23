@@ -1,11 +1,11 @@
-trusted mod alloc_grows
+mod alloc_grows
 import std.io.println
 import std.mem.alloc
 import std.ptr.byte_add
 
 // Allocating well past the initial 64 KB page must grow linear memory, and
 // the growth must not disturb earlier allocations.
-fn main() {
+unsafe fn main() {
     let first = alloc(16usize)
     *first = 11u8
 

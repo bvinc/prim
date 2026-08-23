@@ -43,7 +43,6 @@ pub struct Parser<'a> {
     current: usize,
     source: &'a str,
     module_name: Option<Ident>,
-    trusted: bool,
     interner: &'a Interner,
     diagnostics: Vec<Diagnostic>,
     /// Whether struct literals are allowed in the current expression context.
@@ -64,7 +63,6 @@ impl<'a> Parser<'a> {
             current: 0,
             source,
             module_name: None,
-            trusted: false,
             interner,
             diagnostics: Vec::new(),
             allow_struct_literal: true,
@@ -121,26 +119,15 @@ impl<'a> Parser<'a> {
         let mut imports: Vec<ImportDecl> = Vec::new();
         let mut globals: Vec<GlobalDecl> = Vec::new();
 
-        // Optional module header: [trusted] mod <identifier>. `trusted` only
-        // marks the *module* when `mod` immediately follows; `trusted fn` is a
-        // distinct item-level form handled below, so a `trusted` in front of
-        // anything else is left to the item parser (which rejects it).
-        let mut trusted = false;
-        if matches!(self.peek_kind(), Some(TokenKind::Trusted))
-            && matches!(self.peek_kind_at(1), Some(TokenKind::Mod))
-        {
-            self.advance(); // consume 'trusted'
-            trusted = true;
-        }
-        if trusted || matches!(self.peek_kind(), Some(TokenKind::Mod)) {
-            self.consume(TokenKind::Mod, "expected 'mod' after 'trusted'")?;
+        // Optional module header: `mod <identifier>`.
+        if matches!(self.peek_kind(), Some(TokenKind::Mod)) {
+            self.consume(TokenKind::Mod, "expected 'mod'")?;
             let span = self
                 .consume(TokenKind::Identifier, "Expected module name after 'mod'")?
                 .span;
             self.module_name = Some(self.ident(span));
             self.consume_optional_semicolon();
         }
-        self.trusted = trusted;
 
         // Optional imports with optional selectors
         while matches!(self.peek_kind(), Some(TokenKind::Import)) {
@@ -232,10 +219,10 @@ impl<'a> Parser<'a> {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
                 }
-                Some(TokenKind::Trusted) => {
-                    self.advance(); // consume 'trusted'
+                Some(TokenKind::Unsafe) => {
+                    self.advance(); // consume 'unsafe'
                     let mut function = self.parse_function_with_attrs(attrs)?;
-                    function.trusted = true;
+                    function.unsafe_fn = true;
                     functions.push(function);
                 }
                 Some(TokenKind::Trait) => {
@@ -264,7 +251,6 @@ impl<'a> Parser<'a> {
 
         Ok(Program {
             module_name: self.module_name,
-            trusted: self.trusted,
             imports,
             structs,
             enums,
@@ -531,6 +517,17 @@ impl<'a> Parser<'a> {
                     span,
                     ty: Type::Undetermined,
                     kind: ExprKind::Block(block),
+                })
+            }
+            Some(TokenKind::Unsafe) => {
+                // `unsafe { stmts }` — grants raw-pointer powers to its body.
+                let unsafe_span = self.advance().span; // consume 'unsafe'
+                let block = self.parse_block()?;
+                let span = unsafe_span.cover(block.span);
+                Ok(Expr {
+                    span,
+                    ty: Type::Undetermined,
+                    kind: ExprKind::UnsafeBlock(block),
                 })
             }
             Some(TokenKind::At) => self.parse_expr_attribute(),
@@ -1005,7 +1002,7 @@ impl<'a> Parser<'a> {
             body,
             runtime_binding: runtime,
             is_entry,
-            trusted: false,
+            unsafe_fn: false,
             span: full_span,
         })
     }

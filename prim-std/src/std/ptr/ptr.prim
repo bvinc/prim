@@ -1,4 +1,4 @@
-trusted mod ptr
+mod ptr
 
 import std.mem.size_of
 
@@ -16,6 +16,14 @@ import std.mem.size_of
 //   ptr_byte_offset(p, n)— signed byte offset
 //   ptr_addr(p)          — pointer as a numeric address
 //   null_*()             — null pointer of the named type
+//
+// Safety (mirrors Rust): computing or inspecting an address is SAFE; claiming
+// a pointee lives somewhere, or touching memory, is UNSAFE. All arithmetic
+// below wraps (an i32 add/sub, no in-bounds requirement), and safe code cannot
+// deref the result anyway, so `null`, `addr`, `byte_*`, `add`/`sub` are safe.
+// `at[T]` (typed reinterpretation of a byte region) and `drop_in_place[T]`
+// (runs a destructor through the pointer) stay unsafe, as do `from_addr`,
+// `copy_bytes`, and the allocator over in std.mem.
 
 // ---- *mut u8 ----
 
@@ -23,7 +31,7 @@ import std.mem.size_of
 // no-op for types with no destructor. Used by container Drop impls to drop
 // heap-stored elements.
 @runtime("prim_rt_drop_in_place")
-fn drop_in_place[T](p: *mut T);
+unsafe fn drop_in_place[T](p: *mut T);
 
 @runtime("prim_rt_null_mut_u8")
 fn null_mut_u8() -> *mut u8;
@@ -134,12 +142,12 @@ fn addr[T](p: *mut T) -> usize;
 // At runtime it is a single address add; the following deref is one load/store
 // of T's width.
 @runtime("prim_rt_at")
-fn at[T](base: *mut u8, off: usize) -> *mut T;
+unsafe fn at[T](base: *mut u8, off: usize) -> *mut T;
 
-trusted fn add[T](p: *mut T, n: usize) -> *mut T {
+fn add[T](p: *mut T, n: usize) -> *mut T {
     return byte_add[T](p, n * size_of[T]())
 }
 
-trusted fn sub[T](p: *mut T, n: usize) -> *mut T {
+fn sub[T](p: *mut T, n: usize) -> *mut T {
     return byte_sub[T](p, n * size_of[T]())
 }

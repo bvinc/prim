@@ -1,4 +1,4 @@
-trusted mod string
+mod string
 
 import std.vec.Vec
 import std.ptr.null
@@ -17,7 +17,9 @@ struct String {
 // and `free` ignores null.
 impl Drop for String {
     fn drop(mut self) {
-        free(self.data)
+        unsafe {
+            free(self.data)
+        }
     }
 }
 
@@ -26,6 +28,8 @@ impl Drop for String {
 // its `Drop` won't free the buffer the String now owns.
 fn from_vec(own bytes: Vec[u8]) -> String {
     let p = bytes.ptr
-    bytes.ptr = null[u8]()
+    unsafe {
+        bytes.ptr = null[u8]()
+    }
     return String { data = p, len = bytes.len, cap = bytes.cap }
 }

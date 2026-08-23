@@ -1,5 +1,5 @@
 // Raw byte I/O reads/writes linear memory through a pointer host-side, so it
-// is a raw-pointer power and must not be callable from a safe module.
+// is a raw-pointer power and must not be callable from safe code.
 import std.sys.read_raw
 
 fn do_read(p: *mut u8) -> usize {

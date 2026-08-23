@@ -1,6 +1,6 @@
-// The allocator is a raw-core power: freeing a pointer a safe module holds
+// The allocator is a raw-core power: freeing a pointer safe code holds
 // (e.g. a `Vec`'s `ptr` field) would double-free when the owner drops, so
-// `std.mem.free` is trusted-only.
+// `std.mem.free` is an `unsafe fn`.
 import std.mem.free
 
 fn do_free(p: *mut u8) {

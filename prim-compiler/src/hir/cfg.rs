@@ -556,7 +556,7 @@ impl Builder<'_> {
                 self.goto(join);
                 self.current = join;
             }
-            ExprKind::Block(b) => self.block(b),
+            ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => self.block(b),
             ExprKind::Binary { left, right, .. } => {
                 self.read(left);
                 self.read(right);

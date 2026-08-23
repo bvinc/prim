@@ -1,4 +1,4 @@
-trusted mod generic_ptr_size
+mod generic_ptr_size
 import std.io.println
 import std.ptr.null
 import std.ptr.add
@@ -8,7 +8,7 @@ import std.ptr.addr
 // One generic `add[T]` scales by size_of[T]() — folded to a constant per
 // instantiation. Stepping 5 elements lands at 5, 20, and 40 bytes for u8,
 // u32, and u64 respectively, proving the per-type scaling.
-fn main() {
+unsafe fn main() {
     let a = add[u8](null[u8](), 5usize)
     println(addr[u8](a))            // 5
 

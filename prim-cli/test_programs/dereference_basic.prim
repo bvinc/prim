@@ -1,7 +1,7 @@
-trusted mod dereference_basic
+mod dereference_basic
 import std.io.println
 
-fn test_deref(ptr: *const i32) -> i32 {
+unsafe fn test_deref(ptr: *const i32) -> i32 {
     return *ptr
 }
 

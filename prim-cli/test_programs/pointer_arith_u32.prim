@@ -1,4 +1,4 @@
-trusted mod pointer_arith_u32
+mod pointer_arith_u32
 import std.io.println
 import std.ptr.null_mut_u32
 import std.ptr.ptr_add_mut_u32
@@ -9,7 +9,7 @@ import std.ptr.ptr_byte_sub_mut_u32
 import std.ptr.ptr_byte_offset_mut_u32
 import std.ptr.ptr_addr_mut_u32
 
-fn main() {
+unsafe fn main() {
     // null and addr
     println(ptr_addr_mut_u32(null_mut_u32()))                    // 0
 

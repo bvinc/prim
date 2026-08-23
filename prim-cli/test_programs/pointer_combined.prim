@@ -1,4 +1,4 @@
-trusted mod pointer_combined
+mod pointer_combined
 import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.null_mut_u32
@@ -7,7 +7,7 @@ import std.ptr.ptr_add_mut_u32
 import std.ptr.ptr_byte_add_mut_u8
 import std.ptr.ptr_byte_add_mut_u32
 
-fn main() {
+unsafe fn main() {
     // Walk a u32 array, write 0..4, then read back via byte-addressed
     // u8 pointer and inspect the low byte of each entry (wasm is
     // little-endian, so byte 0 of each u32 word is its low byte).

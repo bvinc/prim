@@ -1,10 +1,10 @@
-trusted mod pointer_deref_u32
+mod pointer_deref_u32
 import std.io.println
 import std.ptr.null_mut_u32
 import std.ptr.ptr_add_mut_u32
 import std.ptr.ptr_byte_add_mut_u32
 
-fn main() {
+unsafe fn main() {
     // 32768 is 4-byte aligned and safely above static layout.
     let base = ptr_byte_add_mut_u32(null_mut_u32(), 32768usize)
 

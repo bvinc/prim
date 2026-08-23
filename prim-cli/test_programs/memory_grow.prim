@@ -1,8 +1,8 @@
-trusted mod memory_grow
+mod memory_grow
 import std.io.println
 import std.wasm.memory.grow
 
-fn main() {
+unsafe fn main() {
     // memory.grow returns the previous page count and appends `pages` pages.
     // Capture all three results up front: println itself allocates (which can
     // grow memory), so we must measure before any printing. Deltas are checked

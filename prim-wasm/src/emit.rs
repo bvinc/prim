@@ -458,7 +458,7 @@ fn scalar_candidates_expr(
                 scalar_candidates_block(b, program, policy, info, scalar_ret, out);
             }
         }
-        hir::ExprKind::Block(b) => {
+        hir::ExprKind::Block(b) | hir::ExprKind::UnsafeBlock(b) => {
             scalar_candidates_block(b, program, policy, info, scalar_ret, out)
         }
         hir::ExprKind::Match {
@@ -641,7 +641,9 @@ fn scalar_disqualify_expr(
                 scalar_disqualify_block(b, scalar_abi, ret_scalar, disq);
             }
         }
-        hir::ExprKind::Block(b) => scalar_disqualify_block(b, scalar_abi, ret_scalar, disq),
+        hir::ExprKind::Block(b) | hir::ExprKind::UnsafeBlock(b) => {
+            scalar_disqualify_block(b, scalar_abi, ret_scalar, disq)
+        }
         hir::ExprKind::Match {
             mode: _,
             scrutinee,
@@ -1214,7 +1216,7 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 ctx.exit_ctrl();
             }
         }
-        hir::ExprKind::Block(block) => {
+        hir::ExprKind::Block(block) | hir::ExprKind::UnsafeBlock(block) => {
             emit_block(f, block, ctx)?;
         }
         hir::ExprKind::Str(_) => {
@@ -2924,7 +2926,9 @@ fn collect_drop_sites_expr(expr: &hir::Expr, program: &hir::Program, out: &mut V
                 collect_drop_sites(b, program, out);
             }
         }
-        hir::ExprKind::Block(b) => collect_drop_sites(b, program, out),
+        hir::ExprKind::Block(b) | hir::ExprKind::UnsafeBlock(b) => {
+            collect_drop_sites(b, program, out)
+        }
         hir::ExprKind::Match {
             scrutinee, arms, ..
         } => {

@@ -1,4 +1,4 @@
-trusted mod io
+mod io
 
 import std.sys.write_raw
 import std.sys.read_raw
@@ -47,16 +47,18 @@ struct File {
 // `prim run --dir .`) with the given WASI open flags. `rights` requests the
 // read/write/seek/stat capabilities a regular file needs.
 fn open_flags(read path: String, oflags: i32) -> File {
-    let out = alloc(4usize)
-    let slot = at[i32](out, 0usize)
-    // -1 if path_open fails (it leaves the slot untouched), so a failed open's
-    // read/write/close are harmless EBADFs rather than a stray fd.
-    *slot = -1i32
-    let rights = 2097222u64
-    path_open_raw(3i32, 1i32, path.data, path.len, oflags, rights, rights, 0i32, slot)
-    let fd = *slot
-    free(out)
-    return File { fd = fd }
+    unsafe {
+        let out = alloc(4usize)
+        let slot = at[i32](out, 0usize)
+        // -1 if path_open fails (it leaves the slot untouched), so a failed open's
+        // read/write/close are harmless EBADFs rather than a stray fd.
+        *slot = -1i32
+        let rights = 2097222u64
+        path_open_raw(3i32, 1i32, path.data, path.len, oflags, rights, rights, 0i32, slot)
+        let fd = *slot
+        free(out)
+        return File { fd = fd }
+    }
 }
 
 impl File {
@@ -73,7 +75,9 @@ impl File {
 
 impl Drop for File {
     fn drop(mut self) {
-        close_fd(self.fd)
+        unsafe {
+            close_fd(self.fd)
+        }
     }
 }
 
@@ -82,14 +86,18 @@ impl Drop for File {
 // length to the number of bytes read (0 at end of input).
 fn write_fd(fd: i32, read bytes: Vec[u8]) -> usize {
     park_on_write(fd)
-    return write_raw(fd, bytes.ptr, bytes.len)
+    unsafe {
+        return write_raw(fd, bytes.ptr, bytes.len)
+    }
 }
 
 fn read_fd(fd: i32, mut buf: Vec[u8]) -> usize {
     park_on_read(fd)
-    let n = read_raw(fd, buf.ptr, buf.cap)
-    buf.len = n
-    return n
+    unsafe {
+        let n = read_raw(fd, buf.ptr, buf.cap)
+        buf.len = n
+        return n
+    }
 }
 
 impl Writer for Stdout {

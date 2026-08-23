@@ -1,4 +1,4 @@
-# Value Types + the Trusted Core
+# Value Types + the Unsafe Core
 
 Status: **mostly implemented** (463 tests green, fmt/clippy clean):
 
@@ -6,11 +6,14 @@ Status: **mostly implemented** (463 tests green, fmt/clippy clean):
   HIR registry, well-formedness validation (no `Drop`, all fields `Copy`,
   non-generic), and a program-aware `is_copy` threaded through ownership, cfg,
   typecheck, and codegen.
-- **The trusted core** (§1.2, §4 Phase 3's gating) — `trusted mod` marker +
-  gating of `*p` deref, pointer arithmetic, integer↔pointer reinterpretation,
-  and allocator primitives to trusted modules. The std trusted modules
-  (`vec`, `array`, `string`, `mem`, `ptr`, `fmt`, `io`, `rt`, `wasm.memory`)
-  and the raw-pointer demo test programs are marked `trusted`.
+- **The unsafe core** (§1.2, §4 Phase 3's gating) — `unsafe fn` and
+  `unsafe { ... }` blocks gating `*p` deref, integer↔pointer/typed
+  reinterpretation, and allocator/memory primitives to an explicit `unsafe`
+  context. Address computation (`null`, `addr`, wrapping pointer arithmetic)
+  is safe. The std raw-core modules (`vec`, `array`, `string`, `mem`, `ptr`,
+  `fmt`, `io`, `rt`, `wasm.memory`) expose safe wrappers and mark their raw
+  internals `unsafe fn` / `unsafe { ... }`; the raw-pointer demo test programs
+  do the same.
 - **The inline representation** (§3.2) — every concrete aggregate
   (struct/tuple/enum/array, including `Drop` types) is an inline value: one
   heap box per *owned* value, with nested aggregates stored at their field
@@ -106,7 +109,7 @@ rewrite.
 
 This reconciles the compiler with the value semantics already specified in
 [`MEMORY_MODEL.md`](MEMORY_MODEL.md) §1–§2 and §9, and adds the missing piece
-that §9 gestures at but never states: the **trusted core** where raw pointers
+that §9 gestures at but never states: the **unsafe core** where raw pointers
 live.
 
 Two coupled corrections to the current implementation:
@@ -115,9 +118,10 @@ Two coupled corrections to the current implementation:
    struct/enum/tuple/array a heap box, so "the value" is an `i32` pointer to
    that box — and that pointer leaks out of `*p` and `let b = a`, turning the
    spec's moves into observable aliasing. Compound types must be inline values.
-2. **Raw pointers are the trusted escape hatch, not a safe operation.** Deref
+2. **Raw pointers are the unsafe escape hatch, not a safe operation.** Deref
    is a raw load/store that cannot be made safe in general; it belongs inside
-   explicitly-`trusted` modules, and the safe layer never performs it.
+   an explicit `unsafe` context (`unsafe fn` / `unsafe { ... }`), and the safe
+   layer never performs it.
 
 ---
 
@@ -130,7 +134,7 @@ and `read`/`mut`/`own` as second-class binding modes. Compound types are
 **values** with a real inline layout — a struct/enum/tuple/array is its bytes,
 not a pointer to them.
 
-### 1.2 Trusted core — raw pointers
+### 1.2 Unsafe core — raw pointers
 
 Raw pointers (`*mut T`, `*const T`) are the escape hatch. They are **not safe
 and cannot be made safe**: a deref is a raw load/store whose soundness depends
@@ -138,27 +142,35 @@ on the global aliasing and lifetime state of linear memory, which a bare
 `*mut T` deliberately does not carry. Making it safe would mean reinventing the
 borrow checker — which is what `read`/`mut` already are.
 
-The boundary is therefore a **module marker**, not a proof:
+The boundary is therefore an **`unsafe` marker at the point of use**, not a
+proof:
 
-- A `trusted` module may use the raw powers: `*p` (load/store), pointer
-  arithmetic (`add`, `ptr_offset`, `ptr_byte_add`), integer↔pointer
-  reinterpretation (`at`, `from_addr`, `ptr_addr`), and the allocator.
-- Outside `trusted` modules these are compile errors. Naming, storing, and
+- An `unsafe { ... }` block (or the body of an `unsafe fn`) may use the raw
+  powers: `*p` (load/store), integer↔pointer or byte-region↔typed-pointer
+  reinterpretation (`at`, `from_addr`), `drop_in_place`, the allocator, and
+  raw byte I/O.
+- Outside an `unsafe` context these are compile errors. Naming, storing, and
   passing `*mut T` as an *opaque value* stays allowed (pointers are `Copy`), so
   a `Vec` handle can be a safe value even though its `ptr` field is `*mut T`.
-- The compiler still runs its normal checks inside trusted bodies — move
+- **Computing an address is safe**: `null`, `addr`, and the wrapping arithmetic
+  (`add`, `sub`, `offset`, `byte_add`, `byte_sub`, `byte_offset`) only produce
+  or inspect a pointer's numeric address — they touch no memory and claim no
+  pointee lives there (mirroring Rust's `ptr::null` / `addr` / `wrapping_add`,
+  all safe). Safe code cannot deref the result anyway.
+- The compiler still runs its normal checks inside `unsafe` bodies — move
   dataflow, `Drop` elaboration, bounds checks where present — so it catches
   local mistakes. But it does **not** claim to prove the raw derefs sound. The
-  trusted author carries that obligation, exactly like Rust's `unsafe`.
+  `unsafe` author carries that obligation, exactly like Rust's `unsafe`.
 
-Trusted modules (v1): `std.mem` (allocator), `std.ptr`, `std.vec`,
-`std.array`, `std.string`. Everything else is safe code.
+Raw-core modules (v1): `std.mem` (allocator), `std.ptr`, `std.vec`,
+`std.array`, `std.string`. Everything else is safe code; the raw internals of
+these modules are `unsafe fn`s and `unsafe { ... }` blocks behind safe APIs.
 
 **Why this resolves the deref-read guard.** `check_deref_read` currently
-exists because `Vec.get` (trusted code) performs a raw deref, and the compiler
+exists because `Vec.get` (unsafe code) performs a raw deref, and the compiler
 tried to vet it from outside by inspecting the element type. That is the wrong
 layer. Under this model the guard is deleted and replaced by two ordinary
-things: (a) raw deref is gated to trusted modules, and (b) `get` carries a
+things: (a) raw deref is gated to an `unsafe` context, and (b) `get` carries a
 `T: Copy` bound. `get[String]` fails to typecheck because `String` is not
 `Copy` — not because a mono-time heuristic decided the deref "looked boxed".
 
@@ -191,10 +203,10 @@ Normative. (This is `MEMORY_MODEL.md` §1–§2 made concrete for aggregates.)
 5. **Element reads copy.** `Vec.get(i)` / `Array.get(i)` copy the element out
    and leave it in place; they are allowed only for `Copy` elements, expressed
    as a `T: Copy` bound — not a representation heuristic.
-6. **Deref is a trusted-core operation, not a value operation.** Safe code has
-   no deref. Inside a trusted module, `*p` is a raw load/store; `*p = v` is a
+6. **Deref is an unsafe operation, not a value operation.** Safe code has no
+   deref. Inside an `unsafe` context, `*p` is a raw load/store; `*p = v` is a
    raw store; moving a value out of a slot (e.g. `swap`, a future `pop`) is the
-   trusted author's careful raw read, with the normal move dataflow still
+   `unsafe` author's careful raw read, with the normal move dataflow still
    tracking ownership of the *temporary* the read produces. Nothing here is a
    safe "deref-move" construct.
 7. **Drop runs exactly once**, at the owner's last use / scope end, recursively
@@ -209,13 +221,13 @@ Consequences:
 
 - `get` needs no guard: `fn get[T: Copy](read v: Vec[T], i: usize) -> T`
   returns `*add[T](v.ptr, i)`; the `Copy` bound makes the raw read a sound
-  copy, and the trusted author guarantees the bounds check.
+  copy, and the `unsafe` author guarantees the bounds check.
 - `let b = a` for `a: Point` is a move (or copy if `Point: Copy`); for `a: i32`
   a copy. Exactly `MEMORY_MODEL.md` §2.
 - The "boxed aggregate double-free" bug class ceases to exist: nothing is a
   boxed aggregate.
 - `Vec.swap` is the ordinary three-step value swap (`let tmp = *p_i; *p_i =
-  *p_j; *p_j = tmp`) written in trusted code, sound for every `T`, including
+  *p_j; *p_j = tmp`) written in unsafe code, sound for every `T`, including
   `Drop` types, because the move dataflow drops each temporary exactly once.
 
 ### Resolved: explicit `impl Copy`
@@ -307,7 +319,7 @@ and copy/move are value-level, and the pointer is §2.2-invisible**:
 
 ### 3.4 What still heap-allocates
 
-Only genuinely dynamic storage, all inside trusted modules:
+Only genuinely dynamic storage, all inside `unsafe` contexts:
 
 - `Vec`'s element buffer and `String`'s byte buffer (growable → heap).
 - `dyn Trait` data (dynamic dispatch → heap).
@@ -367,11 +379,14 @@ arrays, recursively), computed by `InlinePolicy` and shared with
   `impl_copy_inline_large` reports the 4-aligned size (20, was 24);
   `vec_drop`/`vec_drop_elements`/`vec_swap` still pass (order, not addresses).
 
-### Phase 3 — the trusted core
+### Phase 3 — the unsafe core
 
-- Add the `trusted` module marker; gate `*p`, pointer arithmetic, `at`/
-  `from_addr`/`ptr_addr`, and allocator calls behind it.
-- Move `std.vec`, `std.array`, `std.string`, `std.mem`, `std.ptr` into trusted.
+- Add `unsafe fn` and `unsafe { ... }` blocks; gate `*p` deref,
+  `at`/`from_addr` reinterpretation, `drop_in_place`, and allocator calls
+  behind an explicit `unsafe` context. Address computation (`null`, `addr`,
+  wrapping `add`/`sub`/`byte_*`) stays safe.
+- Move `std.vec`, `std.array`, `std.string`, `std.mem`, `std.ptr`'s raw
+  internals behind `unsafe fn` / `unsafe { ... }`, keeping their safe APIs.
 - **Delete `check_deref_read`** (`prim-compiler/src/hir/mono.rs`). `get`/
   `Array.get` gain a `T: Copy` bound; `get[String]` becomes an ordinary
   type error.
@@ -414,9 +429,9 @@ Update:
 
 - `MEMORY_MODEL.md` — §2 (`Copy` rule), §6 (aggregate bindings point at inline
   payload), §7 (element-read copy = `Copy` bound), §9 (representation =
-  scalarize / stack place; add the trusted-core paragraph), §12 conformance.
+  scalarize / stack place; add the unsafe-core paragraph), §12 conformance.
 - `LANGUAGE_SPEC.md` — memory-model bullets (drop "boxed element" / "inline
-  ≤16 B"; add the `trusted` module and raw-pointer gating).
+  ≤16 B"; add `unsafe fn` / `unsafe { ... }` and raw-pointer gating).
 - `KNOWN_ISSUES.md` — move the four closed items out of "bugs"/"deferred".
 
 ---
@@ -424,8 +439,8 @@ Update:
 ## 6. Non-goals
 
 - No first-class references, no returned borrows, no `&T`/`&mut T`.
-- No attempt to make raw pointer deref "safe"; the trusted/unsafe boundary is a
-  module marker, not a proof system.
+- No attempt to make raw pointer deref "safe"; the unsafe boundary is an
+  `unsafe fn` / `unsafe { ... }` marker, not a proof system.
 - No unwinding on panic (`MEMORY_MODEL.md` §10 unchanged).
 - No change to `Shared[T]`/arenas/identities (§8, still design-only).
 
@@ -437,7 +452,7 @@ Update:
 - **Stack-place management** (§3.2) is new allocation machinery; it must reuse
   the existing scratch/counter discipline and be torn down on every exit path
   (the drop-elab already walks every exit, so the place free rides on it).
-- **Trusted-module gating** must not accidentally forbid the *naming/storing*
+- **Unsafe gating** must not accidentally forbid the *naming/storing*
   of `*mut T` (needed for `Vec`'s handle) while still forbidding deref/arith/
   reinterpret — a fine line to get right in the parser/typechecker.
 - **Performance** of copying a large flat `Copy` struct by value — mitigated by

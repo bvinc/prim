@@ -1,4 +1,4 @@
-trusted mod sys
+mod sys
 
 // Low-level runtime primitives with no Prim dependencies. Higher-level modules
 // (vec's bounds checks, io's byte streams) build on these without creating
@@ -8,7 +8,7 @@ trusted mod sys
 // Both work on a pointer + length: bytes are bytes, with no String or Vec
 // knowledge. Higher layers (std.io) wrap these in `Writer`/`Reader`.
 @runtime("prim_rt_write")
-fn write_raw(fd: i32, ptr: *mut u8, len: usize) -> usize;
+unsafe fn write_raw(fd: i32, ptr: *mut u8, len: usize) -> usize;
 
 @runtime("prim_rt_trap")
 fn trap();
@@ -24,7 +24,7 @@ fn now_nanos() -> u64;
 // is ready — callers that share the scheduler should park on readability
 // first (see std.io).
 @runtime("prim_rt_read")
-fn read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize;
+unsafe fn read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize;
 
 // Open a path under a preopened directory fd (WASI path_open) and close a
 // descriptor (WASI fd_close). These are the only WASI-specific file primitives;
@@ -32,7 +32,7 @@ fn read_raw(fd: i32, ptr: *mut u8, cap: usize) -> usize;
 // `path_open_raw` writes the new descriptor to `*opened` and returns a WASI
 // errno (0 on success); `close_fd` returns an errno.
 @runtime("prim_rt_path_open")
-fn path_open_raw(
+unsafe fn path_open_raw(
     dir_fd: i32,
     dirflags: i32,
     path: *mut u8,
@@ -45,27 +45,29 @@ fn path_open_raw(
 ) -> i32;
 
 @runtime("prim_rt_close")
-fn close_fd(fd: i32) -> i32;
+unsafe fn close_fd(fd: i32) -> i32;
 
 // Wait (WASI poll_oneoff) on `nsubs` subscriptions laid out at `subs`, writing
 // fired events to `events`; returns how many fired. The scheduler builds the
 // subscription/event structs — one per parked task — so a single call blocks
 // on every waker at once (timers and fd readiness/writability).
 @runtime("prim_rt_poll")
-fn poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize;
+unsafe fn poll(subs: *mut u8, events: *mut u8, nsubs: usize) -> usize;
 
 // Print a message and abort the program. Used for unrecoverable errors
 // (failed invariants, out-of-bounds access) until Result-based handling.
 fn panic(read msg: String) {
-    write_raw(1, msg.data, msg.len)
     let nl = "\n"
-    write_raw(1, nl.data, nl.len)
-    // Signal the abort to the host runner on stderr, then trap. A wasm trap
-    // raised inside the scheduler's continuation is swallowed (the process would
-    // exit 0), so `prim run` watches for this sentinel and reports a nonzero exit
-    // code. Keep in sync with ABORT_SENTINEL in prim-cli/src/lib.rs.
     let abort = "prim-runtime-abort: nonzero exit\n"
-    write_raw(2, abort.data, abort.len)
+    unsafe {
+        write_raw(1, msg.data, msg.len)
+        write_raw(1, nl.data, nl.len)
+        // Signal the abort to the host runner on stderr, then trap. A wasm trap
+        // raised inside the scheduler's continuation is swallowed (the process would
+        // exit 0), so `prim run` watches for this sentinel and reports a nonzero exit
+        // code. Keep in sync with ABORT_SENTINEL in prim-cli/src/lib.rs.
+        write_raw(2, abort.data, abort.len)
+    }
     trap()
 }
 

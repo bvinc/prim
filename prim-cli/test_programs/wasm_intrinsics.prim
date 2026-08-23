@@ -1,4 +1,4 @@
-trusted mod wasm_intrinsics
+mod wasm_intrinsics
 import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.ptr_add_mut_u8
@@ -12,7 +12,7 @@ import std.wasm.memory.clz_u64
 import std.wasm.memory.ctz_u64
 import std.wasm.memory.popcnt_u64
 
-fn main() {
+unsafe fn main() {
     // ---- clz / ctz / popcnt ----
     println(clz_u32(1u32))                  // 31 (one bit set at LSB)
     println(clz_u32(0u32))                  // 32 (all zero)

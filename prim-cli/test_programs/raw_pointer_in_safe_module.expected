@@ -1,1 +1,1 @@
-ERROR: is a raw-pointer power
+ERROR: unsafe operation outside `unsafe` context: *p (raw pointer load)

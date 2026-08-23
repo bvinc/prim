@@ -1,4 +1,4 @@
-trusted mod fmt
+mod fmt
 
 import std.vec.Vec
 import std.vec.new
@@ -26,7 +26,9 @@ impl Formatter {
     fn write_str(mut self, read s: String) {
         let mut i = 0usize
         while i < s.len {
-            push[u8](mut self.buf, own *byte_add[u8](s.data, i))
+            unsafe {
+                push[u8](mut self.buf, own *byte_add[u8](s.data, i))
+            }
             i = i + 1usize
         }
     }

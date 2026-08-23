@@ -62,9 +62,8 @@ pub enum TypeCheckKind {
     /// everything it would).
     UnreachablePattern,
     /// A raw-pointer power (`*p` deref, pointer arithmetic, reinterpret, or
-    /// allocator primitive) used in a non-`trusted` module.
-    RawPointerInSafeModule {
-        module: String,
+    /// allocator primitive) used outside an `unsafe` context.
+    UnsafeOpInSafeContext {
         what: String,
     },
     Legacy(String),
@@ -139,11 +138,11 @@ impl std::fmt::Display for TypeCheckError {
                     "unreachable match arm: already covered by an earlier arm"
                 )
             }
-            TypeCheckKind::RawPointerInSafeModule { module, what } => write!(
+            TypeCheckKind::UnsafeOpInSafeContext { what } => write!(
                 f,
-                "{} is a raw-pointer power; module `{}` is not `trusted` \
-                 (mark it `trusted mod {}` to opt into the raw core)",
-                what, module, module
+                "unsafe operation outside `unsafe` context: {what} \
+                 (wrap it in an `unsafe {{ ... }}` block or mark the enclosing \
+                 function `unsafe fn`)"
             ),
             TypeCheckKind::Legacy(msg) => write!(f, "{msg}"),
         }
@@ -155,7 +154,7 @@ impl std::error::Error for TypeCheckError {}
 pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
     let mut checker = Checker::new(program);
     checker.collect_signatures()?;
-    checker.check_trusted_bodies()?;
+    checker.check_unsafe_bodies()?;
     checker.check_functions()
 }
 
@@ -1024,25 +1023,17 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// Enforce the safe/trusted boundary: a non-`trusted` module may not use
-    /// raw-pointer powers (`*p`, pointer arithmetic, reinterpret, allocator).
-    /// Runs before bodies are checked so the violation points at the same
-    /// source the rest of typecheck would otherwise process.
-    fn check_trusted_bodies(&self) -> Result<(), TypeCheckError> {
+    /// Enforce the safe/unsafe boundary: raw-pointer powers (`*p` deref,
+    /// pointer arithmetic, reinterpret, allocator, and calls to `unsafe fn`)
+    /// are only allowed inside an `unsafe` context — the body of an
+    /// `unsafe fn` or an `unsafe { ... }` block. Runs before bodies are
+    /// checked so the violation points at the same source the rest of
+    /// typecheck would otherwise process.
+    fn check_unsafe_bodies(&self) -> Result<(), TypeCheckError> {
         for func in &self.program.functions {
-            let symbol = &self.program.symbols[func.name.0 as usize];
-            let module = &self.program.modules[symbol.module.0 as usize];
-            if module.trusted {
-                continue;
-            }
-            if let Some((span, what)) = trusted_violation(self.program, &func.body) {
-                return Err(self.error(
-                    span,
-                    TypeCheckKind::RawPointerInSafeModule {
-                        module: module.name.join("::"),
-                        what,
-                    },
-                ));
+            let in_unsafe = func.unsafe_fn;
+            if let Some((span, what)) = unsafe_violation(self.program, &func.body, in_unsafe) {
+                return Err(self.error(span, TypeCheckKind::UnsafeOpInSafeContext { what }));
             }
         }
         Ok(())
@@ -1133,7 +1124,9 @@ impl<'a> Checker<'a> {
                 else_branch: Some(else_branch),
                 ..
             } => self.block_always_returns(then_branch) && self.block_always_returns(else_branch),
-            ExprKind::Block(block) => self.block_always_returns(block),
+            ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
+                self.block_always_returns(block)
+            }
             ExprKind::Match { arms, .. } => {
                 !arms.is_empty() && arms.iter().all(|a| self.expr_always_returns(&a.body))
             }
@@ -2242,7 +2235,7 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 let block_ty = self.check_block(block, locals)?;
                 let result_ty = block_ty.unwrap_or(Type::Unit);
                 *ty = result_ty.clone();
@@ -2850,7 +2843,7 @@ impl<'a> Checker<'a> {
                     *ty = self.finalize_type(&then_expr.ty);
                 }
             }
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 self.finalize_block(block)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
                     && let Some(expr) = &block.expr
@@ -2948,9 +2941,15 @@ impl<'a> Checker<'a> {
 }
 
 /// Whether a runtime intrinsic is a raw-pointer power: raw byte I/O (which
-/// reads/writes linear memory through a pointer host-side), deref/load/store,
-/// pointer arithmetic, integer↔pointer reinterpretation, or the allocator.
-/// These are only callable from `trusted` modules.
+/// reads/writes linear memory through a pointer host-side), integer↔pointer
+/// or byte-region↔typed-pointer *reinterpretation*, memory copy/fill/grow, or
+/// the allocator. Calling these requires an `unsafe` context.
+///
+/// Notably *not* here: `null`, `addr`, and the (wrapping) pointer arithmetic
+/// intrinsics. Computing or inspecting an address — without claiming a
+/// pointee lives there or touching memory — is safe, matching Rust's
+/// `ptr::null` / `addr` / `wrapping_add` (all safe) vs. `read`/`write`/
+/// `from_exposed_addr`/`std::alloc` (all `unsafe`).
 fn is_raw_power_runtime(abi: &crate::hir::RuntimeAbi) -> bool {
     use crate::hir::RuntimeAbi as R;
     matches!(
@@ -2960,11 +2959,6 @@ fn is_raw_power_runtime(abi: &crate::hir::RuntimeAbi) -> bool {
             | R::PathOpen
             | R::Close
             | R::Poll
-            | R::Null
-            | R::PtrByteAdd
-            | R::PtrByteSub
-            | R::PtrByteOffset
-            | R::PtrAddr
             | R::At
             | R::FromAddr
             | R::ArrayPtr
@@ -2972,142 +2966,141 @@ fn is_raw_power_runtime(abi: &crate::hir::RuntimeAbi) -> bool {
             | R::MemoryGrow
             | R::MemoryCopy
             | R::MemoryFill
-            | R::NullMutU8
-            | R::NullMutU32
-            | R::NullMutUsize
-            | R::PtrAddMutU8
-            | R::PtrAddMutU32
-            | R::PtrAddMutUsize
-            | R::PtrSubMutU8
-            | R::PtrSubMutU32
-            | R::PtrSubMutUsize
-            | R::PtrOffsetMutU8
-            | R::PtrOffsetMutU32
-            | R::PtrOffsetMutUsize
-            | R::PtrByteAddMutU8
-            | R::PtrByteAddMutU32
-            | R::PtrByteAddMutUsize
-            | R::PtrByteSubMutU8
-            | R::PtrByteSubMutU32
-            | R::PtrByteSubMutUsize
-            | R::PtrByteOffsetMutU8
-            | R::PtrByteOffsetMutU32
-            | R::PtrByteOffsetMutUsize
-            | R::PtrAddrMutU8
-            | R::PtrAddrMutU32
-            | R::PtrAddrMutUsize
     )
 }
 
 /// First raw-pointer-power violation in a block, as `(span, description)`.
-fn trusted_violation(program: &Program, block: &Block) -> Option<(SpanId, String)> {
+/// `in_unsafe` is true while scanning the body of an `unsafe fn` or an
+/// `unsafe { ... }` block; raw powers are only reported when it is false.
+fn unsafe_violation(program: &Program, block: &Block, in_unsafe: bool) -> Option<(SpanId, String)> {
     for stmt in &block.stmts {
-        if let Some(v) = trusted_violation_stmt(program, stmt) {
+        if let Some(v) = unsafe_violation_stmt(program, stmt, in_unsafe) {
             return Some(v);
         }
     }
     block
         .expr
         .as_deref()
-        .and_then(|e| trusted_violation_expr(program, e))
+        .and_then(|e| unsafe_violation_expr(program, e, in_unsafe))
 }
 
-fn trusted_violation_stmt(program: &Program, stmt: &Stmt) -> Option<(SpanId, String)> {
+fn unsafe_violation_stmt(
+    program: &Program,
+    stmt: &Stmt,
+    in_unsafe: bool,
+) -> Option<(SpanId, String)> {
     match stmt {
-        Stmt::DerefAssign { span, .. } => Some((*span, "*p = v (raw pointer store)".to_string())),
-        Stmt::Let { value, .. } => trusted_violation_expr(program, value),
-        Stmt::Assign { value, .. } => trusted_violation_expr(program, value),
-        Stmt::FieldAssign { object, value, .. } => trusted_violation_expr(program, object)
-            .or_else(|| trusted_violation_expr(program, value)),
-        Stmt::Expr(e) => trusted_violation_expr(program, e),
-        Stmt::Loop { body, .. } => trusted_violation(program, body),
+        Stmt::DerefAssign { span, .. } => {
+            if in_unsafe {
+                None
+            } else {
+                Some((*span, "*p = v (raw pointer store)".to_string()))
+            }
+        }
+        Stmt::Let { value, .. } => unsafe_violation_expr(program, value, in_unsafe),
+        Stmt::Assign { value, .. } => unsafe_violation_expr(program, value, in_unsafe),
+        Stmt::FieldAssign { object, value, .. } => {
+            unsafe_violation_expr(program, object, in_unsafe)
+                .or_else(|| unsafe_violation_expr(program, value, in_unsafe))
+        }
+        Stmt::Expr(e) => unsafe_violation_expr(program, e, in_unsafe),
+        Stmt::Loop { body, .. } => unsafe_violation(program, body, in_unsafe),
         Stmt::While {
             condition, body, ..
-        } => {
-            trusted_violation_expr(program, condition).or_else(|| trusted_violation(program, body))
-        }
+        } => unsafe_violation_expr(program, condition, in_unsafe)
+            .or_else(|| unsafe_violation(program, body, in_unsafe)),
         Stmt::Return { value, .. } => value
             .as_ref()
-            .and_then(|e| trusted_violation_expr(program, e)),
+            .and_then(|e| unsafe_violation_expr(program, e, in_unsafe)),
         Stmt::Break { .. } | Stmt::Drop { .. } => None,
     }
 }
 
-fn trusted_violation_expr(program: &Program, expr: &Expr) -> Option<(SpanId, String)> {
+fn unsafe_violation_expr(
+    program: &Program,
+    expr: &Expr,
+    in_unsafe: bool,
+) -> Option<(SpanId, String)> {
     match &expr.kind {
-        ExprKind::Deref(_) => Some((expr.span, "*p (raw pointer load)".to_string())),
+        ExprKind::Deref(_) => {
+            if in_unsafe {
+                None
+            } else {
+                Some((expr.span, "*p (raw pointer load)".to_string()))
+            }
+        }
+        ExprKind::UnsafeBlock(b) => unsafe_violation(program, b, true),
         ExprKind::Call { func, args, .. } => {
             let callee = program.functions.get(func.0 as usize);
-            let raw = callee
-                .and_then(|f| f.runtime.as_ref())
-                .is_some_and(is_raw_power_runtime);
-            if raw {
-                return Some((expr.span, "raw-pointer intrinsic".to_string()));
+            if !in_unsafe {
+                let raw = callee
+                    .and_then(|f| f.runtime.as_ref())
+                    .is_some_and(is_raw_power_runtime);
+                let unsafe_fn = callee.is_some_and(|f| f.unsafe_fn);
+                if raw || unsafe_fn {
+                    let name = callee
+                        .and_then(|f| program.symbols.get(f.name.0 as usize))
+                        .map(|s| program.interner.resolve(&s.name).to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    return Some((expr.span, format!("call to unsafe function `{name}`")));
+                }
             }
-            if callee.is_some_and(|f| f.trusted_only) {
-                let name = callee
-                    .and_then(|f| program.symbols.get(f.name.0 as usize))
-                    .map(|s| program.interner.resolve(&s.name).to_string())
-                    .unwrap_or_else(|| "?".to_string());
-                return Some((expr.span, format!("call to trusted-only function `{name}`")));
-            }
-            args.iter().find_map(|a| trusted_violation_expr(program, a))
+            args.iter()
+                .find_map(|a| unsafe_violation_expr(program, a, in_unsafe))
         }
-        ExprKind::Binary { left, right, .. } => {
-            trusted_violation_expr(program, left).or_else(|| trusted_violation_expr(program, right))
-        }
+        ExprKind::Binary { left, right, .. } => unsafe_violation_expr(program, left, in_unsafe)
+            .or_else(|| unsafe_violation_expr(program, right, in_unsafe)),
         ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
-            trusted_violation_expr(program, base)
+            unsafe_violation_expr(program, base, in_unsafe)
         }
         ExprKind::Match {
             scrutinee, arms, ..
-        } => trusted_violation_expr(program, scrutinee).or_else(|| {
+        } => unsafe_violation_expr(program, scrutinee, in_unsafe).or_else(|| {
             arms.iter()
-                .find_map(|a| trusted_violation_expr(program, &a.body))
+                .find_map(|a| unsafe_violation_expr(program, &a.body, in_unsafe))
         }),
         ExprKind::MethodCall { receiver, args, .. }
         | ExprKind::DynCall { receiver, args, .. }
         | ExprKind::TraitBoundCall { receiver, args, .. } => {
-            trusted_violation_expr(program, receiver)
-                .or_else(|| args.iter().find_map(|a| trusted_violation_expr(program, a)))
+            unsafe_violation_expr(program, receiver, in_unsafe).or_else(|| {
+                args.iter()
+                    .find_map(|a| unsafe_violation_expr(program, a, in_unsafe))
+            })
         }
-        ExprKind::Coerce { value, .. } => trusted_violation_expr(program, value),
+        ExprKind::Coerce { value, .. } => unsafe_violation_expr(program, value, in_unsafe),
         ExprKind::StructLit { fields, .. } => fields
             .iter()
-            .find_map(|(_, e)| trusted_violation_expr(program, e)),
+            .find_map(|(_, e)| unsafe_violation_expr(program, e, in_unsafe)),
         ExprKind::VariantLit { fields, .. } => fields
             .iter()
-            .find_map(|(_, e)| trusted_violation_expr(program, e)),
+            .find_map(|(_, e)| unsafe_violation_expr(program, e, in_unsafe)),
         ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => elems
             .iter()
-            .find_map(|e| trusted_violation_expr(program, e)),
+            .find_map(|e| unsafe_violation_expr(program, e, in_unsafe)),
         ExprKind::If {
             condition,
             then_branch,
             else_branch,
-        } => trusted_violation_expr(program, condition)
-            .or_else(|| trusted_violation(program, then_branch))
+        } => unsafe_violation_expr(program, condition, in_unsafe)
+            .or_else(|| unsafe_violation(program, then_branch, in_unsafe))
             .or_else(|| {
                 else_branch
                     .as_ref()
-                    .and_then(|b| trusted_violation(program, b))
+                    .and_then(|b| unsafe_violation(program, b, in_unsafe))
             }),
-        ExprKind::Block(b) => trusted_violation(program, b),
-        ExprKind::BitNot(e) | ExprKind::Neg(e) => trusted_violation_expr(program, e),
+        ExprKind::Block(b) => unsafe_violation(program, b, in_unsafe),
+        ExprKind::BitNot(e) | ExprKind::Neg(e) => unsafe_violation_expr(program, e, in_unsafe),
         // `spawn(f)` indirectly invokes `f` in a new task, so it must observe
-        // the same trusted-only boundary as a direct call: a safe module may
-        // not spawn a `trusted fn`.
+        // the same unsafe boundary as a direct call: safe code may not spawn
+        // an `unsafe fn`.
         ExprKind::Spawn { func } => {
             let callee = program.functions.get(func.0 as usize);
-            if callee.is_some_and(|f| f.trusted_only) {
+            if !in_unsafe && callee.is_some_and(|f| f.unsafe_fn) {
                 let name = callee
                     .and_then(|f| program.symbols.get(f.name.0 as usize))
                     .map(|s| program.interner.resolve(&s.name).to_string())
                     .unwrap_or_else(|| "?".to_string());
-                return Some((
-                    expr.span,
-                    format!("spawn of trusted-only function `{name}`"),
-                ));
+                return Some((expr.span, format!("spawn of unsafe function `{name}`")));
             }
             None
         }

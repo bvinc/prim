@@ -1,1 +1,1 @@
-ERROR: call to trusted-only function `free`
+ERROR: unsafe operation outside `unsafe` context: call to unsafe function `free`

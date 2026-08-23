@@ -1,4 +1,4 @@
-trusted mod generic_ptr_add
+mod generic_ptr_add
 import std.io.println
 import std.ptr.null_mut_u8
 import std.ptr.ptr_byte_add_mut_u8
@@ -11,7 +11,7 @@ fn ptr_id[T](p: *mut T) -> *mut T {
     return p
 }
 
-fn main() {
+unsafe fn main() {
     let p = ptr_byte_add_mut_u8(null_mut_u8(), 100usize)
     let q = ptr_id(p)
     println(ptr_addr_mut_u8(q))

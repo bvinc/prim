@@ -1,4 +1,4 @@
-trusted mod ptr_at
+mod ptr_at
 import std.io.println
 import std.mem.alloc
 import std.ptr.at
@@ -7,7 +7,7 @@ import std.ptr.at
 // byte, and a stored pointer, each at a chosen offset. The pointer is written
 // into memory and read back as a chasable *mut u8 (the dlmalloc fd/bk pattern)
 // with no reinterpret cast and no int->ptr fabrication.
-fn main() {
+unsafe fn main() {
     let buf = alloc(64usize)
 
     *at[usize](buf, 0usize) = 1000usize

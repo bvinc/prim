@@ -1,4 +1,4 @@
-trusted mod alloc_reuse
+mod alloc_reuse
 import std.io.println
 import std.mem.alloc
 import std.mem.free
@@ -7,7 +7,7 @@ import std.ptr.addr
 // Exercise the dlmalloc allocator's reuse paths. All allocation happens before
 // any println (println allocates a scratch buffer), so the heap state is
 // deterministic. Each check confirms a freed region is handed back out.
-fn main() {
+unsafe fn main() {
     // Small reuse via smallbins. The guard keeps `a` away from the top chunk
     // so freeing it lands in a bin rather than coalescing into the wilderness.
     let a = alloc(32usize)

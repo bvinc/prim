@@ -1,11 +1,11 @@
-trusted mod alloc_array_overflow_aborts
+mod alloc_array_overflow_aborts
 import std.io.println
 import std.mem.alloc_array
 
 // alloc_array's `count * size_of[T]()` multiply must not wrap: with 2^31
 // u64s, count * 8 overflows 32 bits to 0, which would silently become a tiny
 // allocation the caller then overruns. The overflow check aborts instead.
-fn main() {
+unsafe fn main() {
     let p = alloc_array[u64](0x8000_0000usize)
     println(0i32) // not reached
 }

@@ -1,4 +1,4 @@
-trusted mod memory
+mod memory
 
 // Direct wasm intrinsics. Do not call from normal code — these are the
 // substrate that the allocator and higher-level memory ops build on.
@@ -19,16 +19,16 @@ trusted mod memory
 // pages are no longer contiguous with its heap and aborts the program rather
 // than silently extending its top chunk over your pages.
 @runtime("prim_rt_memory_grow")
-fn grow(pages: usize) -> isize;
+unsafe fn grow(pages: usize) -> isize;
 
 // Copy `n` bytes from `src` to `dst`. Behaves like memmove (handles
 // overlap). The wasm runtime typically inlines this to native memcpy.
 @runtime("prim_rt_memory_copy")
-fn copy(dst: *mut u8, src: *mut u8, n: usize);
+unsafe fn copy(dst: *mut u8, src: *mut u8, n: usize);
 
 // Fill `n` bytes at `dst` with the byte value `val`.
 @runtime("prim_rt_memory_fill")
-fn fill(dst: *mut u8, val: u8, n: usize);
+unsafe fn fill(dst: *mut u8, val: u8, n: usize);
 
 // Count leading zeros — number of zero bits at the most-significant end.
 // Returns 32/64 if `x` is 0.

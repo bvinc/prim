@@ -1,4 +1,4 @@
-trusted mod chunk_helpers
+mod chunk_helpers
 import std.io.println
 import std.mem.alloc
 import std.mem.set_chunk_head
@@ -16,7 +16,7 @@ import std.ptr.addr
 // Build two adjacent chunks by hand in a raw buffer and check that the chunk
 // vocabulary reads the header back correctly. The first chunk is in-use, size
 // 32, with the previous chunk marked in-use (PINUSE | CINUSE = 3).
-fn main() {
+unsafe fn main() {
     let buf = alloc(128usize)
 
     set_chunk_head(buf, 32usize | 3usize)

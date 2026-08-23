@@ -484,11 +484,9 @@ impl<'a> LoweringContext<'a> {
         // here.
         for module in &self.program.modules {
             let module_id = module.id;
-            let trusted = module.files.iter().any(|f| f.ast.trusted);
             self.modules.push(Module {
                 id: module_id,
                 name: module.name.clone(),
-                trusted,
             });
 
             for file in &module.files {
@@ -571,7 +569,7 @@ impl<'a> LoweringContext<'a> {
                         },
                         span,
                         runtime,
-                        trusted_only: f.trusted,
+                        unsafe_fn: f.unsafe_fn,
                     });
                 }
                 for g in &file.ast.globals {
@@ -711,7 +709,7 @@ impl<'a> LoweringContext<'a> {
                             },
                             span,
                             runtime,
-                            trusted_only: false,
+                            unsafe_fn: false,
                         });
                         // Each method's FuncId, keyed by its unique declaration
                         // span — survives same-name clashes across traits.
@@ -1671,7 +1669,7 @@ impl<'a> LoweringContext<'a> {
                 body: hir::Block { stmts, expr: None },
                 span,
                 runtime: None,
-                trusted_only: false,
+                unsafe_fn: false,
             });
             self.impls
                 .insert((debug_tid, hir::MethodOwner::Struct(sid)), vec![fid]);
@@ -2739,6 +2737,16 @@ impl<'a> LoweringContext<'a> {
             ),
             ExprKind::Block(block) => (
                 hir::ExprKind::Block(self.lower_block(block, module, file_id, ast, module_scope)),
+                self.lower_type(&expr.ty, module_scope),
+            ),
+            ExprKind::UnsafeBlock(block) => (
+                hir::ExprKind::UnsafeBlock(self.lower_block(
+                    block,
+                    module,
+                    file_id,
+                    ast,
+                    module_scope,
+                )),
                 self.lower_type(&expr.ty, module_scope),
             ),
             ExprKind::Dbg(inner) => {

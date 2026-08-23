@@ -1,6 +1,6 @@
-// A stray `trusted` not followed by `mod` (or a `trusted fn`) is invalid — it
-// must not silently mark the whole module trusted.
-trusted
+// A stray `unsafe` not followed by `fn` is invalid — it must not silently
+// mark the whole module unsafe (module-level trust is gone).
+unsafe
 struct S {
     x: i32,
 }

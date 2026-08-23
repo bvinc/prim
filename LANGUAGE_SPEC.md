@@ -18,7 +18,7 @@ import         → "import" import_path ( "." IDENTIFIER | ".{" IDENTIFIER ( ","
 import_path    → IDENTIFIER ( "." IDENTIFIER )*
 
 program        → function*                    # single-file mode
-function       → "fn" IDENTIFIER "(" parameters? ")" ( "->" type )? block
+function       → "unsafe"? "fn" IDENTIFIER "(" parameters? ")" ( "->" type )? block
 parameters     → parameter ( "," parameter )*
 parameter      → IDENTIFIER ":" type
 block          → "{" statement* "}"
@@ -47,7 +47,7 @@ addition       → multiplication ( ( "+" | "-" ) multiplication )*
 multiplication → unary ( ( "*" | "/" ) unary )*
 unary          → ( "-" ) unary | call
 call           → primary ( "(" arguments? ")" )*
-primary        → INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL | IDENTIFIER | "(" expression ")"
+primary        → INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | CHAR_LITERAL | BOOL_LITERAL | IDENTIFIER | "(" expression ")" | "unsafe" block
 arguments      → expression ( "," expression )*
 ```
 
@@ -209,9 +209,20 @@ destructors, representation, and panics — is in
 [`MEMORY_MODEL.md`](MEMORY_MODEL.md). What follows is the ownership and
 reference surface as it appears in the language.
 
-Pointers `*const T` and `*mut T` are raw, unmanaged memory (the trusted core's
+Pointers `*const T` and `*mut T` are raw, unmanaged memory (the unsafe core's
 escape hatch), with explicit dereference — they are not the safe reference
 mechanism; `read`/`mut` are.
+
+Raw-pointer powers — `*p` (load/store), integer↔pointer or byte-region↔typed-
+pointer reinterpretation (`at`, `from_addr`), `drop_in_place`, and the
+allocator — are available only inside an `unsafe` context: the body of an
+`unsafe fn`, or an `unsafe { ... }` block. Calling an `unsafe fn` likewise
+requires an `unsafe` context. Naming, storing, and passing pointers as opaque
+values is always allowed, as is computing or inspecting an address (`null`,
+`addr`, and the wrapping `add`/`sub`/`byte_*` arithmetic) — mirroring Rust,
+where only memory access and pointer fabrication are `unsafe`. `unsafe` does
+not disable the normal checks (move dataflow, `Drop`, bounds); it marks where
+the author upholds the raw-memory invariants the compiler cannot prove.
 
 ### Ownership and Borrowing (second-class references)
 
