@@ -40,9 +40,9 @@ and any later use is a compile error. A move is a fact about names, not an
 operation on values — it needs no trait and no hook, and the compiler may
 implement it as a pointer hand-off rather than a copy.
 
-**Copy is structural, not declared.** A value whose type is a *scalar* or a
-*raw pointer* is copyable: it is duplicated on assignment and argument passing,
-and the source stays live.
+**Copy is opt-in and explicit.** A scalar or a raw pointer is copyable
+unconditionally: it is duplicated on assignment and argument passing, and the
+source stays live.
 
 ```prim
 let a = 1i32
@@ -50,24 +50,34 @@ let b = a
 println(a)          // fine: i32 is copyable, `a` is still live
 ```
 
-There is no `Copy` trait to implement and no `clone`. Every aggregate — struct,
-enum, string, vector — moves by default. The shallow/deep split of pointer
-languages is an artifact Prim doesn't have: there is one copy rule (scalars and
-pointers copy, aggregates move), and a type that needs a deep duplicate writes
-an ordinary named method that does not claim to be invisible.
+An aggregate (struct, enum, string, vector, array) is copyable only when it
+declares `impl Copy for T {}` — an explicit statement that the type is safe to
+duplicate bitwise. The compiler validates the declaration: `T` has no `Drop`
+impl and every field/element of `T` is itself `Copy`. Scalars and raw pointers
+are the base case and need no declaration. A type that needs a deep duplicate
+writes an ordinary named method that does not claim to be invisible.
+
+Explicitness matters because "all fields `Copy`" does not imply the type is
+`Copy` — ownership can hide behind a `Copy` field. `String` is the canonical
+example: `*mut u8` and `usize` are both `Copy`, so an automatic structural rule
+would mark `String` `Copy` — wrong, because `String` owns the buffer behind
+`data` and must run `Drop` to free it. `String` therefore simply does not write
+`impl Copy`. `Point`, `Pair`, `Counter`, and any plain-data record become `Copy`
+by writing `impl Copy for Point {}`; `String`, `Vec`, and `dyn Trait` never do.
 
 **Element reads copy.** `Vec.get(i)` and `Array.get(i)` copy the element out of
-the container and leave it in place — the sanctioned way to read an element.
-They are allowed only for *copyable* elements: scalars, pointers, and small
-inline aggregates (≤ 16 bytes, no `Drop`, non-recursive). Reading a *boxed*
-element — a `Drop`-implementing, large, or recursive struct, or any enum — is
-rejected at monomorphization, because the copy would alias the stored box and
-double-free on drop. Non-copyable elements are accessed by move (`own`), by the
-whole-structure methods (`set`, `swap`), or through a `match` binding (§6).
+the container and leave it in place. They are allowed only for `Copy` elements,
+expressed as a `T: Copy` bound on the method
+(`fn get[T: Copy](read v: Vec[T], i: usize) -> T`), not as a representation
+heuristic. Reading a non-`Copy` element — a `Drop`-implementing struct, an enum,
+`String`, `Vec`, or `dyn Trait` — is a plain type error at the call site
+(`type S does not implement trait Copy`), because the copy would alias the
+stored value and double-free on drop. Non-copyable elements are accessed by move
+(`own`), whole-structure methods (`set`, `swap`), or a `match` binding (§6).
 
-**Nothing is ever silently duplicated.** Copyability is a fixed structural fact
-of a handful of scalar and pointer types. An aggregate is never copied by
-accident, and a boxed element is never copied at all.
+**Nothing is ever silently duplicated.** Copyability is the explicit `impl Copy`
+declaration for aggregates, plus the unconditional scalar/pointer rule. An
+aggregate is never copied by accident.
 
 **Destructors take owned `self`.** `Drop` is an ordinary consuming function:
 whatever it does not move out is destroyed automatically.
@@ -79,9 +89,9 @@ impl Drop for Vec {
 ```
 
 Drop is elaborated per type: a composite holding a `Drop` field runs that
-field's destructor (recursively, through structs, tuples, and arrays) before
-freeing its own box. See §10 and the conformance notes in §12 for the enum
-follow-on.
+field's destructor (recursively, through structs, tuples, arrays, and the
+active variant's payload of an enum) before the drop site reclaims the value's
+place. See §10.
 
 ## 3. Binding modes: `read`, `mut`, `own`
 
@@ -287,19 +297,80 @@ The guidance when the checker objects stands: **copy the extracted thing** — t
 element, not the container — and continue. *Make it run with copies; make it
 fast with proofs.*
 
-## 9. Representation
+## 9. Representation and the unsafe core
 
-Because programs cannot observe representation, the compiler owns it. `read`
-parameters travel in registers or by pointer, whichever wins; `mut T` is
-copy-in/copy-out or a pointer, whichever wins; large owned parameters pass by
-pointer because moves are semantic.
+Because programs cannot observe representation, the compiler owns it. A wasm
+local holds one scalar (`i32`/`i64`/`f32`/`f64`), never a multi-word struct, so
+value semantics need one of two local representations, chosen per type:
+
+- **Flat `Copy` aggregates — scalarized.** A *flat* type — every field a
+  scalar/pointer, no `Drop`, no recursion — is represented as its leaf fields,
+  one wasm value each. A struct/tuple literal of a flat type is emitted as
+  field values on the stack (no allocation); a copy copies each leaf, and a
+  move is the same with the source dead (no runtime cost). `Point`, `Pair`,
+  `Counter`, and a 20-byte flat record are all zero-allocation values.
+- **Every other aggregate — a *place*, not a box.** A value that is not flat
+  (`Drop`, enum, array, recursion, or too large) lives in a *place*: a region
+  of linear-memory scratch, with a wasm local holding a pointer to it. What
+  makes it a value type rather than a heap box is that ownership, copy, and
+  move are value-level and the pointer is invisible (§1): a place has exactly
+  one owner, `let b = a` *moves* (bytes copy into `b`'s place and `a`'s place
+  dies, or `b` takes `a`'s place — never two live owners), copy is allowed only
+  for `Copy` types, and drop runs the destructor on the place then reclaims it.
+  Concrete aggregates — struct, tuple, enum, array, including `Drop` types — are
+  inline values: nested aggregates sit at their field offset (not behind a
+  per-field sub-box), enums are fixed-size tagged unions (a discriminant plus
+  the max-variant payload, so `Option[i32]`/`Result` allocate nothing), and
+  arrays are a fixed inline run of elements.
+
+Calls follow the same split: flat `Copy` params/returns use the scalar ABI;
+`read`/`mut` params pass a pointer to the caller's place (with `mut` writing
+through it); large/owned non-`Copy` params pass a pointer to the source place as
+the move — no deep copy, no heap box. `read`/`mut` match bindings point into the
+inline tagged-union payload.
+
+Only genuinely dynamic storage heap-allocates: `Vec`'s element buffer, `String`'s
+byte buffer, and `dyn Trait` data (its `{vtable, data_ptr}` indirection is
+intrinsic to dynamic dispatch). Everything else — `Option`/`Result`/plain
+structs/tuples/enums/arrays — is an inline value.
 
 Semantically, `mut T` *is* copy-in/copy-out — `fn bump(c: mut Counter)` means
 `Counter -> Counter`. In-place mutation is an optimization the program cannot
 detect. This is the master property the checker exists to preserve: **every
 accepted program can be rewritten to copy-in/copy-out form with identical
-meaning.** The hypotheses are `Shared[T]`, FFI, and the small unsafe core
-(allocator, buffer primitive, raw `*mut T`).
+meaning.** The hypotheses are `Shared[T]`, FFI, and the unsafe core below.
+
+### 9.1 The unsafe core: raw pointers
+
+Raw pointers (`*mut T`, `*const T`) are the escape hatch. They are **not safe
+and cannot be made safe**: a deref is a raw load/store whose soundness depends
+on the global aliasing and lifetime state of linear memory, which a bare
+`*mut T` deliberately does not carry. Making it safe would mean reinventing the
+borrow checker — which is what `read`/`mut` already are.
+
+The boundary is therefore an **`unsafe` marker at the point of use**, not a
+proof:
+
+- An `unsafe { ... }` block, or the body of an `unsafe fn`, may use the raw
+  powers: `*p` (load/store), integer↔pointer or byte-region↔typed-pointer
+  reinterpretation (`at`, `from_addr`), `drop_in_place`, the allocator, and raw
+  byte I/O. Calling an `unsafe fn` likewise requires an `unsafe` context.
+- Outside an `unsafe` context these are compile errors. Naming, storing, and
+  passing `*mut T` as an *opaque value* stays allowed (pointers are `Copy`), so
+  a `Vec` handle can be a safe value even though its `ptr` field is `*mut T`.
+- **Computing an address is safe**: `null`, `addr`, and the wrapping arithmetic
+  (`add`, `sub`, `offset`, `byte_add`, `byte_sub`, `byte_offset`) only produce
+  or inspect a pointer's numeric address — they touch no memory and claim no
+  pointee lives there (mirroring Rust's `ptr::null` / `addr` / `wrapping_add`).
+  Safe code cannot deref the result anyway.
+- The compiler still runs its normal checks inside `unsafe` bodies — move
+  dataflow, `Drop` elaboration, bounds checks where present — so it catches
+  local mistakes. But it does **not** claim to prove the raw derefs sound; the
+  `unsafe` author carries that obligation, exactly like Rust's `unsafe`.
+
+The raw-core std modules (`std.mem`, `std.ptr`, `std.vec`, `std.array`,
+`std.string`) mark their raw internals `unsafe fn` / `unsafe { ... }` behind
+safe APIs. Everything else is safe code.
 
 ## 10. Panics and destruction
 
@@ -356,10 +427,12 @@ read-default parameters and `self` receivers; call-site `mut`/`own` marks;
 `let` moves with `let mut`/`let own` bindings; match-arm `read`/`mut`/`own`
 bindings with inferred consumption and `match mut` write-back; the move
 dataflow plus the five checker rules (§5); `Drop`/RAII with recursive field
-drops over structs, tuples, and arrays; copyability as structural scalars +
-pointers with monomorphization-enforced copyable element reads; a dlmalloc
-port in `std.mem` that aborts on OOM instead of returning null (allocation
-failure is fatal, §10) and verifies memory-grow contiguity; green threads
+drops over structs, tuples, arrays, and enum payloads; explicit `impl Copy`
+(validated opt-in) with `T: Copy`-bounded element reads; inline aggregate
+values (one place per owned value) with an explicit `unsafe` core gating raw
+pointers; a dlmalloc port in `std.mem` that aborts on OOM instead of returning
+null (allocation failure is fatal, §10) and verifies memory-grow contiguity;
+green threads
 (`spawn`, cooperative `yield`, a multi-task scheduler with blocking
 park/poll).
 
@@ -372,8 +445,6 @@ Not yet implemented, in no particular order (details and current bugs in
   function values.
 - **Identities** (§8) — arenas with generation-checked ids, `Shared[T]`,
   splitters. Design only.
-- **Enum recursive drop** (§2, §10) — a needs-drop enum frees its own box but
-  does not yet drop the active variant's payload (sound, but leaky).
 - **Borrow-to-trait-view coercion** (§5) — passing a `read T` where a
   `read Trait` parameter is expected (with `T: Trait`) is intended but not yet
   accepted: the checker currently rejects *every* coercion of a borrow,
