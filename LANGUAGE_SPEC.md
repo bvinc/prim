@@ -258,9 +258,9 @@ collection; memory safety enforced entirely at compile time):
   returning it, moving out of it, or boxing it into a trait object is rejected
   by the move checker. Modes are erased before code generation.
 - Access is copies plus whole-structure methods: `Vec.get`/`Array.get` return
-  a copy (enforced copy-able — scalar, pointer, or inline aggregate; a boxed
-  element would alias the slot and double-free on drop, so it is rejected at
-  monomorphization), `Vec.set`/`Vec.push`/`Vec.swap` mutate in place, and
+  a copy, enforced via a `T: Copy` bound on the method; reading a non-`Copy`
+  element (which would alias the slot and double-free on drop) is a type error
+  at the call site. `Vec.set`/`Vec.push`/`Vec.swap` mutate in place, and
   match arms read enum payloads via `read`/`mut` bindings.
 
 ## Modules
