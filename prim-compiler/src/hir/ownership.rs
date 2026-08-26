@@ -110,11 +110,32 @@ pub fn check(program: &Program) -> Result<(), MoveError> {
         checker.check_borrows(func);
         errors.append(&mut checker.errors);
     }
-    // Report deterministically: earliest span first.
-    errors.sort_by_key(|e| (e.span.start(), e.span.end()));
+    // Report deterministically: earliest span first. `CoerceOfBorrow` is a more
+    // specific diagnostic than the dataflow's `BorrowEscapes` (both can fire at
+    // the same span for `fn f(read s: S) -> Trait { return s }`), so it is
+    // ranked first; otherwise the stable sort keeps the passes' insertion order
+    // (so `MoveInLoop` still wins over a same-span `ModeMismatch`).
+    errors.sort_by(|a, b| {
+        (a.span.start(), a.span.end(), error_priority(&a.kind)).cmp(&(
+            b.span.start(),
+            b.span.end(),
+            error_priority(&b.kind),
+        ))
+    });
     match errors.into_iter().next() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+/// Rank a move error for reporting when two errors share a span. Lower ranks
+/// are reported first. Only `CoerceOfBorrow` is special-cased (it should
+/// supersede the dataflow's whole-value `BorrowEscapes`); everything else ties
+/// so the stable sort preserves the passes' insertion order.
+fn error_priority(kind: &MoveErrorKind) -> u8 {
+    match kind {
+        MoveErrorKind::CoerceOfBorrow => 0,
+        _ => 1,
     }
 }
 

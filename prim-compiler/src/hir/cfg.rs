@@ -476,6 +476,15 @@ impl Builder<'_> {
     /// An expression in move position: a tracked place is moved out; anything
     /// else (a temporary, or a `Copy` value) is just read for its sub-effects.
     fn moved(&mut self, expr: &Expr) {
+        // A trait-object coercion in move position (`let g: Trait = s`, a
+        // return/assignment, an `own` argument, a struct-literal field) takes
+        // ownership of the boxed value, so the source is moved out. A `Copy`
+        // source falls through `moved` to a plain read (codegen deep-copies its
+        // box) and stays live.
+        if let ExprKind::Coerce { value, .. } = &expr.kind {
+            self.moved(value);
+            return;
+        }
         if !self.copy_ctx.is_copy(&expr.ty)
             && let Some(root) = root_symbol(expr)
         {

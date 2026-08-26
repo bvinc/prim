@@ -6,17 +6,13 @@ later feature).
 
 ## Bugs
 
-- **Trait-object coercion of an *owned* value is an untracked borrow.**
-  `let g: Trait = s` (`Coerce`) builds a fat pointer `{vtable, data_addr}` that
-  aliases `s`'s box. Storing a *borrow* in a trait object (`let g: Trait = x`
-  for a `read`/`mut` parameter or match binding) is now rejected
-  (`CoerceOfBorrow` — a second-class borrow cannot outlive the call/arm that
-  holds it), but an **owned** source is still treated
-  as a read: moving `s` away (`consume(own s)`) or letting it drop while `g` is
-  live compiles cleanly and leaves `g` dangling — `g.say()` reads the freed
-  box. The fix is to treat `Coerce` as a *move* of the source, turning the
-  silent UAF into a use-after-move error — at the cost of leaking the value's
-  `Drop` until `dyn` values are themselves drop-elaborated.
+- ~~Trait-object coercion of an *owned* value is an untracked borrow.~~
+  **Fixed.** `Coerce` now moves an owned source in move position (`let`, return,
+  assignment, `own` argument, struct-literal field) and deep-copies a `Copy`
+  source, so the trait object owns an independent box. A `read`/`mut` source is
+  still rejected (`CoerceOfBorrow`). Trait objects are `needs_drop`, and every
+  vtable carries a drop-glue slot so `drop_trait_Trait` runs the concrete type's
+  destructor and frees both the box and the fat pointer.
 
 - **Hardware traps exit 0.** wasmtime's stack-switching `resume` swallows a wasm
   trap raised inside the scheduler's continuation (and `proc_exit`/a main-stack
