@@ -685,7 +685,9 @@ fn collect_scratch_types_expr(
             );
         }
         hir::ExprKind::Coerce { value, .. } => {
-            // Two i32 scratch slots: data_ptr stash and fat pointer base.
+            // Three i32 scratch slots: source-box stash (for deep-copying a
+            // `Copy` aggregate), data_ptr stash, and fat pointer base.
+            out.push(ValType::I32);
             out.push(ValType::I32);
             out.push(ValType::I32);
             collect_scratch_types_expr(

@@ -450,9 +450,9 @@ Not yet implemented, in no particular order (details and current bugs in
   accepted: the checker currently rejects *every* coercion of a borrow,
   including the harmless argument-position case. Storing a borrow in a trait
   object stays rejected.
-- **Owned trait-object coercion is an untracked borrow** (bug) — coercing an
-  *owned* value into a trait object aliases its box; moving or dropping the
-  source while the object is live is a use-after-free. The owned case must be
-  treated as a move.
+- **Owned trait-object coercion** — coercing an *owned* value into a trait
+  object moves the source (deep-copying a `Copy` source), so the trait object
+  owns the box; its vtable drop slot runs the concrete destructor and frees the
+  box when the trait object is dropped.
 
 `KNOWN_ISSUES.md` carries the detail and the current bug list.

@@ -62,6 +62,11 @@ pub(crate) struct EmitCtx<'a> {
     /// Concrete needs-drop type → wasm index of its synthesized `drop_T`
     /// function. A `Stmt::Drop` of type `T` lowers to a call of `drop_fns[T]`.
     pub drop_fns: &'a HashMap<hir::Type, u32>,
+    /// Trait → wasm index of its synthesized `drop_trait_Trait(fat_ptr)`, which
+    /// dispatches through the vtable's drop slot to free the boxed value and
+    /// the fat pointer. A `Stmt::Drop` of `Type::Trait(tid)` lowers to this
+    /// (trait objects are never in `drop_fns`).
+    pub drop_trait_fns: &'a HashMap<hir::TraitId, u32>,
     pub runtime: &'a HashMap<hir::FuncId, hir::RuntimeAbi>,
     pub builtins: &'a Builtins,
     pub struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
@@ -113,6 +118,7 @@ pub(crate) fn build_emit_ctx<'a>(
     func: &hir::Function,
     func_map: &'a HashMap<hir::FuncId, u32>,
     drop_fns: &'a HashMap<hir::Type, u32>,
+    drop_trait_fns: &'a HashMap<hir::TraitId, u32>,
     runtime_map: &'a HashMap<hir::FuncId, hir::RuntimeAbi>,
     builtins: &'a Builtins,
     struct_layouts: &'a HashMap<hir::StructId, StructLayout>,
@@ -183,6 +189,7 @@ pub(crate) fn build_emit_ctx<'a>(
         body_local_valtypes,
         funcs: func_map,
         drop_fns,
+        drop_trait_fns,
         runtime: runtime_map,
         builtins,
         struct_layouts,
@@ -1247,19 +1254,48 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             target_trait,
         } => {
             // Materialize a fat pointer `{vtable_addr: i32, data_ptr: i32}`
-            // on the bump heap from a concrete struct value. The struct
-            // value is already a pointer to its heap-allocated data, which
-            // becomes data_ptr directly (no copy).
+            // on the bump heap from a concrete struct value.
             //
-            // Two scratch i32 locals must be claimed before evaluating the
-            // inner expression so the order matches the pre-order walk
-            // that reserved them in `collect_scratch_types_expr`.
-            let data_local = ctx.scratch_base + ctx.scratch_counter.get();
-            let fat_local = data_local + 1;
-            ctx.scratch_counter.set(ctx.scratch_counter.get() + 2);
+            // Three scratch i32 locals must be claimed before evaluating the
+            // inner expression so the order matches the pre-order walk that
+            // reserved them in `collect_scratch_types_expr`: `src_local` holds
+            // the source box when a `Copy` aggregate must be deep-copied,
+            // `data_local` holds the data pointer stored into the fat pointer,
+            // and `fat_local` holds the fat pointer itself.
+            let src_local = ctx.scratch_base + ctx.scratch_counter.get();
+            let data_local = src_local + 1;
+            let fat_local = src_local + 2;
+            ctx.scratch_counter.set(ctx.scratch_counter.get() + 3);
 
             emit_expr(f, value, ctx)?;
-            f.instruction(&Instruction::LocalSet(data_local));
+            // The source evaluates to either an owned box pointer or (for an
+            // inline field read) an interior address into a still-live parent
+            // box. `data_ptr` must be an independently-owned box the trait
+            // object can free, so:
+            //   - an inline field read is boxed out (bytes copied to a fresh box),
+            //   - a `Copy` aggregate rooted at a local stays live after the move
+            //     (the move analysis treats it as a read), so it is deep-copied,
+            //   - any other value is already a fresh/owned box and is taken as-is.
+            if is_inline_field_read(value, ctx.policy)
+                || (is_boxed_copy_aggregate(&value.ty, ctx.policy) && ident_root(value).is_some())
+            {
+                let size = ctx.policy.inline_size(&value.ty) as i32;
+                f.instruction(&Instruction::LocalSet(src_local));
+                f.instruction(&Instruction::I32Const(size));
+                f.instruction(&Instruction::Call(ctx.builtins.alloc));
+                f.instruction(&Instruction::LocalSet(data_local));
+                f.instruction(&Instruction::LocalGet(data_local));
+                f.instruction(&Instruction::LocalGet(src_local));
+                f.instruction(&Instruction::I32Const(size));
+                f.instruction(&Instruction::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
+            } else {
+                // The struct value is already a pointer to its heap-allocated
+                // data; the trait object takes ownership of that box directly.
+                f.instruction(&Instruction::LocalSet(data_local));
+            }
 
             f.instruction(&Instruction::I32Const(8));
             f.instruction(&Instruction::Call(ctx.builtins.alloc));
@@ -2585,6 +2621,22 @@ fn drop_value_at_path(
     ty: &hir::Type,
     ctx: &EmitCtx,
 ) {
+    // A trait object's slot holds the fat pointer; load it and run the trait's
+    // destructor (frees the boxed value and the fat pointer).
+    if let hir::Type::Trait(tid) = ty {
+        if let Some(&drop_fn) = ctx.drop_trait_fns.get(tid) {
+            let mut child = path.to_vec();
+            child.push(offset);
+            push_place_path(f, base, &child);
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            f.instruction(&Instruction::Call(drop_fn));
+        }
+        return;
+    }
     let Some(&didx) = ctx.drop_fns.get(ty) else {
         return;
     };
@@ -2638,11 +2690,20 @@ pub(crate) fn is_destructure(pattern: &hir::Pattern) -> bool {
 
 /// Emit RAII drop of owned local `sym` of type `ty`: call the type's
 /// synthesized `drop_T` (which runs the value's own `Drop::drop` and recursively
-/// drops its fields in place), then free the box.
+/// drops its fields in place), then free the box. A trait object is dropped by
+/// its `drop_trait_Trait` instead (which frees both the boxed value and the fat
+/// pointer).
 fn emit_drop(f: &mut Function, sym: hir::SymbolId, ty: &hir::Type, ctx: &EmitCtx) {
     let Some(&local) = ctx.locals.get(&sym) else {
         return;
     };
+    if let hir::Type::Trait(tid) = ty {
+        if let Some(&drop_fn) = ctx.drop_trait_fns.get(tid) {
+            f.instruction(&Instruction::LocalGet(local));
+            f.instruction(&Instruction::Call(drop_fn));
+        }
+        return;
+    }
     if let Some(&drop_fn) = ctx.drop_fns.get(ty) {
         f.instruction(&Instruction::LocalGet(local));
         f.instruction(&Instruction::Call(drop_fn));
@@ -2664,11 +2725,23 @@ pub(crate) fn collect_drop_types(
     for func in &program.functions {
         collect_drop_sites(&func.body, program, &mut work);
     }
+    // A struct coerced into a trait object has its box owned by the trait
+    // object, so its own drop site is elided by the move — but its drop glue
+    // still needs the synthesized `drop_S`. Seed every coercible struct (every
+    // struct that implements a trait) so its destructor is emitted.
+    for &(_, owner) in program.impls.keys() {
+        if let hir::MethodOwner::Struct(sid) = owner {
+            work.push(hir::Type::Struct(sid, vec![]));
+        }
+    }
     work.reverse(); // process in source order despite the LIFO worklist
     let mut seen: HashSet<hir::Type> = HashSet::new();
     let mut order: Vec<hir::Type> = Vec::new();
     while let Some(ty) = work.pop() {
-        if !info.needs_drop(&ty) || !seen.insert(ty.clone()) {
+        // A trait object's destructor dispatches through its vtable to the
+        // concrete type's drop glue (see `emit_drop_trait_fn`), not to a
+        // synthesized `drop_Trait`; exclude it from the per-type drop fns.
+        if !info.needs_drop(&ty) || matches!(ty, hir::Type::Trait(_)) || !seen.insert(ty.clone()) {
             continue;
         }
         order.push(ty.clone());
@@ -2698,6 +2771,7 @@ pub(crate) fn collect_drop_types(
 pub(crate) fn emit_drop_fn(
     ty: &hir::Type,
     drop_fns: &HashMap<hir::Type, u32>,
+    drop_trait_fns: &HashMap<hir::TraitId, u32>,
     func_map: &HashMap<hir::FuncId, u32>,
     program: &hir::Program,
     info: &hir::DropInfo,
@@ -2744,7 +2818,15 @@ pub(crate) fn emit_drop_fn(
                     f.instruction(&Instruction::I32Ne);
                     f.instruction(&Instruction::BrIf(0));
                     for (offset, fty) in droppable {
-                        emit_drop_field(&mut f, offset, &fty, drop_fns, free_idx, policy);
+                        emit_drop_field(
+                            &mut f,
+                            offset,
+                            &fty,
+                            drop_fns,
+                            drop_trait_fns,
+                            free_idx,
+                            policy,
+                        );
                     }
                     f.instruction(&Instruction::End);
                 }
@@ -2753,10 +2835,91 @@ pub(crate) fn emit_drop_fn(
         // Struct/tuple/array: a static inline field list, each dropped in place.
         _ => {
             for (offset, fty) in recursable_fields(ty, program, policy) {
-                emit_drop_field(&mut f, offset, &fty, drop_fns, free_idx, policy);
+                emit_drop_field(
+                    &mut f,
+                    offset,
+                    &fty,
+                    drop_fns,
+                    drop_trait_fns,
+                    free_idx,
+                    policy,
+                );
             }
         }
     }
+    f.instruction(&Instruction::End);
+    f
+}
+
+/// Synthesize `drop_glue_S(data_ptr)`: the box destructor for a concrete
+/// struct `S` that may be coerced into a trait object. It runs `S`'s own
+/// `drop_S` (in place) if `S` needs dropping, then frees the box. This is the
+/// uniform `(i32) -> ()` entry stored in every vtable's drop slot, so
+/// `drop_trait_Trait` can tear down an erased value without knowing `S`.
+pub(crate) fn emit_drop_glue_fn(
+    sid: hir::StructId,
+    drop_fns: &HashMap<hir::Type, u32>,
+    info: &hir::DropInfo,
+    free_idx: u32,
+) -> Function {
+    let mut f = Function::new(vec![]); // param 0 is the data pointer
+    let ty = hir::Type::Struct(sid, vec![]);
+    if info.needs_drop(&ty) {
+        if let Some(&didx) = drop_fns.get(&ty) {
+            f.instruction(&Instruction::LocalGet(0));
+            f.instruction(&Instruction::Call(didx));
+        }
+    }
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::Call(free_idx));
+    f.instruction(&Instruction::End);
+    f
+}
+
+/// Synthesize `drop_trait_Trait(fat_ptr)`: the destructor for a trait object.
+/// It loads the concrete type's drop-glue table slot from the vtable (at a
+/// fixed offset after the trait's methods), `call_indirect`s it with
+/// `data_ptr`, then frees the 8-byte fat pointer itself.
+pub(crate) fn emit_drop_trait_fn(
+    tid: hir::TraitId,
+    program: &hir::Program,
+    drop_fn_type: u32,
+    free_idx: u32,
+) -> Function {
+    let mut f = Function::new(vec![]); // param 0 is the fat pointer
+    let n_methods = program
+        .traits
+        .get(tid.0 as usize)
+        .map(|t| t.methods.len())
+        .unwrap_or(0) as i32;
+    // data_ptr = fat_ptr[+4] (the argument to drop_glue_S).
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::I32Load(MemArg {
+        offset: 4,
+        align: 2,
+        memory_index: 0,
+    }));
+    // drop-glue table slot = vtable[fat_ptr[+0] + n_methods * 4].
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    f.instruction(&Instruction::I32Const(n_methods * 4));
+    f.instruction(&Instruction::I32Add);
+    f.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    f.instruction(&Instruction::CallIndirect {
+        type_index: drop_fn_type,
+        table_index: 0,
+    });
+    // Free the fat pointer object.
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::Call(free_idx));
     f.instruction(&Instruction::End);
     f
 }
@@ -2765,15 +2928,34 @@ pub(crate) fn emit_drop_fn(
 /// field's bytes live at `ptr + offset`, so `drop_fty` is called on that
 /// address. A recursive (non-inline) aggregate is stored in the slot as a box
 /// pointer: load it, run `drop_fty` on the box, reload the pointer, and free
-/// the box — the same treatment `emit_drop_in_place` gives a buffer element.
+/// the box — the same treatment `emit_drop_in_place` gives a buffer element. A
+/// trait-object field's slot holds the fat pointer: load it and run the trait's
+/// destructor (frees the boxed value and the fat pointer).
 fn emit_drop_field(
     f: &mut Function,
     offset: u32,
     fty: &hir::Type,
     drop_fns: &HashMap<hir::Type, u32>,
+    drop_trait_fns: &HashMap<hir::TraitId, u32>,
     free_idx: u32,
     policy: &InlinePolicy,
 ) {
+    if let hir::Type::Trait(tid) = fty {
+        if let Some(&drop_fn) = drop_trait_fns.get(tid) {
+            f.instruction(&Instruction::LocalGet(0));
+            if offset != 0 {
+                f.instruction(&Instruction::I32Const(offset as i32));
+                f.instruction(&Instruction::I32Add);
+            }
+            f.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            f.instruction(&Instruction::Call(drop_fn));
+        }
+        return;
+    }
     // Present only for needs-drop field types; scalars/pointers are skipped.
     let Some(&didx) = drop_fns.get(fty) else {
         return;
@@ -3053,6 +3235,19 @@ fn emit_drop_in_place(f: &mut Function, ptr: &hir::Expr, ctx: &EmitCtx) -> Resul
         // The slot address is the value: drop its contents in place.
         if let Some(&didx) = ctx.drop_fns.get(&elem_ty) {
             f.instruction(&Instruction::Call(didx));
+        } else {
+            f.instruction(&Instruction::Drop);
+        }
+    } else if let hir::Type::Trait(tid) = &elem_ty {
+        // Trait object: the slot holds the fat pointer. Load it and run the
+        // trait's destructor (frees the boxed value and the fat pointer).
+        f.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        if let Some(&drop_fn) = ctx.drop_trait_fns.get(tid) {
+            f.instruction(&Instruction::Call(drop_fn));
         } else {
             f.instruction(&Instruction::Drop);
         }

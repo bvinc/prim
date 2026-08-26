@@ -20,7 +20,8 @@ mod walks;
 use crate::builtins::{Builtins, emit_rt_resume, emit_write_bytes};
 use crate::emit::{
     ScalarField, StrSite, StringLayout, build_emit_ctx, collect_drop_types, emit_drop_fn,
-    emit_user_function, flat_scalar_fields, scalar_abi_params,
+    emit_drop_glue_fn, emit_drop_trait_fn, emit_user_function, flat_scalar_fields,
+    scalar_abi_params,
 };
 use crate::layout::{
     EnumLayout, STATIC_DATA_START, StructLayout, compute_enum_layout, compute_struct_layout,
@@ -439,6 +440,36 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         }
     }
 
+    // --- Trait-object destructors ---
+    //
+    // Each coercible struct S gets a `drop_glue_S(data_ptr)` box destructor
+    // (`(i32) -> ()`) reachable through a per-vtable drop slot, so a trait
+    // object can free its erased value. Its wasm index is fixed up front; its
+    // table-0 slot is what the vtable stores. The glue functions follow the
+    // per-type drop functions in the function index layout.
+    let drop_glue_base = rt_resume_idx + 1 + drop_types.len() as u32;
+    let mut drop_glue_slot: HashMap<hir::StructId, u32> = HashMap::new();
+    let mut coercible_structs: Vec<hir::StructId> = impl_keys.iter().map(|(sk, _)| sk.1).collect();
+    coercible_structs.sort_by_key(|s| s.0);
+    coercible_structs.dedup();
+    for (i, sid) in coercible_structs.iter().enumerate() {
+        let wasm_fn = drop_glue_base + i as u32;
+        let slot = table_entries.len() as u32;
+        table_entries.push(wasm_fn);
+        drop_glue_slot.insert(*sid, slot);
+    }
+
+    // Each trait with a vtable gets a `drop_trait_Trait(fat_ptr)` destructor
+    // (after the drop glues). It reads the vtable's drop slot and dispatches.
+    let drop_trait_base = drop_glue_base + coercible_structs.len() as u32;
+    let mut drop_trait_fns: HashMap<hir::TraitId, u32> = HashMap::new();
+    let mut coercible_traits: Vec<hir::TraitId> = impl_keys.iter().map(|(sk, _)| sk.0).collect();
+    coercible_traits.sort_by_key(|t| t.0);
+    coercible_traits.dedup();
+    for (i, tid) in coercible_traits.iter().enumerate() {
+        drop_trait_fns.insert(*tid, drop_trait_base + i as u32);
+    }
+
     // Lay out vtables in static memory, 4 bytes per slot. Each slot holds
     // a wasm table index (i32). Pad static_data once up to the aligned
     // cursor, then append vtable bytes contiguously.
@@ -461,6 +492,14 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
             static_data.extend_from_slice(&slot.to_le_bytes());
             cursor += 4;
         }
+        // Drop slot: the struct's drop-glue table slot, at a fixed offset
+        // after the trait's method slots. `drop_trait_Trait` reads it to free
+        // the erased value.
+        let glue_slot = *drop_glue_slot
+            .get(&struct_key.1)
+            .expect("missing drop glue slot for coercible struct");
+        static_data.extend_from_slice(&glue_slot.to_le_bytes());
+        cursor += 4;
     }
 
     // Register a wasm type-index for each trait method's signature so
@@ -538,6 +577,12 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     functions.function(rt_resume_type); // __rt_resume
     for _ in &drop_types {
         functions.function(drop_fn_type); // drop_T(ptr) for each needs-drop type
+    }
+    for _ in &coercible_structs {
+        functions.function(drop_fn_type); // drop_glue_S(ptr) for each coercible struct
+    }
+    for _ in &coercible_traits {
+        functions.function(drop_fn_type); // drop_trait_Trait(fat_ptr) for each trait
     }
     module.section(&functions);
 
@@ -663,6 +708,7 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 func,
                 &func_map,
                 &drop_fns,
+                &drop_trait_fns,
                 &runtime_map,
                 &builtins,
                 &struct_layouts,
@@ -695,10 +741,29 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         codes.function(&emit_drop_fn(
             ty,
             &drop_fns,
+            &drop_trait_fns,
             &func_map,
             program,
             &drop_info,
             &inline_policy,
+            builtins.free,
+        ));
+    }
+    // Drop glues (one per coercible struct) and trait-object destructors (one
+    // per trait), in the same order their indices were assigned.
+    for sid in &coercible_structs {
+        codes.function(&emit_drop_glue_fn(
+            *sid,
+            &drop_fns,
+            &drop_info,
+            builtins.free,
+        ));
+    }
+    for tid in &coercible_traits {
+        codes.function(&emit_drop_trait_fn(
+            *tid,
+            program,
+            drop_fn_type,
             builtins.free,
         ));
     }

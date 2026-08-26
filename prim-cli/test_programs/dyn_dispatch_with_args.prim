@@ -2,6 +2,10 @@ import std.io.println
 
 struct Adder { base: i32 }
 
+// `Adder` is used twice below (coerced into a trait object each time), so it
+// must be `Copy`: a trait-object coercion in move position moves its source.
+impl Copy for Adder { }
+
 trait Computable {
     fn shift(self, by: i32) -> i32;
     fn combine(self, x: i32, y: i32) -> i32;

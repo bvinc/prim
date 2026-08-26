@@ -106,6 +106,9 @@ impl<'a> DropInfo<'a> {
                 .unwrap_or(false),
             Type::Tuple(elems) => elems.iter().any(|t| self.compute_needs_drop(t, visiting)),
             Type::Array(elem, _) => self.compute_needs_drop(elem, visiting),
+            // A trait object owns its boxed value: it needs a destructor that
+            // dispatches through the vtable to the concrete type's drop glue.
+            Type::Trait(_) => true,
             _ => false,
         };
         visiting.pop();

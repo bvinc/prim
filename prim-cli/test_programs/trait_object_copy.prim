@@ -1,0 +1,26 @@
+import std.io.println
+
+// Coercing a `Copy` struct into a `let` trait object must deep-copy its box:
+// the trait object owns an independent copy, so dropping it must not free the
+// source's still-live box.
+struct P { x: i32 }
+
+impl Copy for P { }
+
+trait Show {
+    fn show(self) -> i32;
+}
+
+impl Show for P {
+    fn show(self) -> i32 { return self.x }
+}
+
+fn main() {
+    let p = P { x = 42 }
+    {
+        let s: Show = p     // deep-copies p's box
+        println(s.show())   // 42
+        // s drops here: frees the copy, not p's box.
+    }
+    println(p.x)            // 42 — p is still valid
+}
