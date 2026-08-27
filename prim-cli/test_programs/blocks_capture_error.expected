@@ -1,0 +1,1 @@
+ERROR: Block cannot capture local variable 'x'

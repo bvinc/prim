@@ -72,17 +72,19 @@ fn push[T](mut v: Vec[T], own value: T) {
     v.len = v.len + 1
 }
 
-// Read element `i` as a copy. The element must be `Copy` (a scalar/pointer, or
+// Read element `i` as a copy and hand it to the block `f`, returning the
+// block's result. The trailing-block form `v.get(i) |e| { ... }` passes the
+// block as the last argument. The element must be `Copy` (a scalar/pointer, or
 // an `impl Copy` struct): `*p` is a deref-read of the slot, and a non-`Copy`
 // element is stored as a box pointer, so copying it out would alias the slot
 // and double-free on drop. `T: Copy` makes that a plain type error at the call
-// site. Index loops are the v1 replacement for reference-yielding iterators.
-fn get[T: Copy](read v: Vec[T], i: usize) -> T {
+// site.
+fn get[T: Copy, R](read v: Vec[T], i: usize, f: fn(T) -> R) -> R {
     if i >= v.len {
         panic("Vec.get: index out of bounds")
     }
     unsafe {
-        return *add[T](v.ptr, i)
+        return f(*add[T](v.ptr, i))
     }
 }
 

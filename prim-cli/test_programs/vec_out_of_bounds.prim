@@ -6,7 +6,7 @@ import std.vec.get
 fn main() {
     let v = new[i32]()
     push(mut v, own 5)
-    println(get(v, 0usize))   // 5
-    println(get(v, 5usize))   // out of bounds -> panic, halts
+    println(get(v, 0usize) |e| { e })   // 5
+    println(get(v, 5usize) |e| { e })   // out of bounds -> panic, halts
     println(999i32)              // not reached
 }

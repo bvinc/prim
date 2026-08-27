@@ -13,9 +13,9 @@ fn main() {
         i = i + 1
     }
     println(len(v))         // 10
-    println(get(v, 0usize))   // 0
-    println(get(v, 3usize))   // 9
-    println(get(v, 9usize))   // 81
+    println(get(v, 0usize) |e| { e })   // 0
+    println(get(v, 3usize) |e| { e })   // 9
+    println(get(v, 9usize) |e| { e })   // 81
     set(mut v, 3usize, own 999)
-    println(get(v, 3usize))   // 999
+    println(get(v, 3usize) |e| { e })   // 999
 }

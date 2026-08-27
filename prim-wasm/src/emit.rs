@@ -80,6 +80,12 @@ pub(crate) struct EmitCtx<'a> {
     /// `i32` receiver (the boxed struct's data pointer) followed by the
     /// declared param types (excluding the receiver position).
     pub dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
+    /// Closure function → its function-table slot. A `ClosureRef { func }`
+    /// emits this slot as an `i32`.
+    pub closure_table_slots: &'a HashMap<hir::FuncId, u32>,
+    /// `(param valtypes, result valtypes)` → wasm type index for a block
+    /// signature, used by `call_indirect` at `IndirectCall` sites.
+    pub indirect_call_types: &'a HashMap<(Vec<ValType>, Vec<ValType>), u32>,
     /// `(TraitId, StructId)` → static-memory address of the vtable (4
     /// bytes per slot, indexed by trait method position).
     pub vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
@@ -126,6 +132,8 @@ pub(crate) fn build_emit_ctx<'a>(
     string_layout: Option<StringLayout>,
     global_wasm_idx: &'a HashMap<hir::GlobalId, u32>,
     dyn_call_types: &'a HashMap<(hir::TraitId, u32), u32>,
+    closure_table_slots: &'a HashMap<hir::FuncId, u32>,
+    indirect_call_types: &'a HashMap<(Vec<ValType>, Vec<ValType>), u32>,
     vtable_addr: &'a HashMap<(hir::TraitId, hir::StructId), u32>,
     str_sites: &'a [StrSite],
     oom_msg: StrSite,
@@ -197,6 +205,8 @@ pub(crate) fn build_emit_ctx<'a>(
         string_layout,
         global_wasm_idx,
         dyn_call_types,
+        closure_table_slots,
+        indirect_call_types,
         vtable_addr,
         info,
         scratch_base,
@@ -651,6 +661,13 @@ fn scalar_disqualify_expr(
         hir::ExprKind::Block(b) | hir::ExprKind::UnsafeBlock(b) => {
             scalar_disqualify_block(b, scalar_abi, ret_scalar, disq)
         }
+        hir::ExprKind::IndirectCall { callee, args } => {
+            scalar_disqualify_expr(callee, scalar_abi, ret_scalar, disq);
+            for a in args {
+                scalar_disqualify_expr(a, scalar_abi, ret_scalar, disq);
+            }
+        }
+        hir::ExprKind::Closure { .. } | hir::ExprKind::ClosureRef { .. } => {}
         hir::ExprKind::Match {
             mode: _,
             scrutinee,
@@ -1038,6 +1055,25 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
     Ok(())
 }
 
+/// The wasm signature key `(param valtypes, result valtypes)` for an indirect
+/// call whose callee has the given `fn(..) -> ..` type. Matches the signature
+/// a closure function is emitted with (closures bypass the scalar ABI), so the
+/// `call_indirect` type and the callee's own type agree.
+fn indirect_sig_key(ty: &hir::Type) -> (Vec<ValType>, Vec<ValType>) {
+    match ty {
+        hir::Type::Fn { params, ret } => {
+            let params = params.iter().map(hir_type_to_valtype).collect();
+            let results = if produces_value(ret) {
+                vec![hir_type_to_valtype(ret)]
+            } else {
+                Vec::new()
+            };
+            (params, results)
+        }
+        _ => unreachable!("indirect call callee must have fn type"),
+    }
+}
+
 fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), WasmError> {
     match &expr.kind {
         hir::ExprKind::Int(n) => match hir_type_to_valtype(&expr.ty) {
@@ -1108,6 +1144,14 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
             f.instruction(&Instruction::ContNew(ctx.builtins.cont_type));
             f.instruction(&Instruction::I32Const(1));
             f.instruction(&Instruction::TableGrow(ctx.builtins.cont_table));
+        }
+        // A first-class block value is its function-table slot index (i32).
+        hir::ExprKind::ClosureRef { func } => {
+            let slot = *ctx
+                .closure_table_slots
+                .get(func)
+                .expect("missing closure table slot");
+            f.instruction(&Instruction::I32Const(slot as i32));
         }
         hir::ExprKind::StructLit {
             struct_id, fields, ..
@@ -1368,6 +1412,31 @@ fn emit_expr(f: &mut Function, expr: &hir::Expr, ctx: &EmitCtx) -> Result<(), Wa
                 .dyn_call_types
                 .get(&(*trait_id, *method_idx))
                 .expect("missing dyn call type index");
+            f.instruction(&Instruction::CallIndirect {
+                type_index: type_idx,
+                table_index: 0,
+            });
+        }
+        hir::ExprKind::IndirectCall { callee, args } => {
+            // Stash the callee's function-table index (an i32) while the
+            // arguments are pushed underneath it, then `call_indirect`.
+            let callee_local = ctx.scratch_base + ctx.scratch_counter.get();
+            ctx.scratch_counter.set(ctx.scratch_counter.get() + 1);
+
+            emit_expr(f, callee, ctx)?;
+            f.instruction(&Instruction::LocalSet(callee_local));
+
+            for arg in args {
+                emit_expr(f, arg, ctx)?;
+            }
+
+            f.instruction(&Instruction::LocalGet(callee_local));
+
+            let key = indirect_sig_key(&callee.ty);
+            let type_idx = *ctx
+                .indirect_call_types
+                .get(&key)
+                .expect("missing indirect call type index");
             f.instruction(&Instruction::CallIndirect {
                 type_index: type_idx,
                 table_index: 0,

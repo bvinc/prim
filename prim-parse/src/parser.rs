@@ -530,6 +530,7 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::UnsafeBlock(block),
                 })
             }
+            Some(TokenKind::Pipe) | Some(TokenKind::PipePipe) => self.parse_closure(),
             Some(TokenKind::At) => self.parse_expr_attribute(),
             Some(kind) => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
@@ -542,11 +543,98 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a block literal `|a, b| { ... }` or `|| { ... }`. The current
+    /// token is the first `|` (or the `||` for a parameterless block). Block
+    /// parameters are always `Read` borrows; a parameter's type is inferred
+    /// from context unless written `a: T`.
+    fn parse_closure(&mut self) -> Result<Expr, ParseError> {
+        let start_span = self.current_span();
+        let mut params = Vec::new();
+        match self.peek_kind() {
+            Some(TokenKind::PipePipe) => {
+                self.advance(); // consume `||` — no parameters
+            }
+            Some(TokenKind::Pipe) => {
+                self.advance(); // consume '|'
+                while !matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                    let name_span = self
+                        .consume(TokenKind::Identifier, "Expected block parameter name")?
+                        .span;
+                    let type_annotation = if self.consume_optional(TokenKind::Colon) {
+                        self.parse_type()?
+                    } else {
+                        Type::Undetermined
+                    };
+                    params.push(Parameter {
+                        name: self.ident(name_span),
+                        type_annotation,
+                        mode: PassMode::Read,
+                    });
+                    if !self.consume_optional(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.consume(TokenKind::Pipe, "Expected '|' after block parameters")?;
+            }
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "'|' to start a block".to_string(),
+                    found: self
+                        .peek_kind()
+                        .expect("parse_closure called without a pipe token"),
+                    span: self.current_span(),
+                });
+            }
+        }
+        let block = self.parse_closure_body()?;
+        let span = start_span.cover(block.span);
+        Ok(Expr {
+            span,
+            ty: Type::Undetermined,
+            kind: ExprKind::Closure {
+                params,
+                body: block,
+            },
+        })
+    }
+
     /// Parse an infix expression (binary operators, function calls, field access)
     fn parse_infix(&mut self, left: Expr) -> Result<Expr, ParseError> {
         let Some(kind) = self.peek_kind() else {
             return Ok(left);
         };
+
+        // Trailing block: `call(args) |e| { ... }` desugars to `call(args, |e| { ... })`.
+        // Only a single `|` is considered (`||` stays logical-or); and we
+        // backtrack to the bitwise-or interpretation if the tokens after the
+        // `|` don't form a block, so `f() | x` still bitwise-ors.
+        if kind == TokenKind::Pipe
+            && matches!(
+                left.kind,
+                ExprKind::FunctionCall { .. } | ExprKind::MethodCall { .. }
+            )
+        {
+            let saved = self.current;
+            match self.parse_closure() {
+                Ok(closure) => {
+                    let span = left.span.cover(closure.span);
+                    let mut expr = left;
+                    match &mut expr.kind {
+                        ExprKind::FunctionCall { args, .. } | ExprKind::MethodCall { args, .. } => {
+                            args.push(closure)
+                        }
+                        _ => unreachable!("guard above ensures a call"),
+                    }
+                    expr.span = span;
+                    return Ok(expr);
+                }
+                Err(_) => {
+                    // Not a block after all — rewind and fall through to the
+                    // bitwise-or path below.
+                    self.current = saved;
+                }
+            }
+        }
 
         // Short-circuit `&&` / `||` desugar to `if`, so the right operand is
         // only evaluated when needed: `a && b` → `if a { b } else { false }`,
@@ -1513,6 +1601,7 @@ impl<'a> Parser<'a> {
         }
 
         match kind {
+            TokenKind::Fn => self.parse_fn_type(),
             TokenKind::LeftParen => {
                 // Tuple type `(A, B, ...)`; a single `(T)` is just grouping.
                 self.advance(); // consume '('
@@ -1612,9 +1701,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a function/block type `fn(T, U) -> R` (the leading `fn` is the
+    /// current token). `-> R` is required; a block with no result has its
+    /// return type inferred from its body rather than written here.
+    fn parse_fn_type(&mut self) -> Result<Type, ParseError> {
+        self.consume(TokenKind::Fn, "Expected 'fn'")?;
+        self.consume(TokenKind::LeftParen, "Expected '(' after 'fn'")?;
+        let mut params = Vec::new();
+        if !matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+            loop {
+                params.push(self.parse_type()?);
+                if !self.consume_optional(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.consume(
+            TokenKind::RightParen,
+            "Expected ')' to close fn parameter types",
+        )?;
+        self.consume(TokenKind::Arrow, "Expected '->' in function type")?;
+        let ret = Box::new(self.parse_type()?);
+        Ok(Type::Fn { params, ret })
+    }
+
     fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut statements = Vec::new();
-
         while let Some(kind) = self.peek_kind() {
             if kind == TokenKind::RightBrace {
                 break;
@@ -1686,6 +1798,48 @@ impl<'a> Parser<'a> {
         Ok(Block {
             stmts,
             expr: None,
+            span: Span::new(block_start, block_end),
+        })
+    }
+
+    /// Parse a block's body as a statement list with an optional trailing
+    /// expression value: `{ stmts; final_expr }`. Used for block literals,
+    /// whose value is the final expression (Smalltalk/Swift/Kotlin style),
+    /// unlike named functions, which produce their result with `return`.
+    fn parse_closure_body(&mut self) -> Result<Block, ParseError> {
+        let left_brace = self.consume(TokenKind::LeftBrace, "Expected '{'")?;
+        let block_start = left_brace.span.start();
+        let mut stmts = Vec::new();
+        let mut trailing = None;
+
+        while let Some(kind) = self.peek_kind() {
+            if kind == TokenKind::RightBrace {
+                break;
+            }
+            let stmt = self.parse_statement()?;
+            let has_semicolon = matches!(self.peek_kind(), Some(TokenKind::Semicolon));
+            if has_semicolon {
+                self.advance();
+                stmts.push(stmt);
+            } else if matches!(self.peek_kind(), Some(TokenKind::RightBrace)) {
+                // Last statement with no trailing semicolon: an expression
+                // statement becomes the block's value; anything else is kept.
+                if let Stmt::Expr(expr) = stmt {
+                    trailing = Some(Box::new(expr));
+                } else {
+                    stmts.push(stmt);
+                }
+                break;
+            } else {
+                stmts.push(stmt);
+            }
+        }
+
+        let right_brace = self.consume(TokenKind::RightBrace, "Expected '}'")?;
+        let block_end = right_brace.span.end();
+        Ok(Block {
+            stmts,
+            expr: trailing,
             span: Span::new(block_start, block_end),
         })
     }

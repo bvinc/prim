@@ -6,7 +6,7 @@ use crate::program::{Program, ResSymbolId, ResSymbolKind};
 use crate::resolver::{ModuleScope, ModuleScopes};
 use prim_parse::{Expr, ExprKind, PassMode, Span, Stmt, Type};
 use prim_tok::{FileId, ModuleId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -22,6 +22,14 @@ pub enum LoweringError {
         span: Span,
     },
     UnknownFunction {
+        name: String,
+        file: FileId,
+        span: Span,
+    },
+    /// A block references a local variable from an enclosing scope. Blocks
+    /// are non-capturing: their body may only name its own parameters, module
+    /// functions, and globals.
+    ClosureCapture {
         name: String,
         file: FileId,
         span: Span,
@@ -143,6 +151,12 @@ impl std::fmt::Display for LoweringError {
             LoweringError::UnknownFunction { name, .. } => {
                 write!(f, "Unknown function '{}'", name)
             }
+            LoweringError::ClosureCapture { name, .. } => {
+                write!(
+                    f,
+                    "Block cannot capture local variable '{name}' (blocks are non-capturing)"
+                )
+            }
             LoweringError::UnknownStruct { name, .. } => {
                 write!(f, "Unknown struct '{}'", name)
             }
@@ -241,6 +255,7 @@ impl LoweringError {
             LoweringError::AssignToImmutable { span, .. }
             | LoweringError::UnknownName { span, .. }
             | LoweringError::UnknownFunction { span, .. }
+            | LoweringError::ClosureCapture { span, .. }
             | LoweringError::UnknownStruct { span, .. }
             | LoweringError::UnknownModule { span, .. }
             | LoweringError::NonConstantGlobalInit { span, .. }
@@ -266,6 +281,7 @@ impl LoweringError {
             LoweringError::AssignToImmutable { file, .. }
             | LoweringError::UnknownName { file, .. }
             | LoweringError::UnknownFunction { file, .. }
+            | LoweringError::ClosureCapture { file, .. }
             | LoweringError::UnknownStruct { file, .. }
             | LoweringError::UnknownModule { file, .. }
             | LoweringError::NonConstantGlobalInit { file, .. }
@@ -360,6 +376,15 @@ impl LocalScope {
         self.scopes.clear();
         self.scopes.push(HashMap::new());
     }
+
+    /// Every name bound in any currently-open scope (used to snapshot the
+    /// outer scope when lowering a closure, so captures can be reported).
+    fn all_names(&self) -> HashSet<String> {
+        self.scopes
+            .iter()
+            .flat_map(|scope| scope.keys().cloned())
+            .collect()
+    }
 }
 
 struct LoweringContext<'a> {
@@ -427,6 +452,11 @@ struct LoweringContext<'a> {
     /// `std.io.dbg`, the function `@dbg` lowers to.
     dbg_fn: Option<FuncId>,
     local_scope: LocalScope,
+    /// When non-`None`, we are lowering a closure body and this holds the
+    /// names that were in scope at the closure's definition site. A reference
+    /// to one of these (that isn't the closure's own parameter or a later
+    /// `let`) is a capture, which blocks reject.
+    closure_outer_names: Option<HashSet<String>>,
     errors: Vec<LoweringError>,
 }
 
@@ -472,6 +502,7 @@ impl<'a> LoweringContext<'a> {
             write_debug_fn: None,
             dbg_fn: None,
             local_scope: LocalScope::new(),
+            closure_outer_names: None,
             errors: Vec::new(),
         }
     }
@@ -570,6 +601,7 @@ impl<'a> LoweringContext<'a> {
                         span,
                         runtime,
                         unsafe_fn: f.unsafe_fn,
+                        is_closure: false,
                     });
                 }
                 for g in &file.ast.globals {
@@ -710,6 +742,7 @@ impl<'a> LoweringContext<'a> {
                             span,
                             runtime,
                             unsafe_fn: false,
+                            is_closure: false,
                         });
                         // Each method's FuncId, keyed by its unique declaration
                         // span — survives same-name clashes across traits.
@@ -1670,6 +1703,7 @@ impl<'a> LoweringContext<'a> {
                 span,
                 runtime: None,
                 unsafe_fn: false,
+                is_closure: false,
             });
             self.impls
                 .insert((debug_tid, hir::MethodOwner::Struct(sid)), vec![fid]);
@@ -2436,6 +2470,31 @@ impl<'a> LoweringContext<'a> {
                     };
                 }
                 let call_span = path.segments.last().expect("empty path").span;
+                // Indirect call: `f(args)` where `f` names a local (or global)
+                // value of function type, not a module function. Checked before
+                // `resolve_function_path` so a local callee isn't reported as
+                // an unknown function.
+                if path.segments.len() == 1 {
+                    let name = path.segments[0];
+                    let name_str = self.interner.resolve(&name.sym).to_string();
+                    if let Some(binding) = self.local_scope.get(&name_str).copied() {
+                        return hir::Expr {
+                            kind: hir::ExprKind::IndirectCall {
+                                callee: Box::new(hir::Expr {
+                                    kind: hir::ExprKind::Ident(binding.symbol),
+                                    ty: hir::Type::Undetermined,
+                                    span: self.span_id(name.span, file_id),
+                                }),
+                                args: args
+                                    .iter()
+                                    .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                                    .collect(),
+                            },
+                            ty: self.lower_type(&expr.ty, module_scope),
+                            span,
+                        };
+                    }
+                }
                 let fid = self
                     .resolve_function_path(path, file_id, ast, module_scope)
                     .and_then(|id| self.func_ids.get(&id).copied());
@@ -2749,6 +2808,47 @@ impl<'a> LoweringContext<'a> {
                 )),
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::Closure { params, body } => {
+                // A non-capturing block: its body is lowered in a fresh scope
+                // containing only the block's own parameters. The enclosing
+                // scope is snapshotted so a reference to it is reported as a
+                // capture rather than an unknown name.
+                let outer_names = self.local_scope.all_names();
+                let saved_scope = std::mem::replace(&mut self.local_scope, LocalScope::new());
+                let saved_capture = self.closure_outer_names.replace(outer_names);
+
+                let mut hir_params = Vec::with_capacity(params.len());
+                for p in params {
+                    let name = self.interner.resolve(&p.name.sym).to_string();
+                    let sym = self.insert_symbol(module, p.name.sym, SymbolKind::Param);
+                    self.local_scope.insert(
+                        name,
+                        LocalBinding {
+                            symbol: sym,
+                            mutable: false,
+                        },
+                    );
+                    hir_params.push(hir::Param {
+                        name: sym,
+                        ty: self.lower_type(&p.type_annotation, module_scope),
+                        mode: PassMode::Read,
+                        span: self.span_id(p.name.span, file_id),
+                    });
+                }
+                let hir_body = self.lower_block(body, module, file_id, ast, module_scope);
+
+                self.closure_outer_names = saved_capture;
+                self.local_scope = saved_scope;
+
+                (
+                    hir::ExprKind::Closure {
+                        params: hir_params,
+                        ret: None,
+                        body: hir_body,
+                    },
+                    self.lower_type(&expr.ty, module_scope),
+                )
+            }
             ExprKind::Dbg(inner) => {
                 let inner_span = inner.span;
                 // Use only the basename so output is portable across machines.
@@ -2809,6 +2909,17 @@ impl<'a> LoweringContext<'a> {
         // Check local scope first
         if let Some(binding) = self.local_scope.get(name) {
             return Some(binding.symbol);
+        }
+        // Inside a closure body, a name from the enclosing scope is a capture.
+        if let Some(outer) = &self.closure_outer_names
+            && outer.contains(name)
+        {
+            self.errors.push(LoweringError::ClosureCapture {
+                name: name.to_string(),
+                file,
+                span,
+            });
+            return None;
         }
         // Then check module scope
         if let Some(&res_id) = module_scope.get(name) {
@@ -3162,6 +3273,13 @@ impl<'a> LoweringContext<'a> {
                     .map(|e| self.lower_type(e, module_scope))
                     .collect(),
             ),
+            Type::Fn { params, ret } => hir::Type::Fn {
+                params: params
+                    .iter()
+                    .map(|t| self.lower_type(t, module_scope))
+                    .collect(),
+                ret: Box::new(self.lower_type(ret, module_scope)),
+            },
             Type::Pointer { mutable, pointee } => hir::Type::Pointer {
                 mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, module_scope)),

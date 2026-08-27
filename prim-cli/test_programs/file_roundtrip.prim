@@ -23,8 +23,8 @@ fn read_file() {
     push(mut buf, own 0u8)
     let n = g.read_into(mut buf)
     println(n)
-    println(get(buf, 0usize))
-    println(get(buf, 1usize))
+    println(get(buf, 0usize) |e| { e })
+    println(get(buf, 1usize) |e| { e })
 }
 
 fn main() {

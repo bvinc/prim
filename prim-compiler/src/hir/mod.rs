@@ -20,6 +20,9 @@ pub use drop_info::DropInfo;
 pub mod drop_elab;
 pub use drop_elab::elaborate as elaborate_drops;
 
+pub mod extract;
+pub use extract::extract_closures;
+
 pub mod inline;
 pub use inline::{InlinePolicy, is_inline, stored_size};
 
@@ -173,6 +176,10 @@ pub struct Function {
     /// `unsafe fn`: part of the raw core; its body is an implicit `unsafe`
     /// block, and it may only be called from an `unsafe` context.
     pub unsafe_fn: bool,
+    /// `true` for a synthesized block function (created by
+    /// `extract_closures`). Such functions are called only indirectly through
+    /// the function table, so codegen excludes them from the scalar ABI.
+    pub is_closure: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -511,7 +518,7 @@ pub struct Field {
     pub span: SpanId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     /// Trailing expression (without semicolon) - the block's value.
@@ -718,6 +725,28 @@ pub enum ExprKind {
     /// Erased to a plain `Block` at codegen; only the unsafe-checking pass
     /// treats it specially.
     UnsafeBlock(Block),
+    /// A block literal `|a, b| { ... }` with its parameters, (declared, if
+    /// any) return type, and body still inline. Present until just after
+    /// typecheck, where the parameter types are inferred from context and the
+    /// body is checked in place. `extract_closures` then lifts the body into a
+    /// fresh `Function` and rewrites this node to `ClosureRef { func }`.
+    Closure {
+        params: Vec<Param>,
+        ret: Option<Type>,
+        body: Block,
+    },
+    /// A first-class function value — a non-capturing block. Codegen emits
+    /// this as the closure function's function-table index (an `i32`).
+    ClosureRef {
+        func: FuncId,
+    },
+    /// Call a function value (a block) indirectly: `f(args)` where `f` has
+    /// type `fn(..) -> ..`. Block parameters are always `Read`, so every
+    /// argument is passed as a shared borrow/copy.
+    IndirectCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// Placeholder for expressions that failed during lowering.
     Error,
 }
@@ -871,6 +900,13 @@ pub enum Type {
     /// the same element types are the same type. Boxed on the heap like a
     /// struct, with positional fields.
     Tuple(Vec<Type>),
+    /// A function/block type, `fn(T, U) -> R`. Structural: two function types
+    /// are the same iff their parameter types and return type match. Carried
+    /// as a 4-byte function-table index at runtime.
+    Fn {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
     /// The unit type — an expression that yields no value (a statement, an
     /// empty block, a call to a function with no declared return). Distinct
     /// from `Undetermined`: unit is a fully-determined "no value", whereas
@@ -982,6 +1018,16 @@ impl fmt::Display for Type {
                 }
             }
             Type::Unit => write!(f, "()"),
+            Type::Fn { params, ret } => {
+                write!(f, "fn(")?;
+                for (i, t) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ") -> {}", ret)
+            }
             Type::IntVar => write!(f, "{{integer}}"),
             Type::FloatVar => write!(f, "{{float}}"),
             Type::Undetermined => write!(f, "unknown"),

@@ -55,6 +55,8 @@ arguments      → expression ( "," expression )*
 ```
 type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" 
                | "usize" | "isize" | "f32" | "f64" | "bool"
+               | "Array" "[" type "," const "]" | "Vec" "[" type "]"
+               | "fn" "(" type ("," type)* ")" "->" type
 ```
 
 ## Lexical Rules
@@ -105,6 +107,24 @@ type           → "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
 - Functions can have optional return types
 - Function calls require parentheses even with no arguments
 - `println` is a built-in function that accepts one argument
+
+### Blocks (closures)
+- A block is a non-capturing, first-class function value written `|a, b| { ... }`
+  (or `|| { ... }` for no parameters), Smalltalk/Swift/Kotlin style.
+- A block's value is its trailing expression — the last statement without a
+  trailing semicolon — not `return` (blocks do not support `return`).
+- Parameter types are optional: `|e: i32| { ... }` annotates one, `|e| { ... }`
+  infers it from context.
+- A **trailing block** after a call is passed as the final argument:
+  `get(v, i) |e| { ... }` is `get(v, i, |e| { ... })`. (Only a single `|`
+  is a block; `||` remains logical-or. Because `|` also means bitwise-or,
+  parenthesize when mixing a trailing block with a tighter operator, e.g.
+  `x + (get(v, i) |e| { e })`.)
+- Blocks are typed `fn(T, U) -> R` (structurally equal when their parameter and
+  return types match) and are carried as a 4-byte function-table index.
+- A block body may name only its own parameters, its `let` bindings, module
+  functions, and globals — referencing an enclosing local is a compile-time
+  error ("blocks are non-capturing").
 
 ### Type System
 - Integer types: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `usize`, `isize`

@@ -22,15 +22,15 @@ fn main() {
     push(mut s, own 10)
     push(mut s, own 20)
     swap(mut s, 0usize, 1usize)
-    println(get(s, 0usize))   // 20
-    println(get(s, 1usize))   // 10
+    println(get(s, 0usize) |e| { e })   // 20
+    println(get(s, 1usize) |e| { e })   // 10
 
     // Inline struct elements (no Drop): their 16 bytes are exchanged.
     let mut p = new[Inline16]()
     push(mut p, own Inline16 { a = 1, b = 2, c = 3, d = 4 })
     push(mut p, own Inline16 { a = 5, b = 6, c = 7, d = 8 })
     swap(mut p, 0usize, 1usize)
-    let x = get(p, 0usize)
+    let x = get(p, 0usize) |e| { e }
     println(x.a + x.b + x.c + x.d)   // 26
 
     // Drop elements (boxed): swap the box pointers without dropping either.

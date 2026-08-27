@@ -1,0 +1,26 @@
+import std.io.println
+
+// `apply` calls a block with a value; the block maps T -> T.
+fn apply[T](read x: T, f: fn(T) -> T) -> T {
+    return f(x)
+}
+
+fn main() {
+    // A block bound to a local, then called indirectly.
+    let inc = |n: i32| { n + 1 }
+    println(inc(41i32))                        // 42
+
+    // Passed as an explicit argument.
+    println(apply(10i32, |n| { n * 2 }))       // 20
+
+    // Passed as a trailing block on a free-function call.
+    println(apply(3i32) |n| { n * 100 })       // 300
+
+    // A parameterless block.
+    let answer = || { 42i32 }
+    println(answer())                          // 42
+
+    // A block whose body is a statement (returns nothing).
+    let show = |n: i32| { println(n) }
+    show(7i32)                                 // 7
+}

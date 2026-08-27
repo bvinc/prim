@@ -751,6 +751,13 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
             }
         }
         ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => v.visit_block(b),
+        ExprKind::IndirectCall { callee, args } => {
+            v.visit_expr(callee);
+            for a in args {
+                v.visit_expr(a);
+            }
+        }
+        ExprKind::Closure { body, .. } => v.visit_block(body),
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
@@ -758,6 +765,7 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
         | ExprKind::Ident(_)
         | ExprKind::ConstParam(_)
         | ExprKind::Spawn { .. }
+        | ExprKind::ClosureRef { .. }
         | ExprKind::Error => {}
     }
 }

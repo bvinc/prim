@@ -4,7 +4,7 @@ import std.vec.get
 // `Vec.get` requires `T: Copy`, but this generic function's `T` carries no
 // bound — so forwarding `T` to `get` is rejected with a missing-bound error.
 fn read_first[T](read v: Vec[T]) -> T {
-    return get(v, 0usize)
+    return get(v, 0usize) |e| { e }
 }
 
 fn main() {

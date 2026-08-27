@@ -218,13 +218,26 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
     // Methods are excluded: they may be dispatched virtually through a vtable
     // whose entries use a fixed pointer ABI, so their signatures can't expand.
     let method_fns: HashSet<hir::FuncId> = program.impls.values().flatten().copied().collect();
+    // Closure functions are called only indirectly through the function table,
+    // so their signature must be the plain (non-scalar-ABI) `fn(..) -> ..`
+    // mapping — the same signature `call_indirect` uses.
+    let closure_fns: HashSet<hir::FuncId> = program
+        .functions
+        .iter()
+        .filter(|f| f.is_closure)
+        .map(|f| f.id)
+        .collect();
     let mut scalar_abi: HashMap<hir::FuncId, Vec<bool>> = HashMap::new();
     // Per-function: the leaf fields of a by-value scalar-ABI return (phase 3).
     // A flat-POD return is returned as one wasm result per field. Methods are
     // excluded for the same vtable reason as parameters.
     let mut scalar_ret: HashMap<hir::FuncId, Vec<ScalarField>> = HashMap::new();
     for func in &program.functions {
-        if func.type_params.is_empty() && func.runtime.is_none() && !method_fns.contains(&func.id) {
+        if func.type_params.is_empty()
+            && func.runtime.is_none()
+            && !method_fns.contains(&func.id)
+            && !closure_fns.contains(&func.id)
+        {
             let flags = scalar_abi_params(func, program, &inline_policy, &drop_info);
             if flags.iter().any(|&s| s) {
                 scalar_abi.insert(func.id, flags);
@@ -457,6 +470,43 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
         let slot = table_entries.len() as u32;
         table_entries.push(wasm_fn);
         drop_glue_slot.insert(*sid, slot);
+    }
+
+    // Closure functions also live in table 0, so an `IndirectCall` reaches them
+    // through `call_indirect`. A `ClosureRef { func }` value is this slot index.
+    let mut closure_table_slots: HashMap<hir::FuncId, u32> = HashMap::new();
+    for func in &program.functions {
+        if !func.is_closure || func.runtime.is_some() || !func.type_params.is_empty() {
+            continue;
+        }
+        let wasm_fn = *func_map.get(&func.id).expect("closure missing in func_map");
+        let slot = table_entries.len() as u32;
+        closure_table_slots.insert(func.id, slot);
+        table_entries.push(wasm_fn);
+    }
+
+    // Register a wasm type index for each distinct block signature, so an
+    // `IndirectCall` site can reference it in `call_indirect`. Every indirect
+    // callee is a closure function (blocks are the only first-class function
+    // values), so iterating closure functions covers every signature.
+    let mut indirect_call_types: HashMap<(Vec<ValType>, Vec<ValType>), u32> = HashMap::new();
+    for func in &program.functions {
+        if !func.is_closure || func.runtime.is_some() || !func.type_params.is_empty() {
+            continue;
+        }
+        let params: Vec<ValType> = func
+            .params
+            .iter()
+            .map(|p| hir_type_to_valtype(&p.ty))
+            .collect();
+        let results: Vec<ValType> = func
+            .ret
+            .as_ref()
+            .map(|r| vec![hir_type_to_valtype(r)])
+            .unwrap_or_default();
+        let key = (params, results);
+        let type_idx = types.register(key.0.clone(), key.1.clone());
+        indirect_call_types.insert(key, type_idx);
     }
 
     // Each trait with a vtable gets a `drop_trait_Trait(fat_ptr)` destructor
@@ -716,6 +766,8 @@ pub fn generate_wasm(program: &hir::Program) -> Result<Vec<u8>, WasmError> {
                 string_layout,
                 &global_wasm_idx,
                 &dyn_call_types,
+                &closure_table_slots,
+                &indirect_call_types,
                 &vtable_addr,
                 str_slice,
                 oom_msg,

@@ -165,6 +165,7 @@ pub fn compile(
         let module_scopes = resolver::collect_scopes(&mut program)?;
         let mut hir = hir_builder::lower_to_hir(&program, &module_scopes, source_map.clone())?;
         hir::type_check(&mut hir)?;
+        hir::extract_closures(&mut hir);
         hir::check_ownership(&hir)?;
         hir::monomorphize(&mut hir)?;
         hir::elaborate_drops(&mut hir)?;

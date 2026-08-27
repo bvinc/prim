@@ -373,6 +373,13 @@ impl Insert<'_> {
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
             ExprKind::Coerce { value, .. } => self.expr(value),
+            ExprKind::IndirectCall { callee, args } => {
+                self.expr(callee);
+                for a in args {
+                    self.expr(a);
+                }
+            }
+            ExprKind::Closure { body, .. } => self.block(body, false, &[]),
             ExprKind::Int(_)
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
@@ -380,6 +387,7 @@ impl Insert<'_> {
             | ExprKind::Ident(_)
             | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
+            | ExprKind::ClosureRef { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::TraitBoundCall { .. }
             | ExprKind::Error => {}
@@ -544,6 +552,13 @@ impl Filter<'_> {
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.expr(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.expr(e),
             ExprKind::Coerce { value, .. } => self.expr(value),
+            ExprKind::IndirectCall { callee, args } => {
+                self.expr(callee);
+                for a in args {
+                    self.expr(a);
+                }
+            }
+            ExprKind::Closure { body, .. } => self.block(body),
             ExprKind::MethodCall { receiver, args, .. }
             | ExprKind::TraitBoundCall { receiver, args, .. } => {
                 self.expr(receiver);
@@ -558,6 +573,7 @@ impl Filter<'_> {
             | ExprKind::Ident(_)
             | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
+            | ExprKind::ClosureRef { .. }
             | ExprKind::Error => {}
         }
     }
@@ -637,6 +653,7 @@ fn collect_droppable_expr(
         ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => {
             collect_droppable_bindings(copy_types, b, info, out)
         }
+        ExprKind::Closure { body, .. } => collect_droppable_bindings(copy_types, body, info, out),
         ExprKind::Match { mode, arms, .. } => {
             // A consumed scrutinee transfers ownership to the arm bindings, so
             // any needs-drop binding is dropped at its arm's end.

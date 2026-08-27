@@ -1,0 +1,7 @@
+import std.io.println
+
+fn main() {
+    let x = 41
+    let f = |n: i32| { n + x }
+    println(f(1i32))
+}

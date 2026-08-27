@@ -16,6 +16,6 @@ impl Drop for S {
 fn main() {
     let mut v = new[S]()
     push(mut v, own S { n = 9 })
-    let x = get(v, 0usize)
+    let x = get(v, 0usize) |e| { e }
     println(x.n)
 }

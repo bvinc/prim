@@ -349,6 +349,23 @@ impl<'a> Checker<'a> {
                 }
                 true
             }
+            (
+                Type::Fn {
+                    params: pa,
+                    ret: ra,
+                },
+                Type::Fn {
+                    params: pb,
+                    ret: rb,
+                },
+            ) if pa.len() == pb.len() => {
+                for (a, b) in pa.iter().zip(pb.iter()) {
+                    if !Self::infer_pins(a, b, pins) {
+                        return false;
+                    }
+                }
+                Self::infer_pins(ra, rb, pins)
+            }
             _ => true,
         }
     }
@@ -378,6 +395,13 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params(t, pins))
                     .collect(),
             ),
+            Type::Fn { params, ret } => Type::Fn {
+                params: params
+                    .iter()
+                    .map(|t| Self::substitute_params(t, pins))
+                    .collect(),
+                ret: Box::new(Self::substitute_params(ret, pins)),
+            },
             _ => ty.clone(),
         }
     }
@@ -413,6 +437,13 @@ impl<'a> Checker<'a> {
                     .map(|t| Self::substitute_params_with_slice(t, args))
                     .collect(),
             ),
+            Type::Fn { params, ret } => Type::Fn {
+                params: params
+                    .iter()
+                    .map(|t| Self::substitute_params_with_slice(t, args))
+                    .collect(),
+                ret: Box::new(Self::substitute_params_with_slice(ret, args)),
+            },
             _ => ty.clone(),
         }
     }
@@ -2242,6 +2273,90 @@ impl<'a> Checker<'a> {
                 Ok(result_ty)
             }
             ExprKind::Error => Ok(Type::Undetermined),
+            ExprKind::Closure { params, ret, body } => {
+                // A block body is a fresh scope: only its own parameters and
+                // the `let`s inside are visible. Captures were rejected during
+                // lowering, so the enclosing locals are not consulted here.
+                let mut closure_locals: HashMap<SymbolId, Type> = HashMap::new();
+                let mut param_types = Vec::with_capacity(params.len());
+                for p in params.iter_mut() {
+                    if matches!(p.ty, Type::Undetermined) {
+                        return Err(self.error(
+                            p.span,
+                            TypeCheckKind::Legacy(
+                                "could not determine the type of a block parameter; annotate \
+                                 it (`|e: T|`) or pass the block where its type is known"
+                                    .to_string(),
+                            ),
+                        ));
+                    }
+                    p.ty = Self::finalize_type(&p.ty);
+                    closure_locals.insert(p.name, p.ty.clone());
+                    param_types.push(p.ty.clone());
+                }
+                // A block's value is its trailing expression (not `return`),
+                // so `return` statements inside a block are rejected: they'd
+                // otherwise be checked against the enclosing function's type.
+                // Restore the enclosing return type even if the body check
+                // fails, so later statements still see the correct one.
+                let saved_ret = self.current_ret.take();
+                let body_ty = self.check_block(body, &mut closure_locals);
+                self.current_ret = saved_ret;
+                let body_ty = body_ty?;
+                let ret_ty = match ret {
+                    Some(declared) => declared.clone(),
+                    None => body_ty.unwrap_or(Type::Unit),
+                };
+                let fn_ty = Type::Fn {
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                };
+                *ty = fn_ty.clone();
+                Ok(fn_ty)
+            }
+            ExprKind::ClosureRef { .. } => Err(self.error(
+                *span,
+                TypeCheckKind::Legacy("internal error: closure reference before extraction".into()),
+            )),
+            ExprKind::IndirectCall { callee, args } => {
+                let callee_ty = self.check_expr(callee, locals)?;
+                let Type::Fn { params, ret } = callee_ty.clone() else {
+                    let found = self.type_name(&callee_ty);
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "cannot call a value of type {found} (expected a fn type)"
+                        )),
+                    ));
+                };
+                if params.len() != args.len() {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(format!(
+                            "fn value called with {} args, expected {}",
+                            args.len(),
+                            params.len()
+                        )),
+                    ));
+                }
+                for (arg, expected) in args.iter_mut().zip(params.iter()) {
+                    self.apply_expected(arg, expected);
+                    let got = self.check_expr(arg, locals)?;
+                    if self.unify(expected, &got).is_none() {
+                        let expected_name = self.type_name(expected);
+                        let found_name = self.type_name(&got);
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: expected_name,
+                                found: found_name,
+                            },
+                        ));
+                    }
+                }
+                *ty = (*ret).clone();
+                Ok((*ret).clone())
+            }
             ExprKind::DynCall { .. } => {
                 // DynCall nodes are produced by typecheck itself; the type
                 // has already been set when they were created. Returning
@@ -2523,6 +2638,25 @@ impl<'a> Checker<'a> {
                 }
                 Some(Type::Tuple(elems))
             }
+            (
+                Type::Fn {
+                    params: pa,
+                    ret: ra,
+                },
+                Type::Fn {
+                    params: pb,
+                    ret: rb,
+                },
+            ) if pa.len() == pb.len() => {
+                let mut params = Vec::with_capacity(pa.len());
+                for (ea, eb) in pa.iter().zip(pb.iter()) {
+                    params.push(self.unify(ea, eb)?);
+                }
+                Some(Type::Fn {
+                    params,
+                    ret: Box::new(self.unify(ra, rb)?),
+                })
+            }
             (a, b) if a == b => Some(a.clone()),
             _ => None,
         }
@@ -2642,28 +2776,48 @@ impl<'a> Checker<'a> {
                     *ty = expected.clone();
                 }
             }
+            ExprKind::Closure { params, ret, body } => {
+                if let Type::Fn {
+                    params: expected_params,
+                    ret: expected_ret,
+                } = expected
+                    && params.len() == expected_params.len()
+                {
+                    for (p, et) in params.iter_mut().zip(expected_params.iter()) {
+                        if matches!(p.ty, Type::Undetermined) {
+                            p.ty = et.clone();
+                        }
+                    }
+                    if ret.is_none()
+                        && let Some(body_expr) = body.expr.as_mut()
+                    {
+                        self.apply_expected(body_expr, expected_ret);
+                    }
+                    *ty = expected.clone();
+                }
+            }
             _ => {}
         }
     }
 
     /// Resolve any lingering inference variables in a pattern's stored types.
-    fn finalize_pattern(&self, pattern: &mut crate::hir::Pattern) {
+    fn finalize_pattern(pattern: &mut crate::hir::Pattern) {
         match pattern {
-            crate::hir::Pattern::Wildcard { ty, .. } => *ty = self.finalize_type(ty),
-            crate::hir::Pattern::Binding { ty, .. } => *ty = self.finalize_type(ty),
-            crate::hir::Pattern::Int { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Wildcard { ty, .. } => *ty = Self::finalize_type(ty),
+            crate::hir::Pattern::Binding { ty, .. } => *ty = Self::finalize_type(ty),
+            crate::hir::Pattern::Int { ty, .. } => *ty = Self::finalize_type(ty),
             crate::hir::Pattern::Bool { .. } => {}
             crate::hir::Pattern::Tuple { elems, ty, .. } => {
-                *ty = self.finalize_type(ty);
+                *ty = Self::finalize_type(ty);
                 for elem in elems {
-                    self.finalize_pattern(elem);
+                    Self::finalize_pattern(elem);
                 }
             }
             crate::hir::Pattern::Variant { fields, .. }
             | crate::hir::Pattern::Struct { fields, .. } => {
                 for fp in fields {
-                    fp.ty = self.finalize_type(&fp.ty);
-                    self.finalize_pattern(&mut fp.pattern);
+                    fp.ty = Self::finalize_type(&fp.ty);
+                    Self::finalize_pattern(&mut fp.pattern);
                 }
             }
         }
@@ -2686,9 +2840,9 @@ impl<'a> Checker<'a> {
             } => {
                 self.finalize_expr(value)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&value.ty);
+                    *ty = Self::finalize_type(&value.ty);
                 }
-                self.finalize_pattern(pattern);
+                Self::finalize_pattern(pattern);
             }
             Stmt::Assign { value, .. } => {
                 self.finalize_expr(value)?;
@@ -2743,7 +2897,7 @@ impl<'a> Checker<'a> {
                 self.finalize_expr(left)?;
                 self.finalize_expr(right)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&left.ty);
+                    *ty = Self::finalize_type(&left.ty);
                 }
             }
             ExprKind::Call { args, .. } => {
@@ -2799,7 +2953,7 @@ impl<'a> Checker<'a> {
             } => {
                 self.finalize_expr(scrutinee)?;
                 for arm in arms {
-                    self.finalize_pattern(&mut arm.pattern);
+                    Self::finalize_pattern(&mut arm.pattern);
                     self.finalize_expr(&mut arm.body)?;
                 }
             }
@@ -2812,13 +2966,13 @@ impl<'a> Checker<'a> {
             ExprKind::BitNot(operand) => {
                 self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&operand.ty);
+                    *ty = Self::finalize_type(&operand.ty);
                 }
             }
             ExprKind::Neg(operand) => {
                 self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&operand.ty);
+                    *ty = Self::finalize_type(&operand.ty);
                 }
             }
             ExprKind::ArrayLit(elements) => {
@@ -2840,7 +2994,7 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
                     && let Some(then_expr) = &then_branch.expr
                 {
-                    *ty = self.finalize_type(&then_expr.ty);
+                    *ty = Self::finalize_type(&then_expr.ty);
                 }
             }
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
@@ -2848,9 +3002,33 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
                     && let Some(expr) = &block.expr
                 {
-                    *ty = self.finalize_type(&expr.ty);
+                    *ty = Self::finalize_type(&expr.ty);
                 }
             }
+            ExprKind::Closure { params, ret, body } => {
+                for p in params {
+                    p.ty = Self::finalize_type(&p.ty);
+                }
+                if let Some(r) = ret {
+                    *r = Self::finalize_type(r);
+                }
+                self.finalize_block(body)?;
+                if let Type::Fn {
+                    params: fn_params,
+                    ret: fn_ret,
+                } = ty
+                {
+                    *fn_params = fn_params.iter().map(Self::finalize_type).collect();
+                    *fn_ret = Box::new(Self::finalize_type(fn_ret));
+                }
+            }
+            ExprKind::IndirectCall { callee, args } => {
+                self.finalize_expr(callee)?;
+                for arg in args {
+                    self.finalize_expr(arg)?;
+                }
+            }
+            ExprKind::ClosureRef { .. } => {}
             _ => {}
         }
         // Every expression must now carry a concrete type (`Unit` for no value).
@@ -2868,10 +3046,23 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn finalize_type(&self, ty: &Type) -> Type {
+    fn finalize_type(ty: &Type) -> Type {
         match ty {
             Type::IntVar => Type::I32,
             Type::FloatVar => Type::F64,
+            Type::Fn { params, ret } => Type::Fn {
+                params: params.iter().map(Self::finalize_type).collect(),
+                ret: Box::new(Self::finalize_type(ret)),
+            },
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(Self::finalize_type).collect()),
+            Type::Array(elem, n) => Type::Array(
+                Box::new(Self::finalize_type(elem)),
+                Box::new(Self::finalize_type(n)),
+            ),
+            Type::Pointer { mutable, pointee } => Type::Pointer {
+                mutable: *mutable,
+                pointee: Box::new(Self::finalize_type(pointee)),
+            },
             _ => ty.clone(),
         }
     }
@@ -3089,6 +3280,14 @@ fn unsafe_violation_expr(
                     .and_then(|b| unsafe_violation(program, b, in_unsafe))
             }),
         ExprKind::Block(b) => unsafe_violation(program, b, in_unsafe),
+        ExprKind::Closure { body, .. } => unsafe_violation(program, body, in_unsafe),
+        ExprKind::IndirectCall { callee, args } => {
+            unsafe_violation_expr(program, callee, in_unsafe).or_else(|| {
+                args.iter()
+                    .find_map(|a| unsafe_violation_expr(program, a, in_unsafe))
+            })
+        }
+        ExprKind::ClosureRef { .. } => None,
         ExprKind::BitNot(e) | ExprKind::Neg(e) => unsafe_violation_expr(program, e, in_unsafe),
         // `spawn(f)` indirectly invokes `f` in a new task, so it must observe
         // the same unsafe boundary as a direct call: safe code may not spawn

@@ -95,6 +95,11 @@ impl Mono<'_> {
         let mut ret = self.program.functions[fid.0 as usize].ret.take();
         if let Some(r) = &mut ret {
             *r = self.substitute_type(r, subst);
+            // A return type parameter inferred as `Unit` (e.g. a block that
+            // produces no value) has no wasm result.
+            if matches!(r, Type::Unit) {
+                ret = None;
+            }
         }
         self.program.functions[fid.0 as usize].ret = ret;
         // Substitute + rewrite the body in one walk over a moved-out
@@ -250,6 +255,21 @@ impl Mono<'_> {
             }
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 self.rewrite_block(block, subst)
+            }
+            ExprKind::Closure { body, .. } => self.rewrite_block(body, subst),
+            ExprKind::ClosureRef { func } => {
+                // A block inside a generic function is itself generic (it
+                // inherits the enclosing function's type params), so
+                // specialize it with the same substitution.
+                if !subst.is_empty() {
+                    *func = self.instantiate_function(*func, subst.to_vec());
+                }
+            }
+            ExprKind::IndirectCall { callee, args } => {
+                self.rewrite_expr(callee, subst);
+                for a in args {
+                    self.rewrite_expr(a, subst);
+                }
             }
             ExprKind::Coerce { value, .. } => self.rewrite_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {
@@ -502,6 +522,13 @@ impl Mono<'_> {
                     .map(|e| self.substitute_type(e, subst))
                     .collect(),
             ),
+            Type::Fn { params, ret } => Type::Fn {
+                params: params
+                    .iter()
+                    .map(|t| self.substitute_type(t, subst))
+                    .collect(),
+                ret: Box::new(self.substitute_type(ret, subst)),
+            },
             Type::Struct(sid, args) if args.is_empty() => Type::Struct(*sid, Vec::new()),
             Type::Struct(sid, args) => {
                 let concrete_args: Vec<Type> = args
@@ -600,6 +627,7 @@ impl Mono<'_> {
             | ExprKind::Str(_)
             | ExprKind::Ident(_)
             | ExprKind::Spawn { .. }
+            | ExprKind::ClosureRef { .. }
             | ExprKind::Error => {}
             ExprKind::ConstParam(id) => {
                 let id = *id;
@@ -672,6 +700,21 @@ impl Mono<'_> {
             }
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 self.substitute_block(block, subst)
+            }
+            ExprKind::Closure { params, ret, body } => {
+                for p in params {
+                    p.ty = self.substitute_type(&p.ty, subst);
+                }
+                if let Some(r) = ret {
+                    *r = self.substitute_type(r, subst);
+                }
+                self.substitute_block(body, subst);
+            }
+            ExprKind::IndirectCall { callee, args } => {
+                self.substitute_expr(callee, subst);
+                for a in args {
+                    self.substitute_expr(a, subst);
+                }
             }
             ExprKind::Coerce { value, .. } => self.substitute_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {

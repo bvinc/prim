@@ -14,7 +14,7 @@ fn main() {
         push(mut v, own 10i32)
         push(mut v, own 20i32)
         push(mut v, own 30i32)
-        total = total + get(v, 2usize)
+        total = total + (get(v, 2usize) |e| { e })
         iter = iter + 1usize
     }
     println(total)

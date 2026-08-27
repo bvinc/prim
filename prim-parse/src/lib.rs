@@ -56,6 +56,13 @@ pub enum Type {
     },
     /// An anonymous product type, `(A, B, ...)` with two or more elements.
     Tuple(Vec<Type>),
+    /// A function/block type, `fn(T, U) -> R`. A block is a first-class
+    /// function value; its parameters and return type are structural (two
+    /// `fn` types are the same iff their parameter and return types match).
+    Fn {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
     /// `Self` (and a bare `self` parameter): the type an `impl`/`trait` is
     /// for. Resolved to the concrete target (in an impl) or the trait type
     /// (in a trait declaration) during HIR lowering.
@@ -156,6 +163,14 @@ pub enum ExprKind {
     /// `unsafe { stmts }` — an unsafe block granting raw-pointer powers to
     /// its body (deref, pointer arithmetic, allocator, raw I/O).
     UnsafeBlock(Block),
+    /// A block literal `|a, b| { ... }` (Smalltalk/Swift-style closure).
+    /// Parameters are `Read` borrows of their values; the return type is
+    /// inferred from the body. A trailing block after a call —
+    /// `v.get(i) |e| { ... }` — is desugared to an extra last argument.
+    Closure {
+        params: Vec<Parameter>,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

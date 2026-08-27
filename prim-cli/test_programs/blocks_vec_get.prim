@@ -1,0 +1,19 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.get
+
+fn main() {
+    let mut v = new[i32]()
+    push(mut v, own 10i32)
+    push(mut v, own 20i32)
+    push(mut v, own 30i32)
+
+    // `get(v, idx) |e| { ... }` — the trailing block is passed to `get` and
+    // receives the element as a copy; `get` returns the block's result.
+    let doubled = get(v, 1usize) |e| { e * 2 }
+    println(doubled)                          // 40
+
+    // A block that produces no value: `get` returns `()`.
+    get(v, 2usize) |e| { println(e) }         // 30
+}

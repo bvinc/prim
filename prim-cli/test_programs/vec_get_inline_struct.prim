@@ -13,6 +13,6 @@ impl Copy for Inline16 {}
 fn main() {
     let mut v = new[Inline16]()
     push(mut v, own Inline16 { a = 1, b = 2, c = 3, d = 4 })
-    let x = get(v, 0usize)
+    let x = get(v, 0usize) |e| { e }
     println(x.a + x.b + x.c + x.d)
 }

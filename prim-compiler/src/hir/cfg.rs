@@ -595,6 +595,12 @@ impl Builder<'_> {
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => self.read(base),
             ExprKind::Deref(e) | ExprKind::BitNot(e) | ExprKind::Neg(e) => self.read(e),
             ExprKind::Coerce { value, .. } => self.read(value),
+            ExprKind::IndirectCall { callee, args } => {
+                self.read(callee);
+                for a in args {
+                    self.read(a);
+                }
+            }
             // Typecheck rewrites every `MethodCall` to `Call`/`DynCall`/
             // `TraitBoundCall` before either consumer runs; handle the leftover
             // arms defensively as plain reads so the match stays exhaustive.
@@ -611,6 +617,9 @@ impl Builder<'_> {
             | ExprKind::Str(_)
             | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
+            // `Closure` is replaced by `ClosureRef` before the CFG is built.
+            | ExprKind::Closure { .. }
+            | ExprKind::ClosureRef { .. }
             | ExprKind::Error => {}
         }
     }

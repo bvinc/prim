@@ -77,8 +77,10 @@ later feature).
   copies of copy-able (scalar, pointer, or inline) elements — enforced at
   monomorphization, see below; `Vec.set`/`Vec.push`/`Vec.swap` mutate in
   place, match arms read enum payloads via `read`/`mut` bindings. Remaining:
-  - **Callbacks** — `v.with_mut(i, |e: mut T| ...)`-style borrow-in-a-scope
-    needs first-class function values (deferred, out of scope for v1).
+  - **Callbacks** — first-class function values now exist as **blocks**
+    (`|e| { ... }`, non-capturing), so `get(v, i) |e| { ... }`-style
+    element callbacks work. Borrow-in-a-scope callbacks that *capture*
+    enclosing locals still need capturing closures (deferred).
   - **Unmarked consumption** — the memory model wants `mut x` to be the *only*
     call-site mark, with consumption and reads unmarked (0007 locality). Today
     a call still marks the mode explicitly (`f(own x)`, `f(mut x)`) and the
@@ -94,11 +96,12 @@ later feature).
     object stays rejected.
   - **Non-Copy element reads — enforced.** `Vec.get`/`Array.get` are
     deref-reads of the slot and are bounded by `T: Copy` at the signature level
-    (`fn get[T: Copy](read v: Vec[T], i: usize) -> T`), so a `Drop`/non-`Copy`
-    element — which would have to be moved out and could double-free — is a
-    clean type error naming the missing `Copy` bound (`vec_get_noncopy`,
-    `array_get_noncopy` tests). `set`/`swap`/`own` moves and match arms remain
-    the access path for non-Copy elements.
+    (`fn get[T: Copy, R](read v: Vec[T], i: usize, f: fn(T) -> R) -> R` /
+    `fn get[T: Copy](read a: Array[T, N], i: usize) -> Option[T]`), so a
+    `Drop`/non-`Copy` element — which would have to be moved out and could
+    double-free — is a clean type error naming the missing `Copy` bound
+    (`vec_get_noncopy`, `array_get_noncopy` tests). `set`/`swap`/`own` moves
+    and match arms remain the access path for non-Copy elements.
   - **`match mut` on Copy scrutinees** is rejected at typecheck (a Copy value
     has no place to mutate). `mut`-binding writes to scalar payloads and scalar
     aggregate fields are copied back into the scrutinee's place at arm end

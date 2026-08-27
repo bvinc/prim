@@ -13,7 +13,7 @@ impl Copy for Point {}
 // call-site bound check also rejects instantiating `first` with a non-`Copy`
 // element (see vec_get_noncopy / copy_bound_missing).
 fn first[T: Copy](read v: Vec[T]) -> T {
-    return get(v, 0usize)
+    return get(v, 0usize) |e| { e }
 }
 
 fn main() {

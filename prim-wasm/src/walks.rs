@@ -162,6 +162,12 @@ fn collect_locals_expr(expr: &hir::Expr, locals: &mut Vec<(hir::SymbolId, ValTyp
                 collect_locals_expr(e, locals);
             }
         }
+        hir::ExprKind::IndirectCall { callee, args } => {
+            collect_locals_expr(callee, locals);
+            for a in args {
+                collect_locals_expr(a, locals);
+            }
+        }
         _ => {}
     }
 }
@@ -747,6 +753,19 @@ fn collect_scratch_types_expr(
                 block, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
             )
         }
+        hir::ExprKind::IndirectCall { callee, args } => {
+            // One i32 scratch slot to stash the callee's function-table index
+            // while the arguments are pushed underneath it.
+            out.push(ValType::I32);
+            collect_scratch_types_expr(
+                callee, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
+            );
+            for a in args {
+                collect_scratch_types_expr(
+                    a, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -861,6 +880,12 @@ fn collect_str_literals_expr<'a>(expr: &'a hir::Expr, out: &mut Vec<&'a str>) {
         }
         hir::ExprKind::Block(block) | hir::ExprKind::UnsafeBlock(block) => {
             collect_str_literals_block(block, out)
+        }
+        hir::ExprKind::IndirectCall { callee, args } => {
+            collect_str_literals_expr(callee, out);
+            for a in args {
+                collect_str_literals_expr(a, out);
+            }
         }
         _ => {}
     }

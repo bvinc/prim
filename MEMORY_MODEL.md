@@ -65,15 +65,17 @@ would mark `String` `Copy` — wrong, because `String` owns the buffer behind
 `impl Copy`. `Point`, `Pair`, `Counter`, and any plain-data record become `Copy`
 by writing `impl Copy for Point {}`; `String`, `Vec`, and `dyn Trait` never do.
 
-**Element reads copy.** `Vec.get(i)` and `Array.get(i)` copy the element out of
-the container and leave it in place. They are allowed only for `Copy` elements,
-expressed as a `T: Copy` bound on the method
-(`fn get[T: Copy](read v: Vec[T], i: usize) -> T`), not as a representation
-heuristic. Reading a non-`Copy` element — a `Drop`-implementing struct, an enum,
-`String`, `Vec`, or `dyn Trait` — is a plain type error at the call site
-(`type S does not implement trait Copy`), because the copy would alias the
-stored value and double-free on drop. Non-copyable elements are accessed by move
-(`own`), whole-structure methods (`set`, `swap`), or a `match` binding (§6).
+**Element reads copy.** `Vec.get(i, f)` and `Array.get(i)` copy the element out of
+the container and leave it in place. `Vec.get` hands the copy to a block and
+returns the block's result (`fn get[T: Copy, R](read v: Vec[T], i: usize, f: fn(T) -> R) -> R`),
+callable with a trailing block `get(v, i) |e| { ... }`; `Array.get(i)` returns
+the copy directly. Both are allowed only for `Copy` elements, expressed as a
+`T: Copy` bound, not as a representation heuristic. Reading a non-`Copy` element
+— a `Drop`-implementing struct, an enum, `String`, `Vec`, or `dyn Trait` — is a
+plain type error at the call site (`type S does not implement trait Copy`),
+because the copy would alias the stored value and double-free on drop.
+Non-copyable elements are accessed by move (`own`), whole-structure methods
+(`set`, `swap`), or a `match` binding (§6).
 
 **Nothing is ever silently duplicated.** Copyability is the explicit `impl Copy`
 declaration for aggregates, plus the unconditional scalar/pointer rule. An
@@ -258,8 +260,8 @@ Some(read v) => ... } }`), with no first-class function values required.
 
 Without stored or returned references, element access is method-mediated:
 
-- **Read an element**: `Vec.get(i) -> T` / `Array.get(i) -> Option[T]` return a
-  copy (copyable elements only, §2).
+- **Read an element**: `Vec.get(i, f) -> R` (passes a copy to a block) /
+  `Array.get(i) -> Option[T]` return a copy (copyable elements only, §2).
 - **Write an element**: `Vec.set(i, v)`, `Vec.push(v)`, `Vec.swap(i, j)` mutate
   in place, plus `mut self` methods for whole-structure operations.
 - **Hold a view across statements**: impossible by design. In-place edits are
