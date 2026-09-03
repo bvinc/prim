@@ -167,6 +167,7 @@ pub fn compile(
         hir::type_check(&mut hir)?;
         hir::check_ownership(&hir)?;
         hir::monomorphize(&mut hir)?;
+        hir::block_inline::inline_program(&mut hir);
         hir::elaborate_drops(&mut hir)?;
         Ok(hir)
     })();

@@ -667,6 +667,8 @@ fn scalar_disqualify_expr(
         | hir::ExprKind::Str(_)
         | hir::ExprKind::ConstParam(_)
         | hir::ExprKind::Spawn { .. }
+        | hir::ExprKind::BlockLit { .. }
+        | hir::ExprKind::BlockCall { .. }
         | hir::ExprKind::Error => {}
     }
 }

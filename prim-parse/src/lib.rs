@@ -60,7 +60,20 @@ pub enum Type {
     /// for. Resolved to the concrete target (in an impl) or the trait type
     /// (in a trait declaration) during HIR lowering.
     SelfType,
+    /// A second-class compile-time closure type, `block(T)` / `block(mut T)`
+    /// / `block(read T, read U)`. Each element is a (mode, type) pair; a bare
+    /// element defaults to `read`.
+    Block(Vec<BlockParam>),
     Undetermined, // Type not yet determined during parsing
+}
+
+/// One element of a `block(...)` type: the passing mode the callee grants the
+/// block for that element, plus the element's type. The mode is written in the
+/// type (`block(mut T)`), never in the block literal's parameter list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockParam {
+    pub mode: PassMode,
+    pub ty: Type,
 }
 
 /// An expression with its span and type.
@@ -156,6 +169,14 @@ pub enum ExprKind {
     /// `unsafe { stmts }` — an unsafe block granting raw-pointer powers to
     /// its body (deref, pointer arithmetic, allocator, raw I/O).
     UnsafeBlock(Block),
+    /// A block literal `|e| { ... }` / `|e, extra| { ... }` / `|| { ... }`.
+    /// Parameters are bare names — their types and passing modes come from the
+    /// `block(...)` formal the literal is passed to. The body's free names and
+    /// `return`/`break` bind to the enclosing function at lowering/typecheck.
+    BlockLiteral {
+        params: Vec<Ident>,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +432,9 @@ pub struct Function {
     /// implicit `unsafe` block, and it may only be called from an `unsafe`
     /// context (an `unsafe { ... }` block or another `unsafe fn`).
     pub unsafe_fn: bool,
+    /// `inline fn`: this function is spliced into its caller at compile time.
+    /// Required for `block` parameters (second-class, no runtime value).
+    pub is_inline: bool,
     pub span: Span,
 }
 
@@ -444,7 +468,7 @@ pub enum ConstArg {
 ///
 /// `Read` is the default in parameter position (a bare `x: T` borrows); an owned
 /// parameter is written `x: own T`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PassMode {
     #[default]
     Read,
@@ -566,6 +590,8 @@ pub struct ImplMethod {
     /// `@runtime("...")` symbol for an intrinsic associated function with no
     /// body (e.g. the primitive conversions). `None` for an ordinary method.
     pub runtime: Option<String>,
+    /// `inline fn`: this method is spliced into its caller at compile time.
+    pub is_inline: bool,
 }
 
 /// A path of name segments (e.g., `module.submodule.function`).

@@ -43,6 +43,29 @@ pub enum TypeCheckKind {
     UndeterminedParamType,
     UndeterminedFieldType,
     AssignToImmutable(SymbolId),
+    /// A `block` parameter used as a value rather than invoked (`b` instead of
+    /// `b(...)`). Blocks are second-class; they have no runtime value.
+    BlockValueUsed(String),
+    /// A block literal passed to a `block(...)` formal with a different number
+    /// of parameters.
+    BlockArityMismatch {
+        expected: usize,
+        found: usize,
+    },
+    /// Assignment (`e = ..`, `e.field = ..`, `*e = ..`) through a `read` block
+    /// parameter — a read block grants read-only access to the element.
+    AssignToReadBlockParam(String),
+    /// An `inline fn` parameter that takes a non-`Copy` value by `own`. Moving
+    /// a value *into* the callee has no place after the body is spliced into
+    /// the caller; borrows and `Copy` values are fine.
+    InlineFnOwnParam(String),
+    /// An `inline fn` (directly or indirectly) calling itself: inlining cannot
+    /// bottom out.
+    RecursiveInlineFn(String),
+    /// An `inline fn` with a return type. v1 splices the callee body directly
+    /// into the caller, so a non-local `return value` would escape to the
+    /// caller instead of flowing through the call.
+    InlineFnReturns(String),
     /// A numeric literal whose type couldn't be determined from context.
     /// `float` distinguishes the suggested suffix (`f64` vs `i32`).
     AmbiguousLiteral {
@@ -114,6 +137,35 @@ impl std::fmt::Display for TypeCheckError {
             TypeCheckKind::AssignToImmutable(sym) => {
                 write!(f, "assignment to immutable global {:?}", sym)
             }
+            TypeCheckKind::BlockValueUsed(name) => write!(
+                f,
+                "block parameter '{name}' used as a value; invoke it as '{name}(...)'"
+            ),
+            TypeCheckKind::BlockArityMismatch { expected, found } => write!(
+                f,
+                "block literal has {found} parameter(s), but the `block(...)` type expects {expected}"
+            ),
+            TypeCheckKind::AssignToReadBlockParam(name) => write!(
+                f,
+                "cannot assign through read-only block parameter '{name}' (declare the block \
+                 parameter `block(mut T)` to mutate the element)"
+            ),
+            TypeCheckKind::InlineFnOwnParam(name) => write!(
+                f,
+                "inline fn parameter '{name}' takes a non-Copy value by `own`, which is not \
+                 supported yet: use a `read`/`mut` borrow or a Copy type"
+            ),
+            TypeCheckKind::RecursiveInlineFn(name) => write!(
+                f,
+                "inline fn '{name}' is recursive (directly or indirectly); inline fns must \
+                 not recurse"
+            ),
+            TypeCheckKind::InlineFnReturns(name) => write!(
+                f,
+                "inline fn '{name}' declares a return type, which is not supported yet: inline \
+                 fns must return `()`. Return from the enclosing function non-locally inside a \
+                 block instead"
+            ),
             TypeCheckKind::AmbiguousLiteral { float } => {
                 let (kind, suffix) = if *float {
                     ("float", "f64")
@@ -155,7 +207,8 @@ pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
     let mut checker = Checker::new(program);
     checker.collect_signatures()?;
     checker.check_unsafe_bodies()?;
-    checker.check_functions()
+    checker.check_functions()?;
+    checker.check_inline_recursion()
 }
 
 struct Checker<'a> {
@@ -195,6 +248,9 @@ struct Checker<'a> {
     /// Type parameters of the function currently being checked. Indexed
     /// by `TypeParamId`. Cleared between functions.
     current_type_params: Vec<crate::hir::TypeParam>,
+    /// `read` block parameters currently in scope (during a block literal's
+    /// body check). Used to reject assignment through a read-only element.
+    read_block_params: HashSet<SymbolId>,
 }
 
 struct CheckedField {
@@ -231,6 +287,7 @@ impl<'a> Checker<'a> {
             loop_depth: 0,
             current_ret: None,
             current_type_params: Vec::new(),
+            read_block_params: HashSet::new(),
         }
     }
 
@@ -349,6 +406,14 @@ impl<'a> Checker<'a> {
                 }
                 true
             }
+            (Type::Block(pa), Type::Block(pb)) if pa.len() == pb.len() => {
+                for (a, b) in pa.iter().zip(pb.iter()) {
+                    if a.mode != b.mode || !Self::infer_pins(&a.ty, &b.ty, pins) {
+                        return false;
+                    }
+                }
+                true
+            }
             _ => true,
         }
     }
@@ -376,6 +441,15 @@ impl<'a> Checker<'a> {
                 *eid,
                 args.iter()
                     .map(|t| Self::substitute_params(t, pins))
+                    .collect(),
+            ),
+            Type::Block(params) => Type::Block(
+                params
+                    .iter()
+                    .map(|p| super::BlockParam {
+                        mode: p.mode,
+                        ty: Self::substitute_params(&p.ty, pins),
+                    })
                     .collect(),
             ),
             _ => ty.clone(),
@@ -411,6 +485,15 @@ impl<'a> Checker<'a> {
                 type_args
                     .iter()
                     .map(|t| Self::substitute_params_with_slice(t, args))
+                    .collect(),
+            ),
+            Type::Block(params) => Type::Block(
+                params
+                    .iter()
+                    .map(|p| super::BlockParam {
+                        mode: p.mode,
+                        ty: Self::substitute_params_with_slice(&p.ty, args),
+                    })
                     .collect(),
             ),
             _ => ty.clone(),
@@ -1023,6 +1106,76 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// Reject recursion among `inline fn`s: the inlining pass cannot bottom
+    /// out if an inline function can reach itself, directly or transitively.
+    fn check_inline_recursion(&self) -> Result<(), TypeCheckError> {
+        let n = self.program.functions.len();
+        let mut edges: Vec<Vec<FuncId>> = vec![Vec::new(); n];
+        for f in &self.program.functions {
+            if !f.is_inline {
+                continue;
+            }
+            let mut seen = std::collections::HashSet::new();
+            collect_callees(&f.body, &mut seen);
+            for callee in seen {
+                let fid = callee.0 as usize;
+                if fid < n && self.program.functions[fid].is_inline {
+                    edges[f.id.0 as usize].push(callee);
+                }
+            }
+        }
+
+        // Three-color DFS: a back edge to a gray node is a cycle.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Color {
+            White,
+            Gray,
+            Black,
+        }
+        let mut color = vec![Color::White; n];
+        let mut cycle: Option<(SpanId, String)> = None;
+        fn visit(
+            node: usize,
+            edges: &[Vec<FuncId>],
+            color: &mut [Color],
+            functions: &[Function],
+            cycle: &mut Option<(SpanId, String)>,
+        ) {
+            color[node] = Color::Gray;
+            for next in &edges[node] {
+                let m = next.0 as usize;
+                match color[m] {
+                    Color::Gray => {
+                        if cycle.is_none() {
+                            let f = &functions[m];
+                            *cycle = Some((f.span, format!("{:?}", f.name)));
+                        }
+                    }
+                    Color::White => visit(m, edges, color, functions, cycle),
+                    Color::Black => {}
+                }
+            }
+            color[node] = Color::Black;
+        }
+        for fid in 0..n {
+            if self.program.functions[fid].is_inline && color[fid] == Color::White {
+                visit(
+                    fid,
+                    &edges,
+                    &mut color,
+                    &self.program.functions,
+                    &mut cycle,
+                );
+            }
+        }
+        match cycle {
+            Some((span, name)) => {
+                Err(self.error(span, TypeCheckKind::RecursiveInlineFn(name)))
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Enforce the safe/unsafe boundary: raw-pointer powers (`*p` deref,
     /// pointer arithmetic, reinterpret, allocator, and calls to `unsafe fn`)
     /// are only allowed inside an `unsafe` context — the body of an
@@ -1050,12 +1203,35 @@ impl<'a> Checker<'a> {
 
     fn check_function(&mut self, func: &mut Function) -> Result<(), TypeCheckError> {
         let mut locals = HashMap::new();
-        for p in &func.params {
-            locals.insert(p.name, p.ty.clone());
-        }
         self.loop_depth = 0;
         self.current_ret = func.ret.clone();
         self.current_type_params = func.type_params.clone();
+
+        // `inline fn` parameters: `own` non-Copy values have no place after the
+        // body is spliced into the caller (and would need move/drop bookkeeping
+        // across the splice), so reject them. Borrows and `Copy` values are the
+        // supported v1 shapes. Inline fns must also return `()` (v1).
+        if func.is_inline {
+            if func.ret.is_some() {
+                return Err(self.error(
+                    func.span,
+                    TypeCheckKind::InlineFnReturns(format!("{:?}", func.name)),
+                ));
+            }
+            let copy_ctx = self.copy_ctx();
+            for p in &func.params {
+                if p.mode == PassMode::Own && !copy_ctx.is_copy(&p.ty) {
+                    return Err(self.error(
+                        p.span,
+                        TypeCheckKind::InlineFnOwnParam(format!("{:?}", p.name)),
+                    ));
+                }
+            }
+        }
+
+        for p in &func.params {
+            locals.insert(p.name, p.ty.clone());
+        }
 
         for stmt in &mut func.body.stmts {
             self.check_stmt(stmt, &mut locals)?;
@@ -1187,6 +1363,12 @@ impl<'a> Checker<'a> {
                 value,
                 span,
             } => {
+                if self.read_block_params.contains(target) {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", *target)),
+                    ));
+                }
                 let target_ty = if let Some(t) = locals.get(target).cloned() {
                     t
                 } else if let Some((t, mutable)) = self.global_info(*target) {
@@ -1289,6 +1471,14 @@ impl<'a> Checker<'a> {
             // Inserted only by drop elaboration, which runs after typecheck.
             Stmt::Drop { .. } => Ok(()),
             Stmt::DerefAssign { ptr, value, span } => {
+                if let Some(root) = crate::hir::cfg::root_symbol(ptr)
+                    && self.read_block_params.contains(&root)
+                {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", root)),
+                    ));
+                }
                 let ptr_ty = self.check_expr(ptr, locals)?;
                 let pointee = match &ptr_ty {
                     Type::Pointer { mutable, pointee } => {
@@ -1333,6 +1523,14 @@ impl<'a> Checker<'a> {
                 value,
                 span,
             } => {
+                if let Some(root) = crate::hir::cfg::root_symbol(object)
+                    && self.read_block_params.contains(&root)
+                {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", root)),
+                    ));
+                }
                 let object_ty = self.check_expr(object, locals)?;
                 let (struct_id, type_args) = match object_ty {
                     Type::Struct(id, args) => (id, args),
@@ -1429,6 +1627,12 @@ impl<'a> Checker<'a> {
             ExprKind::Str(_) => Ok(ty.clone()),
             ExprKind::Ident(symbol) => {
                 if let Some(t) = locals.get(symbol) {
+                    if matches!(t, Type::Block(_)) {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::BlockValueUsed(format!("{:?}", *symbol)),
+                        ));
+                    }
                     *ty = t.clone();
                     Ok(t.clone())
                 } else if let Some(global_ty) = self.global_type(*symbol) {
@@ -2241,6 +2445,115 @@ impl<'a> Checker<'a> {
                 *ty = result_ty.clone();
                 Ok(result_ty)
             }
+            ExprKind::BlockLit { params, body } => {
+                let expected = match &*ty {
+                    Type::Block(block_params) => block_params.clone(),
+                    Type::Undetermined => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(
+                                "block literal used where no `block(...)` type is expected"
+                                    .to_string(),
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: "block(...)".to_string(),
+                                found: self.type_name(other),
+                            },
+                        ));
+                    }
+                };
+                if params.len() != expected.len() {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::BlockArityMismatch {
+                            expected: expected.len(),
+                            found: params.len(),
+                        },
+                    ));
+                }
+                // Bind each parameter to its element type in the block body's
+                // scope; record read-only parameters so assignments through them
+                // are rejected. `return`/`break` inside the body are checked
+                // against the *caller's* ret/loop (textual capture) because we
+                // stay in the caller's `check_expr` context.
+                for (p, bp) in params.iter().zip(expected.iter()) {
+                    locals.insert(p.name, bp.ty.clone());
+                    if bp.mode != PassMode::Mut {
+                        self.read_block_params.insert(p.name);
+                    }
+                }
+                let body_result = self.check_block(body, locals);
+                for p in params.iter() {
+                    locals.remove(&p.name);
+                    self.read_block_params.remove(&p.name);
+                }
+                body_result?;
+                *ty = Type::Block(expected.clone());
+                Ok(Type::Block(expected))
+            }
+            ExprKind::BlockCall {
+                param,
+                args,
+                arg_modes,
+            } => {
+                let block_ty = locals.get(param).cloned().ok_or_else(|| {
+                    self.error(*span, TypeCheckKind::UndefinedSymbol(*param))
+                })?;
+                let Type::Block(block_params) = block_ty else {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::Legacy(
+                            "only a `block` parameter can be invoked as `name(...)`".to_string(),
+                        ),
+                    ));
+                };
+                if args.len() != block_params.len() {
+                    return Err(self.error(
+                        *span,
+                        TypeCheckKind::BlockArityMismatch {
+                            expected: block_params.len(),
+                            found: args.len(),
+                        },
+                    ));
+                }
+                if arg_modes.len() != args.len() {
+                    arg_modes.resize(args.len(), PassMode::Read);
+                }
+                for ((arg, mode), bp) in
+                    args.iter_mut().zip(arg_modes.iter()).zip(block_params.iter())
+                {
+                    self.apply_expected(arg, &bp.ty);
+                    let got = self.check_expr(arg, locals)?;
+                    if self.unify(&bp.ty, &got).is_none() {
+                        let expected_name = self.type_name(&bp.ty);
+                        let found_name = self.type_name(&got);
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::TypeMismatch {
+                                expected: expected_name,
+                                found: found_name,
+                            },
+                        ));
+                    }
+                    // A block parameter is a borrow; its argument must match the
+                    // declared element mode. Ownership re-checks this precisely.
+                    if *mode == PassMode::Own {
+                        return Err(self.error(
+                            *span,
+                            TypeCheckKind::Legacy(
+                                "a block element is passed by borrow, not `own`".to_string(),
+                            ),
+                        ));
+                    }
+                }
+                *ty = Type::Unit;
+                Ok(Type::Unit)
+            }
             ExprKind::Error => Ok(Type::Undetermined),
             ExprKind::DynCall { .. } => {
                 // DynCall nodes are produced by typecheck itself; the type
@@ -2642,28 +2955,35 @@ impl<'a> Checker<'a> {
                     *ty = expected.clone();
                 }
             }
+            // A block literal's type is the `block(...)` formal it is passed
+            // to; record it so `check_expr` can bind the parameters.
+            ExprKind::BlockLit { .. } => {
+                if matches!(ty, Type::Undetermined) {
+                    *ty = expected.clone();
+                }
+            }
             _ => {}
         }
     }
 
     /// Resolve any lingering inference variables in a pattern's stored types.
-    fn finalize_pattern(&self, pattern: &mut crate::hir::Pattern) {
+    fn finalize_pattern(pattern: &mut crate::hir::Pattern) {
         match pattern {
-            crate::hir::Pattern::Wildcard { ty, .. } => *ty = self.finalize_type(ty),
-            crate::hir::Pattern::Binding { ty, .. } => *ty = self.finalize_type(ty),
-            crate::hir::Pattern::Int { ty, .. } => *ty = self.finalize_type(ty),
+            crate::hir::Pattern::Wildcard { ty, .. } => *ty = Self::finalize_type(ty),
+            crate::hir::Pattern::Binding { ty, .. } => *ty = Self::finalize_type(ty),
+            crate::hir::Pattern::Int { ty, .. } => *ty = Self::finalize_type(ty),
             crate::hir::Pattern::Bool { .. } => {}
             crate::hir::Pattern::Tuple { elems, ty, .. } => {
-                *ty = self.finalize_type(ty);
+                *ty = Self::finalize_type(ty);
                 for elem in elems {
-                    self.finalize_pattern(elem);
+                    Self::finalize_pattern(elem);
                 }
             }
             crate::hir::Pattern::Variant { fields, .. }
             | crate::hir::Pattern::Struct { fields, .. } => {
                 for fp in fields {
-                    fp.ty = self.finalize_type(&fp.ty);
-                    self.finalize_pattern(&mut fp.pattern);
+                    fp.ty = Self::finalize_type(&fp.ty);
+                    Self::finalize_pattern(&mut fp.pattern);
                 }
             }
         }
@@ -2686,9 +3006,9 @@ impl<'a> Checker<'a> {
             } => {
                 self.finalize_expr(value)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&value.ty);
+                    *ty = Self::finalize_type(&value.ty);
                 }
-                self.finalize_pattern(pattern);
+                Self::finalize_pattern(pattern);
             }
             Stmt::Assign { value, .. } => {
                 self.finalize_expr(value)?;
@@ -2743,13 +3063,23 @@ impl<'a> Checker<'a> {
                 self.finalize_expr(left)?;
                 self.finalize_expr(right)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&left.ty);
+                    *ty = Self::finalize_type(&left.ty);
                 }
             }
             ExprKind::Call { args, .. } => {
                 for arg in args {
                     self.finalize_expr(arg)?;
                 }
+            }
+            ExprKind::BlockLit { body, .. } => {
+                self.finalize_block(body)?;
+                *ty = Self::finalize_type(ty);
+            }
+            ExprKind::BlockCall { args, .. } => {
+                for arg in args {
+                    self.finalize_expr(arg)?;
+                }
+                *ty = Self::finalize_type(ty);
             }
             // After typecheck, MethodCall is rewritten to Call or DynCall so
             // this arm is only reached if check_expr returned early with an
@@ -2799,7 +3129,7 @@ impl<'a> Checker<'a> {
             } => {
                 self.finalize_expr(scrutinee)?;
                 for arm in arms {
-                    self.finalize_pattern(&mut arm.pattern);
+                    Self::finalize_pattern(&mut arm.pattern);
                     self.finalize_expr(&mut arm.body)?;
                 }
             }
@@ -2812,13 +3142,13 @@ impl<'a> Checker<'a> {
             ExprKind::BitNot(operand) => {
                 self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&operand.ty);
+                    *ty = Self::finalize_type(&operand.ty);
                 }
             }
             ExprKind::Neg(operand) => {
                 self.finalize_expr(operand)?;
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined) {
-                    *ty = self.finalize_type(&operand.ty);
+                    *ty = Self::finalize_type(&operand.ty);
                 }
             }
             ExprKind::ArrayLit(elements) => {
@@ -2840,7 +3170,7 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
                     && let Some(then_expr) = &then_branch.expr
                 {
-                    *ty = self.finalize_type(&then_expr.ty);
+                    *ty = Self::finalize_type(&then_expr.ty);
                 }
             }
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
@@ -2848,7 +3178,7 @@ impl<'a> Checker<'a> {
                 if matches!(ty, Type::IntVar | Type::FloatVar | Type::Undetermined)
                     && let Some(expr) = &block.expr
                 {
-                    *ty = self.finalize_type(&expr.ty);
+                    *ty = Self::finalize_type(&expr.ty);
                 }
             }
             _ => {}
@@ -2868,10 +3198,19 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn finalize_type(&self, ty: &Type) -> Type {
+    fn finalize_type(ty: &Type) -> Type {
         match ty {
             Type::IntVar => Type::I32,
             Type::FloatVar => Type::F64,
+            Type::Block(params) => Type::Block(
+                params
+                    .iter()
+                    .map(|p| super::BlockParam {
+                        mode: p.mode,
+                        ty: Self::finalize_type(&p.ty),
+                    })
+                    .collect(),
+            ),
             _ => ty.clone(),
         }
     }
@@ -3110,6 +3449,8 @@ fn unsafe_violation_expr(
         | ExprKind::Str(_)
         | ExprKind::Ident(_)
         | ExprKind::ConstParam(_)
+        | ExprKind::BlockLit { .. }
+        | ExprKind::BlockCall { .. }
         | ExprKind::Error => None,
     }
 }
@@ -3164,4 +3505,129 @@ fn pattern_first_borrow_binding(
         | crate::hir::Pattern::Int { .. }
         | crate::hir::Pattern::Bool { .. } => None,
     }
+}
+
+/// Collect every statically-dispatched callee in a block (used to find inline
+/// recursion). `out` is a set so shared edges are deduplicated.
+fn collect_callees(
+    block: &crate::hir::Block,
+    out: &mut std::collections::HashSet<crate::hir::FuncId>,
+) {
+    fn expr(e: &crate::hir::Expr, out: &mut std::collections::HashSet<crate::hir::FuncId>) {
+        use crate::hir::ExprKind;
+        match &e.kind {
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Ident(_)
+            | ExprKind::ConstParam(_)
+            | ExprKind::Error => {}
+            ExprKind::Binary { left, right, .. } => {
+                expr(left, out);
+                expr(right, out);
+            }
+            ExprKind::Call { func, args, .. } => {
+                out.insert(*func);
+                for a in args {
+                    expr(a, out);
+                }
+            }
+            ExprKind::Spawn { func } => {
+                out.insert(*func);
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for (_, f) in fields {
+                    expr(f, out);
+                }
+            }
+            ExprKind::VariantLit { fields, .. } => {
+                for (_, f) in fields {
+                    expr(f, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms, .. } => {
+                expr(scrutinee, out);
+                for arm in arms {
+                    expr(&arm.body, out);
+                }
+            }
+            ExprKind::Field { base, .. } => expr(base, out),
+            ExprKind::Deref(base) => expr(base, out),
+            ExprKind::MethodCall { receiver, args, .. } => {
+                expr(receiver, out);
+                for a in args {
+                    expr(a, out);
+                }
+            }
+            ExprKind::DynCall { receiver, args, .. }
+            | ExprKind::TraitBoundCall { receiver, args, .. } => {
+                expr(receiver, out);
+                for a in args {
+                    expr(a, out);
+                }
+            }
+            ExprKind::Coerce { value, .. } => expr(value, out),
+            ExprKind::BitNot(inner) | ExprKind::Neg(inner) => expr(inner, out),
+            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+                for el in elems {
+                    expr(el, out);
+                }
+            }
+            ExprKind::TupleIndex { base, .. } => expr(base, out),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr(condition, out);
+                walk_block(then_branch, out);
+                if let Some(b) = else_branch {
+                    walk_block(b, out);
+                }
+            }
+            ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => walk_block(b, out),
+            ExprKind::BlockLit { body, .. } => walk_block(body, out),
+            ExprKind::BlockCall { args, .. } => {
+                for a in args {
+                    expr(a, out);
+                }
+            }
+        }
+    }
+    fn stmt(s: &crate::hir::Stmt, out: &mut std::collections::HashSet<crate::hir::FuncId>) {
+        match s {
+            crate::hir::Stmt::Expr(e) => expr(e, out),
+            crate::hir::Stmt::Let { value, .. } => expr(value, out),
+            crate::hir::Stmt::Assign { value, .. } => expr(value, out),
+            crate::hir::Stmt::DerefAssign { ptr, value, .. } => {
+                expr(ptr, out);
+                expr(value, out);
+            }
+            crate::hir::Stmt::FieldAssign { object, value, .. } => {
+                expr(object, out);
+                expr(value, out);
+            }
+            crate::hir::Stmt::Loop { body, .. } => walk_block(body, out),
+            crate::hir::Stmt::While { condition, body, .. } => {
+                expr(condition, out);
+                walk_block(body, out);
+            }
+            crate::hir::Stmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    expr(v, out);
+                }
+            }
+            crate::hir::Stmt::Break { .. } | crate::hir::Stmt::Drop { .. } => {}
+        }
+    }
+    fn walk_block(b: &crate::hir::Block, out: &mut std::collections::HashSet<crate::hir::FuncId>) {
+        for s in &b.stmts {
+            stmt(s, out);
+        }
+        if let Some(e) = &b.expr {
+            expr(e, out);
+        }
+    }
+    walk_block(block, out);
 }

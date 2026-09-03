@@ -1,0 +1,12 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+fn main() {
+    let v = new[i32]()
+    push(mut v, own 10)
+    push(mut v, own 20)
+    with(v, 0usize, |e| { println(e) })
+    with(v, 1usize, |e| { println(e) })
+}

@@ -99,6 +99,31 @@ fn set[T](mut v: Vec[T], i: usize, own value: T) {
     }
 }
 
+// Hand element `i` to a block as a *read-only* binding, for every element
+// type (no `T: Copy`). The block borrows the slot in place, so it never moves
+// or copies the element out of the Vec; `return`/`break` inside the block bind
+// to the caller. Bounds-checked like `get`.
+inline fn with[T](read v: Vec[T], i: usize, b: block(T)) {
+    if i >= v.len {
+        panic("Vec.with: index out of bounds")
+    }
+    unsafe {
+        b(*add[T](v.ptr, i))
+    }
+}
+
+// Like `with`, but the block receives the element as a `mut` binding: writes
+// (`e = v`, `e.field = v`, passing `e` onward as `mut`) write through to the
+// slot in place.
+inline fn with_mut[T](mut v: Vec[T], i: usize, b: block(mut T)) {
+    if i >= v.len {
+        panic("Vec.with_mut: index out of bounds")
+    }
+    unsafe {
+        b(mut *add[T](v.ptr, i))
+    }
+}
+
 // Swap elements `i` and `j` in place, for *every* element type — including
 // `Drop`-implementing ones. Elements are inline values, so exchanging the two
 // slots' `size_of[T]` raw bytes through a one-slot scratch buffer *is* the

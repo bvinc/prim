@@ -1,0 +1,10 @@
+struct S { n: i32 }
+
+inline fn f(own s: S) {
+    return
+}
+
+fn main() {
+    let s = S { n = 1 }
+    f(own s)
+}

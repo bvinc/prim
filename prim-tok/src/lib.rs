@@ -49,6 +49,11 @@ pub enum TokenKind {
     /// `unsafe` — marks an `unsafe fn` or an `unsafe { ... }` block granting
     /// raw-pointer powers (mirrors Rust's `unsafe`).
     Unsafe,
+    /// `inline` — marks an `inline fn`, which is spliced into its caller at
+    /// compile time (required for `block` parameters to be second-class).
+    Inline,
+    /// `block` — a second-class compile-time closure type (`block(T)`).
+    Block,
     /// The `view` type-kind modifier on a `struct`/`enum` declaration. Distinct
     /// from the `read` access keyword: `view` classifies a type as holding a
     /// borrow, `read` is a shared-borrow mode.
@@ -561,6 +566,8 @@ impl<'a> Tokenizer<'a> {
             "import" => TokenKind::Import,
             "mod" => TokenKind::Mod,
             "unsafe" => TokenKind::Unsafe,
+            "inline" => TokenKind::Inline,
+            "block" => TokenKind::Block,
             "for" => TokenKind::For,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
