@@ -1,0 +1,17 @@
+import std.io.println
+import std.mem.alloc_array
+
+struct S { n: i32 }
+
+// A `mut` borrow of a deref place aliases the pointee: a field write must
+// land in the slot, not in a temporary copy.
+inline fn bump(mut s: S) {
+    s.n = 99
+}
+
+unsafe fn main() {
+    let p = alloc_array[S](1)
+    *p = S { n = 1 }
+    bump(mut *p)
+    println((*p).n)
+}

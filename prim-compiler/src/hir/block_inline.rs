@@ -6,7 +6,10 @@
 //! *textual capture* semantics real:
 //!
 //! - a borrow parameter (`read`/`mut`, non-`Copy`) is substituted, by name,
-//!   with the caller's argument place (no binding, no drop);
+//!   with the caller's argument place; a non-`Copy` place rooted at a symbol
+//!   aliases directly (no binding, no drop), while a deref place aliases its
+//!   pointee through the pointer (hoisting an impure pointer into a fresh
+//!   local so it is evaluated once);
 //! - a `Copy` parameter is bound to a fresh local (`let`), evaluated once;
 //! - a `block` parameter is erased: each `b(args)` call in the callee body is
 //!   replaced with the block literal's body, with the block literal's parameter
@@ -341,8 +344,64 @@ fn build_inlined_body(
                 });
             }
             _ => {
-                // Borrow parameter: substitute its name with the caller's place.
-                place_map.insert(p.name, Place::same(arg.clone()));
+                // Borrow parameter: substitute its name with the caller's
+                // place. A place path rooted at a symbol (`x`, `x.f`, `*p`)
+                // evaluates to its own address with no side effects, so it can
+                // be spliced in directly. Anything else is a temporary whose
+                // evaluation may be impure (`*get_ptr()`, `*add(p, get_i())`),
+                // and must be hoisted into the prelude so it runs exactly once
+                // — matching a normal call, which evaluates each argument once.
+                if let ExprKind::Deref(inner) = &arg.kind {
+                    // A deref place (`*ptr`) aliases the pointee. Reuse the
+                    // block-element shape so inline aggregates keep the address
+                    // and writes go through the pointer. Hoist the pointer
+                    // itself when it isn't a pure symbol path.
+                    let deref = if super::cfg::root_symbol(inner).is_some() {
+                        arg.clone()
+                    } else {
+                        let ptr_ty = inner.ty.clone();
+                        let fresh = fresh_symbol(symbols, p.name);
+                        prelude.push(Stmt::Let {
+                            pattern: Pattern::Binding {
+                                symbol: fresh,
+                                ty: ptr_ty.clone(),
+                                mode: PassMode::Own,
+                                span: p.span,
+                            },
+                            ty: ptr_ty.clone(),
+                            value: (**inner).clone(),
+                            span: p.span,
+                        });
+                        Expr {
+                            kind: ExprKind::Deref(Box::new(Expr {
+                                kind: ExprKind::Ident(fresh),
+                                ty: ptr_ty,
+                                span: p.span,
+                            })),
+                            ty: p.ty.clone(),
+                            span: p.span,
+                        }
+                    };
+                    place_map.insert(p.name, Place::for_block_elem(&deref, &p.ty, layout));
+                } else if super::cfg::root_symbol(arg).is_some() {
+                    place_map.insert(p.name, Place::same(arg.clone()));
+                } else {
+                    // Bare temporary (call/constructor result): move it into a
+                    // fresh local once, then use that local as the place.
+                    let fresh = fresh_symbol(symbols, p.name);
+                    rename.insert(p.name, fresh);
+                    prelude.push(Stmt::Let {
+                        pattern: Pattern::Binding {
+                            symbol: fresh,
+                            ty: p.ty.clone(),
+                            mode: PassMode::Own,
+                            span: p.span,
+                        },
+                        ty: p.ty.clone(),
+                        value: arg.clone(),
+                        span: p.span,
+                    });
+                }
             }
         }
     }
