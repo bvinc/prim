@@ -1,0 +1,24 @@
+import std.io.println
+import std.mem.alloc_array
+
+// A block-call argument's slot pointer must be evaluated once. `make_elem`
+// prints a marker, so a duplicated pointer expression would show two markers.
+unsafe fn make_elem() -> *mut i32 {
+    println(7i32)
+    let p = alloc_array[i32](1)
+    *p = 42
+    return p
+}
+
+inline fn read_twice(b: block(i32)) {
+    unsafe {
+        b(*make_elem())
+    }
+}
+
+unsafe fn main() {
+    read_twice(|e| {
+        println(e)
+        println(e)
+    })
+}

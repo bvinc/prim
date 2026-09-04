@@ -1,0 +1,14 @@
+import std.io.println
+
+// A block element is a slot reached through a raw pointer. Passing a bare
+// local place to a `block(mut T)` would lower `e = v` to a deref-assign
+// through the local's *value* (address 0 for a scalar), so it must be
+// rejected at typecheck instead of silently miscompiling.
+inline fn set(b: block(mut i32)) {
+    let x = 0i32
+    b(mut x)
+}
+
+fn main() {
+    set(|e| { e = 42 })
+}

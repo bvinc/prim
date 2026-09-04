@@ -1000,14 +1000,79 @@ fn splice_block_calls_expr(
 
                 // Substitute the literal's parameter names with the call args
                 // (places). The args have already had the callee's borrow
-                // params substituted and copy params renamed.
+                // params substituted and copy params renamed. A block call
+                // argument is a deref of an element slot; if its inner pointer
+                // is not a pure symbol path (`*make_ptr()`, `*add(p, get_i())`),
+                // hoist it into the spliced body's prelude so it is evaluated
+                // once — matching a normal call, which evaluates each argument
+                // once.
+                let mut prelude: Vec<Stmt> = Vec::new();
                 let mut places = HashMap::new();
                 for ((lit, ty), a) in lit_params.iter().zip(elem_tys.iter()).zip(args.iter()) {
-                    places.insert(lit.name, Place::for_block_elem(a, ty, layout));
+                    let place = if let ExprKind::Deref(inner) = &a.kind {
+                        if super::cfg::root_symbol(inner).is_some() {
+                            Place::for_block_elem(a, ty, layout)
+                        } else {
+                            let ptr_ty = inner.ty.clone();
+                            let fresh = fresh_symbol(symbols, lit.name);
+                            prelude.push(Stmt::Let {
+                                pattern: Pattern::Binding {
+                                    symbol: fresh,
+                                    ty: ptr_ty.clone(),
+                                    mode: PassMode::Own,
+                                    span: a.span,
+                                },
+                                ty: ptr_ty.clone(),
+                                value: (**inner).clone(),
+                                span: a.span,
+                            });
+                            let deref = Expr {
+                                kind: ExprKind::Deref(Box::new(Expr {
+                                    kind: ExprKind::Ident(fresh),
+                                    ty: ptr_ty,
+                                    span: a.span,
+                                })),
+                                ty: ty.clone(),
+                                span: a.span,
+                            };
+                            Place::for_block_elem(&deref, ty, layout)
+                        }
+                    } else if super::cfg::root_symbol(a).is_some() {
+                        // A bare place (`b(p)`, `b(x.f)`) — read by value. Only
+                        // `read` elements reach here (`mut` non-deref args are
+                        // rejected at typecheck); a place read never needs a
+                        // hoist, so splice it directly.
+                        Place::for_block_elem(a, ty, layout)
+                    } else {
+                        // A bare temporary (`b(make())`): bind it once in the
+                        // prelude so it isn't re-evaluated at every use of the
+                        // element, matching a normal call's single evaluation.
+                        let fresh = fresh_symbol(symbols, lit.name);
+                        prelude.push(Stmt::Let {
+                            pattern: Pattern::Binding {
+                                symbol: fresh,
+                                ty: ty.clone(),
+                                mode: PassMode::Own,
+                                span: a.span,
+                            },
+                            ty: ty.clone(),
+                            value: a.clone(),
+                            span: a.span,
+                        });
+                        let ident = Expr {
+                            kind: ExprKind::Ident(fresh),
+                            ty: ty.clone(),
+                            span: a.span,
+                        };
+                        Place::for_block_elem(&ident, ty, layout)
+                    };
+                    places.insert(lit.name, place);
                 }
                 substitute_places(&mut body, &places);
                 // A block call is Unit-valued; discard the body's trailing expr.
                 discard_tail(&mut body);
+                // Bind the hoisted slot pointers before the spliced body runs.
+                body.stmts.splice(0..0, prelude);
                 let span = expr.span;
                 expr.kind = ExprKind::Block(body);
                 expr.span = span;

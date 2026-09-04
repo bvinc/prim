@@ -55,6 +55,11 @@ pub enum TypeCheckKind {
     /// Assignment (`e = ..`, `e.field = ..`, `*e = ..`) through a `read` block
     /// parameter — a read block grants read-only access to the element.
     AssignToReadBlockParam(String),
+    /// A block call (`b(arg)`) whose argument is not a dereference of the
+    /// element slot. Blocks operate on container slots reached through a raw
+    /// pointer (`*add[T](v.ptr, i)`); a non-deref place has no addressable
+    /// slot to mutate and would lower a whole-assign to a bogus store.
+    BlockArgNotDeref,
     /// An `inline fn` parameter that takes a non-`Copy` value by `own`. Moving
     /// a value *into* the callee has no place after the body is spliced into
     /// the caller; borrows and `Copy` values are fine.
@@ -148,6 +153,12 @@ impl std::fmt::Display for TypeCheckError {
             TypeCheckKind::BlockArityMismatch { expected, found } => write!(
                 f,
                 "block literal has {found} parameter(s), but the `block(...)` type expects {expected}"
+            ),
+            TypeCheckKind::BlockArgNotDeref => write!(
+                f,
+                "block call argument must be a dereference of an element slot \
+                 (e.g. `b(*add[T](v.ptr, i))`), not a bare place: blocks mutate \
+                 container slots reached through raw pointers"
             ),
             TypeCheckKind::AssignToReadBlockParam(name) => write!(
                 f,
@@ -2582,6 +2593,17 @@ impl<'a> Checker<'a> {
                                 "a block element is passed by borrow, not `own`".to_string(),
                             ),
                         ));
+                    }
+                    // Blocks capture a *slot* reached through a raw pointer
+                    // (`*add[T](v.ptr, i)` in Vec.with/with_mut). For a `mut`
+                    // element a non-deref argument has no addressable slot, so
+                    // `e = v` would lower to a deref-assign through a value
+                    // (garbage address for a scalar, or the pointee for a
+                    // pointer element). Reject it up front rather than emit
+                    // that silently. A `read` element is fine as a bare place:
+                    // it is only read by value, never whole-assigned.
+                    if bp.mode == PassMode::Mut && !matches!(arg.kind, ExprKind::Deref(_)) {
+                        return Err(self.error(*span, TypeCheckKind::BlockArgNotDeref));
                     }
                 }
                 *ty = Type::Unit;
