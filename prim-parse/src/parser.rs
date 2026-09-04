@@ -1584,7 +1584,8 @@ impl<'a> Parser<'a> {
                     if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                         self.advance();
                         if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
-                            self.advance();
+                            // Leave the `)` for the `consume` below so a
+                            // trailing comma doesn't double-consume it.
                             break;
                         }
                         continue;
