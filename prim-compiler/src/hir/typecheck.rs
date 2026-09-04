@@ -1159,19 +1159,11 @@ impl<'a> Checker<'a> {
         }
         for fid in 0..n {
             if self.program.functions[fid].is_inline && color[fid] == Color::White {
-                visit(
-                    fid,
-                    &edges,
-                    &mut color,
-                    &self.program.functions,
-                    &mut cycle,
-                );
+                visit(fid, &edges, &mut color, &self.program.functions, &mut cycle);
             }
         }
         match cycle {
-            Some((span, name)) => {
-                Err(self.error(span, TypeCheckKind::RecursiveInlineFn(name)))
-            }
+            Some((span, name)) => Err(self.error(span, TypeCheckKind::RecursiveInlineFn(name))),
             None => Ok(()),
         }
     }
@@ -1471,14 +1463,13 @@ impl<'a> Checker<'a> {
             // Inserted only by drop elaboration, which runs after typecheck.
             Stmt::Drop { .. } => Ok(()),
             Stmt::DerefAssign { ptr, value, span } => {
-                if let Some(root) = crate::hir::cfg::root_symbol(ptr)
-                    && self.read_block_params.contains(&root)
-                {
-                    return Err(self.error(
-                        *span,
-                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", root)),
-                    ));
-                }
+                // No `read_block_params` gate here: writing through a raw
+                // pointer mutates the *pointee*, not the shared-borrowed
+                // pointer value. This mirrors the ordinary-parameter rule —
+                // `read p: *mut T` permits `*p = v` — so a `read` block
+                // element of type `*mut T` must too. For a non-pointer block
+                // element, the deref is already rejected below by the
+                // "left of `*... =` must be a pointer" check.
                 let ptr_ty = self.check_expr(ptr, locals)?;
                 let pointee = match &ptr_ty {
                     Type::Pointer { mutable, pointee } => {
@@ -2501,9 +2492,10 @@ impl<'a> Checker<'a> {
                 args,
                 arg_modes,
             } => {
-                let block_ty = locals.get(param).cloned().ok_or_else(|| {
-                    self.error(*span, TypeCheckKind::UndefinedSymbol(*param))
-                })?;
+                let block_ty = locals
+                    .get(param)
+                    .cloned()
+                    .ok_or_else(|| self.error(*span, TypeCheckKind::UndefinedSymbol(*param)))?;
                 let Type::Block(block_params) = block_ty else {
                     return Err(self.error(
                         *span,
@@ -2524,8 +2516,10 @@ impl<'a> Checker<'a> {
                 if arg_modes.len() != args.len() {
                     arg_modes.resize(args.len(), PassMode::Read);
                 }
-                for ((arg, mode), bp) in
-                    args.iter_mut().zip(arg_modes.iter()).zip(block_params.iter())
+                for ((arg, mode), bp) in args
+                    .iter_mut()
+                    .zip(arg_modes.iter())
+                    .zip(block_params.iter())
                 {
                     self.apply_expected(arg, &bp.ty);
                     let got = self.check_expr(arg, locals)?;
@@ -3546,7 +3540,9 @@ fn collect_callees(
                     expr(f, out);
                 }
             }
-            ExprKind::Match { scrutinee, arms, .. } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 expr(scrutinee, out);
                 for arm in arms {
                     expr(&arm.body, out);
@@ -3609,7 +3605,9 @@ fn collect_callees(
                 expr(value, out);
             }
             crate::hir::Stmt::Loop { body, .. } => walk_block(body, out),
-            crate::hir::Stmt::While { condition, body, .. } => {
+            crate::hir::Stmt::While {
+                condition, body, ..
+            } => {
                 expr(condition, out);
                 walk_block(body, out);
             }

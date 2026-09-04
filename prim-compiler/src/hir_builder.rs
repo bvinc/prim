@@ -1095,14 +1095,11 @@ impl<'a> LoweringContext<'a> {
                                 })
                                 .collect();
                             let param_modes = m.parameters.iter().map(|p| p.mode).collect();
-                            let ret = m
-                                .return_type
-                                .as_ref()
-                                .map(|ty| {
-                                    let lowered = self.lower_type(ty, module_scope);
-                                    self.reject_block_type(&lowered, m.name.span, file.file_id);
-                                    lowered
-                                });
+                            let ret = m.return_type.as_ref().map(|ty| {
+                                let lowered = self.lower_type(ty, module_scope);
+                                self.reject_block_type(&lowered, m.name.span, file.file_id);
+                                lowered
+                            });
                             hir::TraitMethodSig {
                                 name: m.name.sym,
                                 params,
@@ -2876,8 +2873,7 @@ impl<'a> LoweringContext<'a> {
                         }
                     })
                     .collect();
-                let lowered_body =
-                    self.lower_block(body, module, file_id, ast, module_scope);
+                let lowered_body = self.lower_block(body, module, file_id, ast, module_scope);
                 self.local_scope.pop();
                 (
                     hir::ExprKind::BlockLit {
@@ -3348,7 +3344,8 @@ impl<'a> LoweringContext<'a> {
     /// Reject a `block(...)` type appearing anywhere but an inline-fn parameter.
     fn reject_block_type(&mut self, ty: &hir::Type, span: Span, file: FileId) {
         if type_contains_block(ty) {
-            self.errors.push(LoweringError::BlockTypeNotParam { file, span });
+            self.errors
+                .push(LoweringError::BlockTypeNotParam { file, span });
         }
     }
 

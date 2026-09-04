@@ -125,7 +125,12 @@ pub fn inline_program(program: &mut Program) {
 
 // === Recursive inlining rewrite ===
 
-fn rewrite_block(block: &mut Block, snapshot: &[Function], symbols: &mut Vec<Symbol>, layout: &LayoutInfo<'_>) {
+fn rewrite_block(
+    block: &mut Block,
+    snapshot: &[Function],
+    symbols: &mut Vec<Symbol>,
+    layout: &LayoutInfo<'_>,
+) {
     for stmt in &mut block.stmts {
         rewrite_stmt(stmt, snapshot, symbols, layout);
     }
@@ -134,7 +139,12 @@ fn rewrite_block(block: &mut Block, snapshot: &[Function], symbols: &mut Vec<Sym
     }
 }
 
-fn rewrite_stmt(stmt: &mut Stmt, snapshot: &[Function], symbols: &mut Vec<Symbol>, layout: &LayoutInfo<'_>) {
+fn rewrite_stmt(
+    stmt: &mut Stmt,
+    snapshot: &[Function],
+    symbols: &mut Vec<Symbol>,
+    layout: &LayoutInfo<'_>,
+) {
     match stmt {
         Stmt::Let { value, .. } => rewrite_expr(value, snapshot, symbols, layout),
         Stmt::Expr(e) => rewrite_expr(e, snapshot, symbols, layout),
@@ -148,7 +158,9 @@ fn rewrite_stmt(stmt: &mut Stmt, snapshot: &[Function], symbols: &mut Vec<Symbol
             rewrite_expr(value, snapshot, symbols, layout);
         }
         Stmt::Loop { body, .. } => rewrite_block(body, snapshot, symbols, layout),
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             rewrite_expr(condition, snapshot, symbols, layout);
             rewrite_block(body, snapshot, symbols, layout);
         }
@@ -161,7 +173,12 @@ fn rewrite_stmt(stmt: &mut Stmt, snapshot: &[Function], symbols: &mut Vec<Symbol
     }
 }
 
-fn rewrite_expr(expr: &mut Expr, snapshot: &[Function], symbols: &mut Vec<Symbol>, layout: &LayoutInfo<'_>) {
+fn rewrite_expr(
+    expr: &mut Expr,
+    snapshot: &[Function],
+    symbols: &mut Vec<Symbol>,
+    layout: &LayoutInfo<'_>,
+) {
     match &mut expr.kind {
         ExprKind::Call { func, args, .. } => {
             for a in args.iter_mut() {
@@ -190,7 +207,9 @@ fn rewrite_expr(expr: &mut Expr, snapshot: &[Function], symbols: &mut Vec<Symbol
                 rewrite_expr(f, snapshot, symbols, layout);
             }
         }
-        ExprKind::Match { scrutinee, arms, .. } => {
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             rewrite_expr(scrutinee, snapshot, symbols, layout);
             for arm in arms.iter_mut() {
                 rewrite_expr(&mut arm.body, snapshot, symbols, layout);
@@ -198,9 +217,7 @@ fn rewrite_expr(expr: &mut Expr, snapshot: &[Function], symbols: &mut Vec<Symbol
         }
         ExprKind::Field { base, .. } => rewrite_expr(base, snapshot, symbols, layout),
         ExprKind::Deref(base) => rewrite_expr(base, snapshot, symbols, layout),
-        ExprKind::MethodCall {
-            receiver, args, ..
-        } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             rewrite_expr(receiver, snapshot, symbols, layout);
             for a in args.iter_mut() {
                 rewrite_expr(a, snapshot, symbols, layout);
@@ -416,7 +433,9 @@ fn collect_stmt_bindings(stmt: &Stmt, out: &mut Vec<SymbolId>) {
             collect_expr_bindings(value, out);
         }
         Stmt::Loop { body, .. } => collect_binding_symbols(body, out),
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             collect_expr_bindings(condition, out);
             collect_binding_symbols(body, out);
         }
@@ -453,7 +472,9 @@ fn collect_expr_bindings(expr: &Expr, out: &mut Vec<SymbolId>) {
                 collect_expr_bindings(f, out);
             }
         }
-        ExprKind::Match { scrutinee, arms, .. } => {
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             collect_expr_bindings(scrutinee, out);
             for arm in arms {
                 collect_pattern_bindings(&arm.pattern, out);
@@ -462,9 +483,7 @@ fn collect_expr_bindings(expr: &Expr, out: &mut Vec<SymbolId>) {
         }
         ExprKind::Field { base, .. } => collect_expr_bindings(base, out),
         ExprKind::Deref(base) => collect_expr_bindings(base, out),
-        ExprKind::MethodCall {
-            receiver, args, ..
-        } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             collect_expr_bindings(receiver, out);
             for a in args {
                 collect_expr_bindings(a, out);
@@ -559,7 +578,9 @@ fn rename_stmt(stmt: &mut Stmt, rename: &HashMap<SymbolId, SymbolId>) {
             rename_expr(value, rename);
         }
         Stmt::Loop { body, .. } => rename_block(body, rename),
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             rename_expr(condition, rename);
             rename_block(body, rename);
         }
@@ -600,7 +621,9 @@ fn rename_expr(expr: &mut Expr, rename: &HashMap<SymbolId, SymbolId>) {
                 rename_expr(f, rename);
             }
         }
-        ExprKind::Match { scrutinee, arms, .. } => {
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             rename_expr(scrutinee, rename);
             for arm in arms {
                 rename_pattern(&mut arm.pattern, rename);
@@ -609,9 +632,7 @@ fn rename_expr(expr: &mut Expr, rename: &HashMap<SymbolId, SymbolId>) {
         }
         ExprKind::Field { base, .. } => rename_expr(base, rename),
         ExprKind::Deref(base) => rename_expr(base, rename),
-        ExprKind::MethodCall {
-            receiver, args, ..
-        } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             rename_expr(receiver, rename);
             for a in args {
                 rename_expr(a, rename);
@@ -699,9 +720,7 @@ fn substitute_places_stmt(stmt: &mut Stmt, places: &HashMap<SymbolId, Place>) {
     match stmt {
         Stmt::Let { value, .. } => substitute_places_expr(value, places),
         Stmt::Expr(e) => substitute_places_expr(e, places),
-        Stmt::Assign {
-            target, value, ..
-        } => {
+        Stmt::Assign { target, value, .. } => {
             if let Some(rep) = places.get(target) {
                 // Writing a substituted place: `e = v` becomes `*e = v`. The
                 // value may itself read the place (`e = e + 1`), so substitute
@@ -727,7 +746,9 @@ fn substitute_places_stmt(stmt: &mut Stmt, places: &HashMap<SymbolId, Place>) {
             substitute_places_expr(value, places);
         }
         Stmt::Loop { body, .. } => substitute_places(body, places),
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             substitute_places_expr(condition, places);
             substitute_places(body, places);
         }
@@ -770,7 +791,9 @@ fn substitute_places_expr(expr: &mut Expr, places: &HashMap<SymbolId, Place>) {
                 substitute_places_expr(f, places);
             }
         }
-        ExprKind::Match { scrutinee, arms, .. } => {
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             substitute_places_expr(scrutinee, places);
             for arm in arms {
                 substitute_places_expr(&mut arm.body, places);
@@ -778,9 +801,7 @@ fn substitute_places_expr(expr: &mut Expr, places: &HashMap<SymbolId, Place>) {
         }
         ExprKind::Field { base, .. } => substitute_places_expr(base, places),
         ExprKind::Deref(base) => substitute_places_expr(base, places),
-        ExprKind::MethodCall {
-            receiver, args, ..
-        } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             substitute_places_expr(receiver, places);
             for a in args {
                 substitute_places_expr(a, places);
@@ -857,7 +878,9 @@ fn splice_block_calls_stmt(
             splice_block_calls_expr(value, blocks, symbols, layout);
         }
         Stmt::Loop { body, .. } => splice_block_calls(body, blocks, symbols, layout),
-        Stmt::While { condition, body, .. } => {
+        Stmt::While {
+            condition, body, ..
+        } => {
             splice_block_calls_expr(condition, blocks, symbols, layout);
             splice_block_calls(body, blocks, symbols, layout);
         }
@@ -927,7 +950,9 @@ fn splice_block_calls_expr(
                 splice_block_calls_expr(f, blocks, symbols, layout);
             }
         }
-        ExprKind::Match { scrutinee, arms, .. } => {
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             splice_block_calls_expr(scrutinee, blocks, symbols, layout);
             for arm in arms {
                 splice_block_calls_expr(&mut arm.body, blocks, symbols, layout);
@@ -935,9 +960,7 @@ fn splice_block_calls_expr(
         }
         ExprKind::Field { base, .. } => splice_block_calls_expr(base, blocks, symbols, layout),
         ExprKind::Deref(base) => splice_block_calls_expr(base, blocks, symbols, layout),
-        ExprKind::MethodCall {
-            receiver, args, ..
-        } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             splice_block_calls_expr(receiver, blocks, symbols, layout);
             for a in args {
                 splice_block_calls_expr(a, blocks, symbols, layout);
@@ -959,9 +982,7 @@ fn splice_block_calls_expr(
                 splice_block_calls_expr(e, blocks, symbols, layout);
             }
         }
-        ExprKind::TupleIndex { base, .. } => {
-            splice_block_calls_expr(base, blocks, symbols, layout)
-        }
+        ExprKind::TupleIndex { base, .. } => splice_block_calls_expr(base, blocks, symbols, layout),
         ExprKind::If {
             condition,
             then_branch,

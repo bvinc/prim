@@ -1278,7 +1278,10 @@ impl<'a> Parser<'a> {
         // and no body (the primitive conversions). A leading `@` starts an
         // attribute; otherwise the method begins at `fn`.
         let mut methods = Vec::new();
-        while matches!(self.peek_kind(), Some(TokenKind::Fn | TokenKind::Inline | TokenKind::At)) {
+        while matches!(
+            self.peek_kind(),
+            Some(TokenKind::Fn | TokenKind::Inline | TokenKind::At)
+        ) {
             let mut attrs = self.parse_attributes()?;
             let runtime = attrs.runtime.take();
             if attrs.repr_c || attrs.entry {
