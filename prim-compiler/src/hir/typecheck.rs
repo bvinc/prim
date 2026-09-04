@@ -66,6 +66,10 @@ pub enum TypeCheckKind {
     /// into the caller, so a non-local `return value` would escape to the
     /// caller instead of flowing through the call.
     InlineFnReturns(String),
+    /// A `spawn(f)` whose target is an `inline fn`. Inlining empties the
+    /// callee's body (it is spliced into each caller), so a spawn would start
+    /// a task that silently runs no body.
+    SpawnInlineFn(String),
     /// A numeric literal whose type couldn't be determined from context.
     /// `float` distinguishes the suggested suffix (`f64` vs `i32`).
     AmbiguousLiteral {
@@ -166,6 +170,11 @@ impl std::fmt::Display for TypeCheckError {
                  fns must return `()`. Return from the enclosing function non-locally inside a \
                  block instead"
             ),
+            TypeCheckKind::SpawnInlineFn(name) => write!(
+                f,
+                "cannot spawn inline fn '{name}': its body is spliced into callers at compile \
+                 time and has no runtime entry point"
+            ),
             TypeCheckKind::AmbiguousLiteral { float } => {
                 let (kind, suffix) = if *float {
                     ("float", "f64")
@@ -208,7 +217,8 @@ pub fn type_check(program: &mut Program) -> Result<(), TypeCheckError> {
     checker.collect_signatures()?;
     checker.check_unsafe_bodies()?;
     checker.check_functions()?;
-    checker.check_inline_recursion()
+    checker.check_inline_recursion()?;
+    checker.check_inline_spawn()
 }
 
 struct Checker<'a> {
@@ -1166,6 +1176,25 @@ impl<'a> Checker<'a> {
             Some((span, name)) => Err(self.error(span, TypeCheckKind::RecursiveInlineFn(name))),
             None => Ok(()),
         }
+    }
+
+    /// Reject `spawn(f)` where `f` is an `inline fn`. The inlining pass empties
+    /// an inline fn's body (it is spliced into each caller), so a spawn
+    /// reference would otherwise survive as a task that silently runs no body.
+    /// Runs after `check_functions` so `program.functions` is back in place.
+    fn check_inline_spawn(&self) -> Result<(), TypeCheckError> {
+        for func in &self.program.functions {
+            if let Some((span, target)) = first_inline_spawn(&func.body, &self.program.functions) {
+                let name = self
+                    .program
+                    .symbols
+                    .get(self.program.functions[target.0 as usize].name.0 as usize)
+                    .map(|s| self.program.interner.resolve(&s.name).to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                return Err(self.error(span, TypeCheckKind::SpawnInlineFn(name)));
+            }
+        }
+        Ok(())
     }
 
     /// Enforce the safe/unsafe boundary: raw-pointer powers (`*p` deref,
@@ -3628,4 +3657,112 @@ fn collect_callees(
         }
     }
     walk_block(block, out);
+}
+
+/// Return the first `spawn(f)` in `block` whose target `f` is an `inline fn`,
+/// as `(spawn span, target FuncId)`. Used to reject a spawn that inlining would
+/// otherwise empty into a no-op task.
+fn first_inline_spawn(
+    block: &crate::hir::Block,
+    functions: &[crate::hir::Function],
+) -> Option<(SpanId, crate::hir::FuncId)> {
+    use crate::hir::ExprKind;
+
+    fn expr(
+        e: &crate::hir::Expr,
+        functions: &[crate::hir::Function],
+    ) -> Option<(SpanId, crate::hir::FuncId)> {
+        match &e.kind {
+            ExprKind::Spawn { func } => {
+                let f = functions.get(func.0 as usize)?;
+                if f.is_inline {
+                    Some((e.span, *func))
+                } else {
+                    None
+                }
+            }
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Ident(_)
+            | ExprKind::ConstParam(_)
+            | ExprKind::Error => None,
+            ExprKind::Binary { left, right, .. } => {
+                expr(left, functions).or_else(|| expr(right, functions))
+            }
+            ExprKind::Call { args, .. } => args.iter().find_map(|a| expr(a, functions)),
+            ExprKind::StructLit { fields, .. } | ExprKind::VariantLit { fields, .. } => {
+                fields.iter().find_map(|(_, f)| expr(f, functions))
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => expr(scrutinee, functions)
+                .or_else(|| arms.iter().find_map(|a| expr(&a.body, functions))),
+            ExprKind::Field { base, .. } => expr(base, functions),
+            ExprKind::Deref(base) => expr(base, functions),
+            ExprKind::MethodCall { receiver, args, .. } => {
+                expr(receiver, functions).or_else(|| args.iter().find_map(|a| expr(a, functions)))
+            }
+            ExprKind::DynCall { receiver, args, .. }
+            | ExprKind::TraitBoundCall { receiver, args, .. } => {
+                expr(receiver, functions).or_else(|| args.iter().find_map(|a| expr(a, functions)))
+            }
+            ExprKind::Coerce { value, .. } => expr(value, functions),
+            ExprKind::BitNot(inner) | ExprKind::Neg(inner) => expr(inner, functions),
+            ExprKind::TupleLit(elems) | ExprKind::ArrayLit(elems) => {
+                elems.iter().find_map(|el| expr(el, functions))
+            }
+            ExprKind::TupleIndex { base, .. } => expr(base, functions),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => expr(condition, functions)
+                .or_else(|| walk_block(then_branch, functions))
+                .or_else(|| else_branch.as_ref().and_then(|b| walk_block(b, functions))),
+            ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => walk_block(b, functions),
+            ExprKind::BlockLit { body, .. } => walk_block(body, functions),
+            ExprKind::BlockCall { args, .. } => args.iter().find_map(|a| expr(a, functions)),
+        }
+    }
+
+    fn stmt(
+        s: &crate::hir::Stmt,
+        functions: &[crate::hir::Function],
+    ) -> Option<(SpanId, crate::hir::FuncId)> {
+        match s {
+            crate::hir::Stmt::Expr(e) => expr(e, functions),
+            crate::hir::Stmt::Let { value, .. } => expr(value, functions),
+            crate::hir::Stmt::Assign { value, .. } => expr(value, functions),
+            crate::hir::Stmt::DerefAssign { ptr, value, .. } => {
+                expr(ptr, functions).or_else(|| expr(value, functions))
+            }
+            crate::hir::Stmt::FieldAssign { object, value, .. } => {
+                expr(object, functions).or_else(|| expr(value, functions))
+            }
+            crate::hir::Stmt::Loop { body, .. } => walk_block(body, functions),
+            crate::hir::Stmt::While {
+                condition, body, ..
+            } => expr(condition, functions).or_else(|| walk_block(body, functions)),
+            crate::hir::Stmt::Return { value, .. } => {
+                value.as_ref().and_then(|v| expr(v, functions))
+            }
+            crate::hir::Stmt::Break { .. } | crate::hir::Stmt::Drop { .. } => None,
+        }
+    }
+
+    fn walk_block(
+        b: &crate::hir::Block,
+        functions: &[crate::hir::Function],
+    ) -> Option<(SpanId, crate::hir::FuncId)> {
+        for s in &b.stmts {
+            if let Some(found) = stmt(s, functions) {
+                return Some(found);
+            }
+        }
+        b.expr.as_ref().and_then(|e| expr(e, functions))
+    }
+
+    walk_block(block, functions)
 }
