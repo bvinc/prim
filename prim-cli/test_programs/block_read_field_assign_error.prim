@@ -1,0 +1,14 @@
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+struct S { n: i32 }
+
+// `e.n = ...` writes through the read-only block element itself (the borrowed
+// inline-aggregate slot), so it must be rejected — unlike `(*e).field = ...`
+// on a pointer element, which writes through the pointer to the pointee.
+fn main() {
+    let v = new[S]()
+    push(mut v, own S { n = 1 })
+    with(v, 0usize, |e| { e.n = 5 })
+}

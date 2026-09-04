@@ -1543,7 +1543,7 @@ impl<'a> Checker<'a> {
                 value,
                 span,
             } => {
-                if let Some(root) = crate::hir::cfg::root_symbol(object)
+                if let Some(root) = field_root_symbol(object)
                     && self.read_block_params.contains(&root)
                 {
                     return Err(self.error(
@@ -3765,4 +3765,90 @@ fn first_inline_spawn(
     }
 
     walk_block(block, functions)
+}
+
+/// Root symbol of a *field path* (`e.field`, `e.0`, nested), but NOT crossing
+/// a `Deref`. Used by the `FieldAssign` read-block-param gate: writing through
+/// a raw pointer (`(*e).field = v`, where `e` is a `read` block element of
+/// pointer type) mutates the *pointee*, not the shared-borrowed pointer value,
+/// so it must not count as a write to the element itself. Only a field path
+/// rooted directly at the element (`e.field`, `e.0`, `e.a.b`) is a write to the
+/// element.
+fn field_root_symbol(expr: &crate::hir::Expr) -> Option<SymbolId> {
+    match &expr.kind {
+        crate::hir::ExprKind::Ident(sym) => Some(*sym),
+        crate::hir::ExprKind::Field { base, .. }
+        | crate::hir::ExprKind::TupleIndex { base, .. } => field_root_symbol(base),
+        // Stop the walk at a deref: the write is to the pointee, not the place.
+        crate::hir::ExprKind::Deref(_) => None,
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod field_root_tests {
+    use super::{InternSymbol, SpanId, SymbolId, field_root_symbol};
+    use crate::hir::{Expr, ExprKind, Type};
+
+    fn sym(n: u32) -> SymbolId {
+        SymbolId(n)
+    }
+
+    fn span() -> SpanId {
+        SpanId(0)
+    }
+
+    fn ident(s: u32) -> Expr {
+        Expr {
+            kind: ExprKind::Ident(sym(s)),
+            ty: Type::Usize,
+            span: span(),
+        }
+    }
+
+    fn deref(inner: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::Deref(Box::new(inner)),
+            ty: Type::Usize,
+            span: span(),
+        }
+    }
+
+    fn field(base: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::Field {
+                base: Box::new(base),
+                field: InternSymbol::default(),
+            },
+            ty: Type::Usize,
+            span: span(),
+        }
+    }
+
+    fn tuple_index(base: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::TupleIndex {
+                base: Box::new(base),
+                index: 0,
+            },
+            ty: Type::Usize,
+            span: span(),
+        }
+    }
+
+    #[test]
+    fn stops_at_deref() {
+        // `(*e).field = v` — a pointer write; not a write to the element.
+        assert_eq!(field_root_symbol(&field(deref(ident(7)))), None);
+        assert_eq!(field_root_symbol(&deref(ident(7))), None);
+        assert_eq!(field_root_symbol(&tuple_index(deref(ident(7)))), None);
+    }
+
+    #[test]
+    fn follows_field_paths_without_deref() {
+        // `e.field = v` and `e.a.b = v` are writes to the element itself.
+        assert_eq!(field_root_symbol(&field(ident(7))), Some(sym(7)));
+        assert_eq!(field_root_symbol(&tuple_index(ident(7))), Some(sym(7)));
+        assert_eq!(field_root_symbol(&field(field(ident(7)))), Some(sym(7)));
+    }
 }
