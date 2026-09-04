@@ -19,19 +19,32 @@
 //! skips its second-class signature.
 
 use super::{
-    Block, BlockLitParam, Enum, Expr, ExprKind, FuncId, Function, PassMode, Pattern, Program, Stmt,
-    Struct, Symbol, SymbolId, SymbolKind, Type,
+    Block, BlockLitParam, Enum, Expr, ExprKind, FuncId, Function, MethodOwner, PassMode, Pattern,
+    Program, Stmt, Struct, Symbol, SymbolId, SymbolKind, Type,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Read-only structural info needed while splicing (so we can decide whether a
-/// block element is an inline aggregate or a boxed pointer).
+/// block element is an inline aggregate or a boxed pointer, and whether a value
+/// is `Copy`).
 struct LayoutInfo<'a> {
     structs: &'a [Struct],
     enums: &'a [Enum],
+    /// Non-generic struct/enum owners with an explicit `impl Copy` — the same
+    /// set typecheck consults, so an `own` `impl Copy` param is copied once
+    /// rather than aliasing the caller's place.
+    copy_types: &'a HashSet<MethodOwner>,
 }
 
 impl LayoutInfo<'_> {
+    /// Whether `ty` is `Copy` (post-mono, concrete): scalars and raw pointers
+    /// unconditionally, plus `impl Copy` structs/enums. Mirrors
+    /// `cfg::CopyCtx::is_copy`, which is the copy policy typecheck/ownership
+    /// apply to inline-fn `own` parameters.
+    fn is_copy(&self, ty: &Type) -> bool {
+        super::cfg::is_copy(self.copy_types, ty)
+    }
+
     /// Mirror `InlinePolicy::is_inline`: an aggregate with a finite byte layout
     /// (so its fields live in the slot itself) rather than a box pointer.
     fn is_inline(&self, ty: &Type) -> bool {
@@ -98,13 +111,18 @@ pub fn inline_program(program: &mut Program) {
     // Snapshot the (post-mono) inline bodies so callers can be rewritten in
     // place while their callees are read from the snapshot.
     let snapshot: Vec<Function> = program.functions.clone();
-    let (symbols, functions, structs, enums) = (
+    let (symbols, functions, structs, enums, copy_types) = (
         &mut program.symbols,
         &mut program.functions,
         &*program.structs,
         &*program.enums,
+        &program.copy_types,
     );
-    let layout = LayoutInfo { structs, enums };
+    let layout = LayoutInfo {
+        structs,
+        enums,
+        copy_types,
+    };
     for f in functions.iter_mut() {
         if !f.is_inline {
             rewrite_block(&mut f.body, &snapshot, symbols, &layout);
@@ -294,7 +312,7 @@ fn build_inlined_body(
                 let elem_tys = block_params.iter().map(|bp| bp.ty.clone()).collect();
                 block_map.insert(p.name, (params, elem_tys, body));
             }
-            _ if is_copy_ty(&p.ty) => {
+            _ if layout.is_copy(&p.ty) => {
                 let fresh = fresh_symbol(symbols, p.name);
                 rename.insert(p.name, fresh);
                 prelude.push(Stmt::Let {
@@ -369,26 +387,6 @@ fn strip_deref(expr: &Expr) -> Expr {
     } else {
         expr.clone()
     }
-}
-
-fn is_copy_ty(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::U8
-            | Type::I8
-            | Type::U16
-            | Type::I16
-            | Type::U32
-            | Type::I32
-            | Type::U64
-            | Type::I64
-            | Type::Usize
-            | Type::Isize
-            | Type::F32
-            | Type::F64
-            | Type::Bool
-            | Type::Pointer { .. }
-    )
 }
 
 fn fresh_symbol(symbols: &mut Vec<Symbol>, old: SymbolId) -> SymbolId {
