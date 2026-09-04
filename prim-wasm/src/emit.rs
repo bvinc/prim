@@ -895,13 +895,32 @@ fn emit_stmt(f: &mut Function, stmt: &hir::Stmt, ctx: &EmitCtx) -> Result<(), Wa
         hir::Stmt::Drop { sym, ty, .. } => {
             emit_drop(f, *sym, ty, ctx);
         }
-        hir::Stmt::DerefAssign { ptr, value, .. } => {
+        hir::Stmt::DerefAssign {
+            ptr,
+            value,
+            drop_old,
+            ..
+        } => {
             let pointee = match &ptr.ty {
                 hir::Type::Pointer { pointee, .. } => (**pointee).clone(),
                 _ => hir::Type::U8,
             };
-            emit_expr(f, ptr, ctx)?;
-            emit_expr(f, value, ctx)?;
+            if *drop_old {
+                // Whole-assign through a `block(mut T)` element: evaluate the
+                // new value first (it may still read Copy fields of the old
+                // slot), stash it, drop the displaced value in place, then
+                // store the new bytes — the same order `Vec.set` enacts.
+                emit_expr(f, value, ctx)?;
+                let stash = ctx.scratch_base + ctx.scratch_counter.get();
+                ctx.scratch_counter.set(ctx.scratch_counter.get() + 1);
+                f.instruction(&Instruction::LocalSet(stash));
+                emit_drop_in_place(f, ptr, ctx)?;
+                emit_expr(f, ptr, ctx)?;
+                f.instruction(&Instruction::LocalGet(stash));
+            } else {
+                emit_expr(f, ptr, ctx)?;
+                emit_expr(f, value, ctx)?;
+            }
             if ctx.policy.is_inline(&pointee) {
                 // Inline pointee: copy the value's bytes into the slot
                 // (dest = slot address, src = value box/place, len = size).
@@ -3083,9 +3102,22 @@ fn collect_drop_sites(block: &hir::Block, program: &hir::Program, out: &mut Vec<
                 value: Some(value), ..
             }
             | hir::Stmt::Expr(value) => collect_drop_sites_expr(value, program, out),
-            hir::Stmt::DerefAssign { ptr, value, .. } => {
+            hir::Stmt::DerefAssign {
+                ptr,
+                value,
+                drop_old,
+                ..
+            } => {
                 collect_drop_sites_expr(ptr, program, out);
                 collect_drop_sites_expr(value, program, out);
+                // A block-element whole-assign drops the displaced slot value
+                // in place, so its `drop_T` glue must be generated even though
+                // no `Stmt::Drop` or `drop_in_place` call reaches it.
+                if *drop_old {
+                    if let hir::Type::Pointer { pointee, .. } = &ptr.ty {
+                        out.push((**pointee).clone());
+                    }
+                }
             }
             hir::Stmt::FieldAssign { object, value, .. } => {
                 collect_drop_sites_expr(object, program, out);

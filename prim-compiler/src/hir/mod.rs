@@ -564,6 +564,12 @@ pub enum Stmt {
         ptr: Expr,
         value: Expr,
         span: SpanId,
+        /// Whole-place assignment of a `block(mut T)` element: drop the
+        /// displaced slot value (via `drop_in_place`) before overwriting it,
+        /// mirroring `Vec.set`. `false` for every ordinary `*p = v` store,
+        /// which (like `Vec.set`) leaves the displaced-value drop to the
+        /// caller — a raw pointer store must not implicitly drop.
+        drop_old: bool,
     },
     /// `object.field = value` — store to a struct field.
     FieldAssign {

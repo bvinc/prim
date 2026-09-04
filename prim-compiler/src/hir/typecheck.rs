@@ -1499,7 +1499,9 @@ impl<'a> Checker<'a> {
             }
             // Inserted only by drop elaboration, which runs after typecheck.
             Stmt::Drop { .. } => Ok(()),
-            Stmt::DerefAssign { ptr, value, span } => {
+            Stmt::DerefAssign {
+                ptr, value, span, ..
+            } => {
                 // No `read_block_params` gate here: writing through a raw
                 // pointer mutates the *pointee*, not the shared-borrowed
                 // pointer value. This mirrors the ordinary-parameter rule —

@@ -121,6 +121,10 @@ enum AggKey {
 struct Place {
     read: Expr,
     write: Expr,
+    /// Whether a whole-place assignment through this place displaces a stored
+    /// value that must be dropped first (block elements: yes; borrow params:
+    /// no, and they are never whole-assigned anyway).
+    drop_on_assign: bool,
 }
 
 pub fn inline_program(program: &mut Program) {
@@ -431,6 +435,7 @@ impl Place {
         Place {
             read: expr.clone(),
             write: expr,
+            drop_on_assign: false,
         }
     }
 
@@ -438,6 +443,11 @@ impl Place {
     /// element as a deref (`*add(...)`); scalars read the deref value, while
     /// inline aggregates must keep the *address* (their fields alias the slot).
     /// Both write through the deref's inner pointer.
+    ///
+    /// A whole-place assignment through this place (`e = v`) displaces the
+    /// element stored in the slot; mark it so codegen drops that displaced
+    /// value first (mirroring `Vec.set`), instead of silently leaking it for a
+    /// `Drop`/boxed element.
     fn for_block_elem(arg: &Expr, elem_ty: &Type, layout: &LayoutInfo<'_>) -> Self {
         let write = strip_deref(arg);
         let read = if layout.is_inline(elem_ty) {
@@ -447,7 +457,11 @@ impl Place {
         } else {
             arg.clone()
         };
-        Place { read, write }
+        Place {
+            read,
+            write,
+            drop_on_assign: true,
+        }
     }
 }
 
@@ -802,6 +816,7 @@ fn substitute_places_stmt(stmt: &mut Stmt, places: &HashMap<SymbolId, Place>) {
                     ptr,
                     value: val,
                     span: value.span,
+                    drop_old: rep.drop_on_assign,
                 };
             } else {
                 substitute_places_expr(value, places);

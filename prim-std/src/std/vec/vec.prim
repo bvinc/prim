@@ -114,7 +114,8 @@ inline fn with[T](read v: Vec[T], i: usize, b: block(T)) {
 
 // Like `with`, but the block receives the element as a `mut` binding: writes
 // (`e = v`, `e.field = v`, passing `e` onward as `mut`) write through to the
-// slot in place.
+// slot in place. A whole-assign `e = v` first drops the displaced element
+// (like `set`), so replacing a `Drop` element does not leak it.
 inline fn with_mut[T](mut v: Vec[T], i: usize, b: block(mut T)) {
     if i >= v.len {
         panic("Vec.with_mut: index out of bounds")

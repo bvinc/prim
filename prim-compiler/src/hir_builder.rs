@@ -1882,6 +1882,7 @@ impl<'a> LoweringContext<'a> {
                     ptr: ptr_hir,
                     value: value_hir,
                     span,
+                    drop_old: false,
                 }
             }
             Stmt::FieldAssign {
