@@ -367,6 +367,16 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Resolve a `SymbolId` to its source name for a readable diagnostic,
+    /// falling back to `?` when the symbol is out of range.
+    fn symbol_name(&self, sym: SymbolId) -> String {
+        self.program
+            .symbols
+            .get(sym.0 as usize)
+            .map(|s| self.program.interner.resolve(&s.name).to_string())
+            .unwrap_or_else(|| "?".to_string())
+    }
+
     /// Walk `formal` and `actual` in lockstep, pinning any `Type::Param(i)`
     /// in `formal` to the corresponding sub-tree in `actual`. Returns
     /// false on a contradiction (T already pinned to a different type).
@@ -1143,13 +1153,13 @@ impl<'a> Checker<'a> {
             Black,
         }
         let mut color = vec![Color::White; n];
-        let mut cycle: Option<(SpanId, String)> = None;
+        let mut cycle: Option<(SpanId, SymbolId)> = None;
         fn visit(
             node: usize,
             edges: &[Vec<FuncId>],
             color: &mut [Color],
             functions: &[Function],
-            cycle: &mut Option<(SpanId, String)>,
+            cycle: &mut Option<(SpanId, SymbolId)>,
         ) {
             color[node] = Color::Gray;
             for next in &edges[node] {
@@ -1158,7 +1168,7 @@ impl<'a> Checker<'a> {
                     Color::Gray => {
                         if cycle.is_none() {
                             let f = &functions[m];
-                            *cycle = Some((f.span, format!("{:?}", f.name)));
+                            *cycle = Some((f.span, f.name));
                         }
                     }
                     Color::White => visit(m, edges, color, functions, cycle),
@@ -1173,7 +1183,10 @@ impl<'a> Checker<'a> {
             }
         }
         match cycle {
-            Some((span, name)) => Err(self.error(span, TypeCheckKind::RecursiveInlineFn(name))),
+            Some((span, sym)) => Err(self.error(
+                span,
+                TypeCheckKind::RecursiveInlineFn(self.symbol_name(sym)),
+            )),
             None => Ok(()),
         }
     }
@@ -1185,12 +1198,7 @@ impl<'a> Checker<'a> {
     fn check_inline_spawn(&self) -> Result<(), TypeCheckError> {
         for func in &self.program.functions {
             if let Some((span, target)) = first_inline_spawn(&func.body, &self.program.functions) {
-                let name = self
-                    .program
-                    .symbols
-                    .get(self.program.functions[target.0 as usize].name.0 as usize)
-                    .map(|s| self.program.interner.resolve(&s.name).to_string())
-                    .unwrap_or_else(|| "?".to_string());
+                let name = self.symbol_name(self.program.functions[target.0 as usize].name);
                 return Err(self.error(span, TypeCheckKind::SpawnInlineFn(name)));
             }
         }
@@ -1236,7 +1244,7 @@ impl<'a> Checker<'a> {
             if func.ret.is_some() {
                 return Err(self.error(
                     func.span,
-                    TypeCheckKind::InlineFnReturns(format!("{:?}", func.name)),
+                    TypeCheckKind::InlineFnReturns(self.symbol_name(func.name)),
                 ));
             }
             let copy_ctx = self.copy_ctx();
@@ -1244,7 +1252,7 @@ impl<'a> Checker<'a> {
                 if p.mode == PassMode::Own && !copy_ctx.is_copy(&p.ty) {
                     return Err(self.error(
                         p.span,
-                        TypeCheckKind::InlineFnOwnParam(format!("{:?}", p.name)),
+                        TypeCheckKind::InlineFnOwnParam(self.symbol_name(p.name)),
                     ));
                 }
             }
@@ -1387,7 +1395,7 @@ impl<'a> Checker<'a> {
                 if self.read_block_params.contains(target) {
                     return Err(self.error(
                         *span,
-                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", *target)),
+                        TypeCheckKind::AssignToReadBlockParam(self.symbol_name(*target)),
                     ));
                 }
                 let target_ty = if let Some(t) = locals.get(target).cloned() {
@@ -1548,7 +1556,7 @@ impl<'a> Checker<'a> {
                 {
                     return Err(self.error(
                         *span,
-                        TypeCheckKind::AssignToReadBlockParam(format!("{:?}", root)),
+                        TypeCheckKind::AssignToReadBlockParam(self.symbol_name(root)),
                     ));
                 }
                 let object_ty = self.check_expr(object, locals)?;
@@ -1650,7 +1658,7 @@ impl<'a> Checker<'a> {
                     if matches!(t, Type::Block(_)) {
                         return Err(self.error(
                             *span,
-                            TypeCheckKind::BlockValueUsed(format!("{:?}", *symbol)),
+                            TypeCheckKind::BlockValueUsed(self.symbol_name(*symbol)),
                         ));
                     }
                     *ty = t.clone();
