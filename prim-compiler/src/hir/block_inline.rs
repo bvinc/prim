@@ -54,13 +54,14 @@ impl LayoutInfo<'_> {
         ) && self.finite(ty, &mut Vec::new())
     }
 
-    fn finite(&self, ty: &Type, visiting: &mut Vec<u32>) -> bool {
+    fn finite(&self, ty: &Type, visiting: &mut Vec<AggKey>) -> bool {
         match ty {
             Type::Struct(sid, _) => {
-                if visiting.contains(&sid.0) {
+                let key = AggKey::Struct(sid.0);
+                if visiting.contains(&key) {
                     return false;
                 }
-                visiting.push(sid.0);
+                visiting.push(key);
                 let ok = self
                     .structs
                     .get(sid.0 as usize)
@@ -70,10 +71,11 @@ impl LayoutInfo<'_> {
                 ok
             }
             Type::Enum(eid, _) => {
-                if visiting.contains(&eid.0) {
+                let key = AggKey::Enum(eid.0);
+                if visiting.contains(&key) {
                     return false;
                 }
-                visiting.push(eid.0);
+                visiting.push(key);
                 let ok = self
                     .enums
                     .get(eid.0 as usize)
@@ -92,6 +94,17 @@ impl LayoutInfo<'_> {
             _ => true,
         }
     }
+}
+
+/// Identity of an aggregate currently being walked, to detect self-reference.
+/// `StructId` and `EnumId` are independent counters (each starts at 0), so the
+/// key must tag the kind — exactly as codegen's `InlinePolicy` does with its
+/// `AggKey::Struct`/`AggKey::Enum`, or a struct and enum sharing a numeric id
+/// would be misread as a recursive cycle.
+#[derive(Clone, PartialEq)]
+enum AggKey {
+    Struct(u32),
+    Enum(u32),
 }
 
 /// A substituted place: two forms of the same location. `read` is what a
