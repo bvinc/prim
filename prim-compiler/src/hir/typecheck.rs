@@ -3504,9 +3504,20 @@ fn unsafe_violation_expr(
         | ExprKind::Str(_)
         | ExprKind::Ident(_)
         | ExprKind::ConstParam(_)
-        | ExprKind::BlockLit { .. }
-        | ExprKind::BlockCall { .. }
         | ExprKind::Error => None,
+        // A block literal is written at its *caller*, in the caller's unsafe
+        // context, so its body must observe the same safe/unsafe boundary as
+        // the surrounding code: a safe caller may not pass `|e| { *e = ... }`
+        // for a `block(*mut T)` element. The parameters carry names only, so
+        // the body is the only expression-bearing part.
+        ExprKind::BlockLit { body, .. } => unsafe_violation(program, body, in_unsafe),
+        // A block call's arguments are expressions evaluated at the call site
+        // (inside the inline fn body), so `b(*p)` must be checked here; the
+        // callee's block body is checked separately when its literal is
+        // written.
+        ExprKind::BlockCall { args, .. } => args
+            .iter()
+            .find_map(|a| unsafe_violation_expr(program, a, in_unsafe)),
     }
 }
 
