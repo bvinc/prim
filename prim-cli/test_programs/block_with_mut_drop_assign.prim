@@ -1,0 +1,17 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.with_mut
+
+// Replacing a Drop element through `with_mut`'s `e = v` must drop the
+// displaced element (print its id) before overwriting the slot — exactly what
+// `Vec.set` does — so it is never leaked or double-dropped.
+struct Res { id: i32 }
+impl Drop for Res { fn drop(mut self) { println(self.id) } }
+
+fn main() {
+    let v = new[Res]()
+    push(mut v, own Res { id = 1 })
+    with_mut(mut v, 0usize, |e| { e = Res { id = 2 } })
+    // `v` is dropped at end of scope: the slot now holds Res{2}.
+}

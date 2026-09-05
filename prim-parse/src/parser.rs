@@ -1,8 +1,8 @@
 use crate::number::{parse_float_literal, parse_int_literal};
 use crate::{
-    BinaryOp, Block, ConstArg, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident, ImportDecl,
-    ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program, Severity, Span,
-    Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
+    BinaryOp, Block, BlockParam, ConstArg, Diagnostic, Expr, ExprKind, Function, GlobalDecl, Ident,
+    ImportDecl, ImportSelector, Interner, NamePath, Parameter, ParseError, PassMode, Program,
+    Severity, Span, Stmt, StructDefinition, StructField, StructFieldDefinition, Type,
 };
 use prim_tok::{Token, TokenKind};
 
@@ -219,6 +219,12 @@ impl<'a> Parser<'a> {
                     let function = self.parse_function_with_attrs(attrs)?;
                     functions.push(function);
                 }
+                Some(TokenKind::Inline) => {
+                    self.advance(); // consume 'inline'
+                    let mut function = self.parse_function_with_attrs(attrs)?;
+                    function.is_inline = true;
+                    functions.push(function);
+                }
                 Some(TokenKind::Unsafe) => {
                     self.advance(); // consume 'unsafe'
                     let mut function = self.parse_function_with_attrs(attrs)?;
@@ -363,6 +369,10 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::Bool(false),
                 })
             }
+            // A block literal in argument position. `|` / `||` never start a
+            // prefix expression otherwise (bit-or and logical-or are infix), so
+            // in prefix position they are unambiguously a block literal.
+            Some(TokenKind::Pipe | TokenKind::PipePipe) => self.parse_block_literal(),
             Some(TokenKind::Identifier) => {
                 let span = self.advance().span;
                 let ident = self.ident(span);
@@ -1003,6 +1013,7 @@ impl<'a> Parser<'a> {
             runtime_binding: runtime,
             is_entry,
             unsafe_fn: false,
+            is_inline: false,
             span: full_span,
         })
     }
@@ -1267,7 +1278,10 @@ impl<'a> Parser<'a> {
         // and no body (the primitive conversions). A leading `@` starts an
         // attribute; otherwise the method begins at `fn`.
         let mut methods = Vec::new();
-        while matches!(self.peek_kind(), Some(TokenKind::Fn | TokenKind::At)) {
+        while matches!(
+            self.peek_kind(),
+            Some(TokenKind::Fn | TokenKind::Inline | TokenKind::At)
+        ) {
             let mut attrs = self.parse_attributes()?;
             let runtime = attrs.runtime.take();
             if attrs.repr_c || attrs.entry {
@@ -1276,6 +1290,7 @@ impl<'a> Parser<'a> {
                     span: self.current_span(),
                 });
             }
+            let is_inline = self.consume_optional(TokenKind::Inline);
             self.consume(TokenKind::Fn, "Expected 'fn'")?;
             let mname_span = self
                 .consume(TokenKind::Identifier, "Expected method name")?
@@ -1322,6 +1337,7 @@ impl<'a> Parser<'a> {
                 return_type,
                 body,
                 runtime,
+                is_inline,
             });
         }
 
@@ -1533,6 +1549,52 @@ impl<'a> Parser<'a> {
                     Ok(first)
                 }
             }
+            TokenKind::Block => {
+                self.advance(); // consume 'block'
+                self.consume(TokenKind::LeftParen, "Expected '(' after 'block'")?;
+                let mut params = Vec::new();
+                if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                    self.advance();
+                    return Ok(Type::Block(params));
+                }
+                loop {
+                    // Each element is an optional `read`/`mut` mode followed by
+                    // a type. `own` is rejected: a block borrows, it never moves
+                    // an element out of the receiver.
+                    let mode = match self.peek_kind() {
+                        Some(TokenKind::Read) => {
+                            self.advance();
+                            PassMode::Read
+                        }
+                        Some(TokenKind::Mut) => {
+                            self.advance();
+                            PassMode::Mut
+                        }
+                        Some(TokenKind::Own) => {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "'read' or 'mut' block parameter mode".to_string(),
+                                found: TokenKind::Own,
+                                span: self.current_span(),
+                            });
+                        }
+                        _ => PassMode::Read,
+                    };
+                    let ty = self.parse_type()?;
+                    params.push(BlockParam { mode, ty });
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                        if matches!(self.peek_kind(), Some(TokenKind::RightParen)) {
+                            // Leave the `)` for the `consume` below so a
+                            // trailing comma doesn't double-consume it.
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                self.consume(TokenKind::RightParen, "Expected ')' to close block type")?;
+                Ok(Type::Block(params))
+            }
             TokenKind::Identifier => {
                 let span = self.advance().span;
                 let text = span.text(self.source);
@@ -1645,6 +1707,47 @@ impl<'a> Parser<'a> {
 
     /// Parse a block with statements and optional trailing expression.
     /// A trailing expression (without semicolon) becomes the block's value.
+    /// Parse a block literal `|e| { ... }`, `|e, extra| { ... }`, or
+    /// `|| { ... }`. Parameters are bare names — the `block(...)` formal
+    /// supplies their types and passing modes.
+    fn parse_block_literal(&mut self) -> Result<Expr, ParseError> {
+        let opening = self.advance(); // consume '|' or '||'
+        let opening_span = opening.span;
+        let opening_kind = opening.kind;
+        let params = if opening_kind == TokenKind::PipePipe {
+            Vec::new()
+        } else {
+            let mut params = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                let span = self
+                    .consume(
+                        TokenKind::Identifier,
+                        "Expected block parameter name after '|'",
+                    )?
+                    .span;
+                params.push(self.ident(span));
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance(); // consume ','
+                    // A trailing comma before the closing '|' is fine.
+                    if matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.consume(TokenKind::Pipe, "Expected '|' after block parameters")?;
+            params
+        };
+        let body = self.parse_block()?;
+        let span = opening_span.cover(body.span);
+        Ok(Expr {
+            span,
+            ty: Type::Undetermined,
+            kind: ExprKind::BlockLiteral { params, body },
+        })
+    }
+
     fn parse_block(&mut self) -> Result<Block, ParseError> {
         let left_brace = self.consume(TokenKind::LeftBrace, "Expected '{'")?;
         let block_start = left_brace.span.start();

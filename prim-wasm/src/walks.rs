@@ -331,13 +331,23 @@ fn collect_scratch_types_stmt(
             }
             collect_scratch_types_pattern(pattern, policy, out);
         }
-        hir::Stmt::DerefAssign { ptr, value, .. } => {
+        hir::Stmt::DerefAssign {
+            ptr,
+            value,
+            drop_old,
+            ..
+        } => {
             collect_scratch_types_expr(
                 ptr, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
             );
             collect_scratch_types_expr(
                 value, runtime, scalar_abi, scalar_ret, ret_scalar, policy, out,
             );
+            // The new value is stashed (one i32) while the displaced slot value
+            // is dropped, so it survives across `drop_in_place`.
+            if *drop_old {
+                out.push(ValType::I32);
+            }
             // A whole moved box stored into an inline slot is stashed (one i32)
             // so `emit` can free it after the byte copy.
             if store_orphans_box(value, policy) {

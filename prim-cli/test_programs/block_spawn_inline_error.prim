@@ -1,0 +1,12 @@
+import std.rt.spawn
+
+// `spawn` needs a runtime entry point, but an `inline fn` body is spliced into
+// its callers and emptied at compile time — spawning one would start a task
+// that silently runs no body.
+inline fn worker() {
+    return
+}
+
+fn main() {
+    spawn(worker)
+}

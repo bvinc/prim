@@ -566,6 +566,20 @@ impl Builder<'_> {
                 self.current = join;
             }
             ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => self.block(b),
+            // A block literal is linearized at its argument position: bind its
+            // tracked parameters, then execute its body (its `return`/`break`
+            // diverge exactly as they will after the inline pass splices it).
+            ExprKind::BlockLit { params, body } => {
+                for p in params {
+                    if self.tracked.contains(&p.name) {
+                        self.act(Action::Init(p.name));
+                    }
+                }
+                self.block(body);
+            }
+            ExprKind::BlockCall {
+                args, arg_modes, ..
+            } => self.read_args(args, arg_modes),
             ExprKind::Binary { left, right, .. } => {
                 self.read(left);
                 self.read(right);

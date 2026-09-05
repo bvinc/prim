@@ -30,7 +30,8 @@
 
 use super::cfg::{self, Action, CopyCtx, Effect, copy_trait_id, root_symbol};
 use super::{
-    Block, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId, TraitId,
+    Block, BlockParam, Expr, ExprKind, FuncId, PassMode, Pattern, Program, SpanId, Stmt, SymbolId,
+    TraitId, Type,
 };
 use prim_tok::{FileId, Span};
 use std::collections::{HashMap, HashSet};
@@ -180,6 +181,11 @@ impl<'a> Checker<'a> {
         let mut tracked: HashSet<SymbolId> = HashSet::new();
         let mut borrow_params: HashSet<SymbolId> = HashSet::new();
         for p in &func.params {
+            // Block parameters are second-class (no runtime value); they are
+            // never tracked as movables or borrows.
+            if matches!(p.ty, Type::Block(_)) {
+                continue;
+            }
             match copy_ctx.effect(p.mode, &p.ty) {
                 // Copy params aren't tracked; `own` params are owned (movable);
                 // `read`/`mut` params are borrows that may not be moved out.
@@ -275,20 +281,27 @@ impl<'a> Checker<'a> {
         let read_borrows: HashSet<SymbolId> = func
             .params
             .iter()
-            .filter(|p| !copy_ctx.is_copy(&p.ty) && matches!(p.mode, PassMode::Read))
+            .filter(|p| {
+                !matches!(p.ty, Type::Block(_))
+                    && !copy_ctx.is_copy(&p.ty)
+                    && matches!(p.mode, PassMode::Read)
+            })
             .map(|p| p.name)
             .collect();
         let borrowed: HashSet<SymbolId> = func
             .params
             .iter()
             .filter(|p| {
-                !copy_ctx.is_copy(&p.ty) && matches!(p.mode, PassMode::Read | PassMode::Mut)
+                !matches!(p.ty, Type::Block(_))
+                    && !copy_ctx.is_copy(&p.ty)
+                    && matches!(p.mode, PassMode::Read | PassMode::Mut)
             })
             .map(|p| p.name)
             .collect();
         BorrowWalk {
             chk: self,
             copy_ctx,
+            func,
             read_borrows,
             borrowed,
         }
@@ -318,6 +331,8 @@ struct BorrowWalk<'a, 'p> {
     /// The caller's copy-vs-move policy, so `is_copy` on argument types treats
     /// the caller's `T: Copy` bounds correctly.
     copy_ctx: CopyCtx<'p>,
+    /// The function being walked — for `BlockCall` declared parameter modes.
+    func: &'a super::Function,
     /// Every *read-only* borrow in scope: `read` parameters, plus the `read`/
     /// bare bindings of the match arm currently being walked. Rule 4: a `mut`
     /// borrow (at a call or `match mut`) may not go through any of these.
@@ -442,6 +457,61 @@ impl Visitor for BorrowWalk<'_, '_> {
                 // The scrutinee is walked too (arms' patterns bind it, but the
                 // scrutinee expression itself is outside the borrow bindings).
                 walk_expr_scrutinee_only(self, expr);
+            }
+            // A block literal's parameters are second-class borrows of the
+            // elements the callee hands them — enter them for the block body
+            // exactly like match-arm borrow bindings.
+            ExprKind::BlockLit { params, body } => {
+                let block_params: Vec<BlockParam> = match &expr.ty {
+                    Type::Block(bp) => bp.clone(),
+                    _ => Vec::new(),
+                };
+                let mut entered: Vec<SymbolId> = Vec::new();
+                let mut entered_read: Vec<SymbolId> = Vec::new();
+                for (lit, bp) in params.iter().zip(block_params.iter()) {
+                    if self.copy_ctx.effect(bp.mode, &bp.ty) == Effect::Borrow {
+                        entered.push(lit.name);
+                        if bp.mode != PassMode::Mut {
+                            entered_read.push(lit.name);
+                        }
+                    }
+                }
+                for &sym in &entered {
+                    self.borrowed.insert(sym);
+                }
+                for &sym in &entered_read {
+                    self.read_borrows.insert(sym);
+                }
+                self.visit_block(body);
+                for &sym in &entered {
+                    self.borrowed.remove(&sym);
+                }
+                for &sym in &entered_read {
+                    self.read_borrows.remove(&sym);
+                }
+            }
+            // A block invocation passes the elements to the block body; its
+            // declared parameter modes come from the block parameter's type.
+            ExprKind::BlockCall {
+                param,
+                args,
+                arg_modes,
+            } => {
+                let block_params: Vec<BlockParam> = self
+                    .func
+                    .params
+                    .iter()
+                    .find(|p| p.name == *param)
+                    .and_then(|p| match &p.ty {
+                        Type::Block(bp) => Some(bp.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let param_modes: Vec<(PassMode, bool)> = block_params
+                    .iter()
+                    .map(|bp| (bp.mode, self.copy_ctx.is_copy(&bp.ty)))
+                    .collect();
+                self.check_args(args, arg_modes, &param_modes);
             }
             _ => walk_expr(self, expr),
         }
@@ -576,6 +646,17 @@ impl Visitor for BorrowBindingCollector<'_> {
                 // bindings.
                 self.visit_expr(&arm.body);
             }
+        } else if let ExprKind::BlockLit { params, .. } = &expr.kind {
+            let block_params: Vec<BlockParam> = match &expr.ty {
+                Type::Block(bp) => bp.clone(),
+                _ => Vec::new(),
+            };
+            for (lit, bp) in params.iter().zip(block_params.iter()) {
+                if self.copy_ctx.effect(bp.mode, &bp.ty) == Effect::Borrow {
+                    self.out.insert(lit.name);
+                }
+            }
+            walk_expr(self, expr);
         } else {
             walk_expr(self, expr);
         }
@@ -616,6 +697,21 @@ struct TrackedCollector<'a> {
 impl Visitor for TrackedCollector<'_> {
     fn visit_pattern(&mut self, pattern: &Pattern) {
         tracked_pattern(&self.copy_ctx, pattern, self.out);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        if let ExprKind::BlockLit { params, .. } = &expr.kind {
+            let block_params: Vec<BlockParam> = match &expr.ty {
+                Type::Block(bp) => bp.clone(),
+                _ => Vec::new(),
+            };
+            for (lit, bp) in params.iter().zip(block_params.iter()) {
+                if !self.copy_ctx.is_copy(&bp.ty) {
+                    self.out.insert(lit.name);
+                }
+            }
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -751,6 +847,12 @@ fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
             }
         }
         ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => v.visit_block(b),
+        ExprKind::BlockLit { body, .. } => v.visit_block(body),
+        ExprKind::BlockCall { args, .. } => {
+            for a in args {
+                v.visit_expr(a);
+            }
+        }
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)

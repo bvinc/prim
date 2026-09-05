@@ -1,0 +1,9 @@
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+fn main() {
+    let v = new[i32]()
+    push(mut v, own 1)
+    with(v, 0usize, |e| { e = 5 })
+}

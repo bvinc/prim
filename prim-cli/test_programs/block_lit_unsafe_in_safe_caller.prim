@@ -1,0 +1,14 @@
+// A block literal is written at its caller, so its body inherits the caller's
+// safe/unsafe context. A safe caller may not hand `block(*mut T)` a literal
+// whose body loads/stores through the element pointer — the raw pointer power
+// must be checked where the literal text lives, not skipped as a leaf.
+inline fn poke(read p: *mut u8, b: block(*mut u8)) {
+    b(p)
+}
+
+fn poke_unsafe(base: *mut u8) {
+    poke(base, |e| { *e = 42u8 })
+}
+
+fn main() {
+}

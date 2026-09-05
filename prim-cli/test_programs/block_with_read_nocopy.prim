@@ -1,0 +1,12 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+struct S { n: i32 }
+
+fn main() {
+    let v = new[S]()
+    push(mut v, own S { n = 41 })
+    with(v, 0usize, |e| { println(e.n + 1) })
+}

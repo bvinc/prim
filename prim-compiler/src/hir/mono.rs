@@ -251,6 +251,12 @@ impl Mono<'_> {
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 self.rewrite_block(block, subst)
             }
+            ExprKind::BlockLit { body, .. } => self.rewrite_block(body, subst),
+            ExprKind::BlockCall { args, .. } => {
+                for a in args {
+                    self.rewrite_expr(a, subst);
+                }
+            }
             ExprKind::Coerce { value, .. } => self.rewrite_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {
                 self.rewrite_expr(receiver, subst);
@@ -520,6 +526,15 @@ impl Mono<'_> {
                 let new_eid = self.instantiate_enum(*eid, concrete_args);
                 Type::Enum(new_eid, Vec::new())
             }
+            Type::Block(params) => Type::Block(
+                params
+                    .iter()
+                    .map(|p| super::BlockParam {
+                        mode: p.mode,
+                        ty: self.substitute_type(&p.ty, subst),
+                    })
+                    .collect(),
+            ),
             _ => ty.clone(),
         }
     }
@@ -672,6 +687,12 @@ impl Mono<'_> {
             }
             ExprKind::Block(block) | ExprKind::UnsafeBlock(block) => {
                 self.substitute_block(block, subst)
+            }
+            ExprKind::BlockLit { body, .. } => self.substitute_block(body, subst),
+            ExprKind::BlockCall { args, .. } => {
+                for a in args {
+                    self.substitute_expr(a, subst);
+                }
             }
             ExprKind::Coerce { value, .. } => self.substitute_expr(value, subst),
             ExprKind::DynCall { receiver, args, .. } => {

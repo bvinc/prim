@@ -1,0 +1,16 @@
+import std.io.println
+import std.vec.Vec
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+fn find(read v: Vec[i32], target: i32) -> i32 {
+    with(v, 0usize, |e| { if e == target { return 42 } })
+    return 0
+}
+
+fn main() {
+    let v = new[i32]()
+    push(mut v, own 7)
+    println(find(v, 7))
+}

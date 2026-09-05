@@ -129,6 +129,18 @@ pub enum LoweringError {
         file: FileId,
         span: Span,
     },
+    /// A `block(...)` type used as a parameter of a function/method that is not
+    /// `inline`. Blocks are second-class and only exist inside inlined bodies.
+    BlockParamInNonInlineFn {
+        file: FileId,
+        span: Span,
+    },
+    /// A `block(...)` type in a non-parameter position (return type, struct or
+    /// enum field, global, `let` annotation). Blocks have no runtime value.
+    BlockTypeNotParam {
+        file: FileId,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -229,6 +241,19 @@ impl std::fmt::Display for LoweringError {
                      inline size, so a copy would alias its fields"
                 )
             }
+            LoweringError::BlockParamInNonInlineFn { .. } => {
+                write!(
+                    f,
+                    "a `block` parameter requires an `inline fn` (blocks are \
+                     second-class and only exist inside inlined bodies)"
+                )
+            }
+            LoweringError::BlockTypeNotParam { .. } => {
+                write!(
+                    f,
+                    "a `block` type is only valid as a parameter of an `inline fn`"
+                )
+            }
         }
     }
 }
@@ -257,7 +282,9 @@ impl LoweringError {
             | LoweringError::CopyOnDropType { span, .. }
             | LoweringError::CopyOnNonCopyField { span, .. }
             | LoweringError::CopyOnEnum { span, .. }
-            | LoweringError::CopyOnRecursiveType { span, .. } => *span,
+            | LoweringError::CopyOnRecursiveType { span, .. }
+            | LoweringError::BlockParamInNonInlineFn { span, .. }
+            | LoweringError::BlockTypeNotParam { span, .. } => *span,
         }
     }
 
@@ -282,8 +309,26 @@ impl LoweringError {
             | LoweringError::CopyOnDropType { file, .. }
             | LoweringError::CopyOnNonCopyField { file, .. }
             | LoweringError::CopyOnEnum { file, .. }
-            | LoweringError::CopyOnRecursiveType { file, .. } => *file,
+            | LoweringError::CopyOnRecursiveType { file, .. }
+            | LoweringError::BlockParamInNonInlineFn { file, .. }
+            | LoweringError::BlockTypeNotParam { file, .. } => *file,
         }
+    }
+}
+
+/// Whether a lowered type mentions `Type::Block` anywhere. Used to reject
+/// second-class block types in value positions (fields, globals, returns,
+/// `let` annotations).
+fn type_contains_block(ty: &hir::Type) -> bool {
+    match ty {
+        hir::Type::Block(_) => true,
+        hir::Type::Array(elem, n) => type_contains_block(elem) || type_contains_block(n),
+        hir::Type::Struct(_, args) | hir::Type::Enum(_, args) => {
+            args.iter().any(type_contains_block)
+        }
+        hir::Type::Pointer { pointee, .. } => type_contains_block(pointee),
+        hir::Type::Tuple(elems) => elems.iter().any(type_contains_block),
+        _ => false,
     }
 }
 
@@ -570,6 +615,7 @@ impl<'a> LoweringContext<'a> {
                         span,
                         runtime,
                         unsafe_fn: f.unsafe_fn,
+                        is_inline: f.is_inline,
                     });
                 }
                 for g in &file.ast.globals {
@@ -710,6 +756,7 @@ impl<'a> LoweringContext<'a> {
                             span,
                             runtime,
                             unsafe_fn: false,
+                            is_inline: m.is_inline,
                         });
                         // Each method's FuncId, keyed by its unique declaration
                         // span — survives same-name clashes across traits.
@@ -954,10 +1001,14 @@ impl<'a> LoweringContext<'a> {
                     let fields = s
                         .fields
                         .iter()
-                        .map(|f| Field {
-                            name: f.name.sym,
-                            ty: self.lower_type(&f.field_type, module_scope),
-                            span: self.span_id(f.name.span, file.file_id),
+                        .map(|f| {
+                            let ty = self.lower_type(&f.field_type, module_scope);
+                            self.reject_block_type(&ty, f.name.span, file.file_id);
+                            Field {
+                                name: f.name.sym,
+                                ty,
+                                span: self.span_id(f.name.span, file.file_id),
+                            }
                         })
                         .collect();
                     if let Some(hir_struct) = self.structs.get_mut(sid.0 as usize) {
@@ -985,10 +1036,14 @@ impl<'a> LoweringContext<'a> {
                         let fields: Vec<hir::Field> = v
                             .fields
                             .iter()
-                            .map(|f| hir::Field {
-                                name: f.name.sym,
-                                ty: self.lower_type(&f.field_type, module_scope),
-                                span: self.span_id(f.name.span, file.file_id),
+                            .map(|f| {
+                                let ty = self.lower_type(&f.field_type, module_scope);
+                                self.reject_block_type(&ty, f.name.span, file.file_id);
+                                hir::Field {
+                                    name: f.name.sym,
+                                    ty,
+                                    span: self.span_id(f.name.span, file.file_id),
+                                }
                             })
                             .collect();
                         variants.push(hir::Variant {
@@ -1033,13 +1088,18 @@ impl<'a> LoweringContext<'a> {
                             let params = m
                                 .parameters
                                 .iter()
-                                .map(|p| self.lower_type(&p.type_annotation, module_scope))
+                                .map(|p| {
+                                    let lowered = self.lower_type(&p.type_annotation, module_scope);
+                                    self.reject_block_type(&lowered, p.name.span, file.file_id);
+                                    lowered
+                                })
                                 .collect();
                             let param_modes = m.parameters.iter().map(|p| p.mode).collect();
-                            let ret = m
-                                .return_type
-                                .as_ref()
-                                .map(|ty| self.lower_type(ty, module_scope));
+                            let ret = m.return_type.as_ref().map(|ty| {
+                                let lowered = self.lower_type(ty, module_scope);
+                                self.reject_block_type(&lowered, m.name.span, file.file_id);
+                                lowered
+                            });
                             hir::TraitMethodSig {
                                 name: m.name.sym,
                                 params,
@@ -1101,16 +1161,23 @@ impl<'a> LoweringContext<'a> {
                             );
                             Param {
                                 name: sym,
-                                ty: self.lower_type(&p.type_annotation, module_scope),
+                                ty: self.lower_param_type(
+                                    &p.type_annotation,
+                                    module_scope,
+                                    p.name.span,
+                                    file.file_id,
+                                    f.is_inline,
+                                ),
                                 mode: p.mode,
                                 span: self.span_id(p.name.span, file.file_id),
                             }
                         })
                         .collect();
-                    let ret = f
-                        .return_type
-                        .as_ref()
-                        .map(|t| self.lower_type(t, module_scope));
+                    let ret = f.return_type.as_ref().map(|t| {
+                        let lowered = self.lower_type(t, module_scope);
+                        self.reject_block_type(&lowered, f.span, file.file_id);
+                        lowered
+                    });
                     let body =
                         self.lower_block(&f.body, module_id, file.file_id, ast, module_scope);
                     let span = self.span_id(f.span, file.file_id);
@@ -1130,6 +1197,7 @@ impl<'a> LoweringContext<'a> {
                     let res_id = self.find_top_level_symbol(&name, module.id);
                     let gid = *self.global_ids.get(&res_id).expect("missing global id");
                     let ty = self.lower_type(&g.type_annotation, module_scope);
+                    self.reject_block_type(&ty, g.span, file.file_id);
                     let init = match self.lower_global_init(&g.value, &ty, file.file_id) {
                         Some(init) => init,
                         None => continue,
@@ -1221,16 +1289,23 @@ impl<'a> LoweringContext<'a> {
                                 );
                                 Param {
                                     name: sym,
-                                    ty: self.lower_type(&p.type_annotation, module_scope),
+                                    ty: self.lower_param_type(
+                                        &p.type_annotation,
+                                        module_scope,
+                                        p.name.span,
+                                        file.file_id,
+                                        m.is_inline,
+                                    ),
                                     mode: p.mode,
                                     span: self.span_id(p.name.span, file.file_id),
                                 }
                             })
                             .collect();
-                        let ret = m
-                            .return_type
-                            .as_ref()
-                            .map(|t| self.lower_type(t, module_scope));
+                        let ret = m.return_type.as_ref().map(|t| {
+                            let lowered = self.lower_type(t, module_scope);
+                            self.reject_block_type(&lowered, m.name.span, file.file_id);
+                            lowered
+                        });
                         let body =
                             self.lower_block(&m.body, module_id, file.file_id, ast, module_scope);
                         let span = self.span_id(m.name.span, file.file_id);
@@ -1670,6 +1745,7 @@ impl<'a> LoweringContext<'a> {
                 span,
                 runtime: None,
                 unsafe_fn: false,
+                is_inline: false,
             });
             self.impls
                 .insert((debug_tid, hir::MethodOwner::Struct(sid)), vec![fid]);
@@ -1738,12 +1814,14 @@ impl<'a> LoweringContext<'a> {
                 // `let` patterns must be irrefutable: no variant (enum) tests.
                 self.check_irrefutable(pattern, file_id);
                 let pattern_hir = self.lower_pattern(pattern, module, file_id, module_scope);
+                let lowered_ty = self.lower_type(
+                    type_annotation.as_ref().unwrap_or(&Type::Undetermined),
+                    module_scope,
+                );
+                self.reject_block_type(&lowered_ty, pattern.span(), file_id);
                 hir::Stmt::Let {
                     pattern: pattern_hir,
-                    ty: self.lower_type(
-                        type_annotation.as_ref().unwrap_or(&Type::Undetermined),
-                        module_scope,
-                    ),
+                    ty: lowered_ty,
                     value: value_hir,
                     span,
                 }
@@ -1804,6 +1882,7 @@ impl<'a> LoweringContext<'a> {
                     ptr: ptr_hir,
                     value: value_hir,
                     span,
+                    drop_old: false,
                 }
             }
             Stmt::FieldAssign {
@@ -2436,6 +2515,28 @@ impl<'a> LoweringContext<'a> {
                     };
                 }
                 let call_span = path.segments.last().expect("empty path").span;
+                // A call whose name resolves to a *local* (not a module-scope
+                // function) is an invocation of a `block` parameter: `b(args)`.
+                // Functions are second-class, so a single-segment name that is a
+                // local binding can only be a block call; typecheck validates
+                // that the binding really is a block parameter.
+                if path.segments.len() == 1 {
+                    let name = self.interner.resolve(&path.segments[0].sym);
+                    if let Some(binding) = self.local_scope.get(name) {
+                        return hir::Expr {
+                            kind: hir::ExprKind::BlockCall {
+                                param: binding.symbol,
+                                args: args
+                                    .iter()
+                                    .map(|a| self.lower_expr(a, module, file_id, ast, module_scope))
+                                    .collect(),
+                                arg_modes: arg_modes.clone(),
+                            },
+                            ty: self.lower_type(&expr.ty, module_scope),
+                            span: self.span_id(call_span, file_id),
+                        };
+                    }
+                }
                 let fid = self
                     .resolve_function_path(path, file_id, ast, module_scope)
                     .and_then(|id| self.func_ids.get(&id).copied());
@@ -2749,6 +2850,40 @@ impl<'a> LoweringContext<'a> {
                 )),
                 self.lower_type(&expr.ty, module_scope),
             ),
+            ExprKind::BlockLiteral { params, body } => {
+                // Bind each parameter as a fresh local in a new scope, then
+                // lower the body. Parameters are lowered `mutable` so the
+                // *lowering*-level rebind check doesn't reject `e = ..`; the
+                // read-only-ness of a `read` block parameter is enforced by
+                // typecheck (which knows the `block(...)` formal's mode).
+                self.local_scope.push();
+                let lowered_params: Vec<hir::BlockLitParam> = params
+                    .iter()
+                    .map(|p| {
+                        let sym = self.insert_symbol(module, p.sym, SymbolKind::Local);
+                        self.local_scope.insert(
+                            self.interner.resolve(&p.sym).to_string(),
+                            LocalBinding {
+                                symbol: sym,
+                                mutable: true,
+                            },
+                        );
+                        hir::BlockLitParam {
+                            name: sym,
+                            span: self.span_id(p.span, file_id),
+                        }
+                    })
+                    .collect();
+                let lowered_body = self.lower_block(body, module, file_id, ast, module_scope);
+                self.local_scope.pop();
+                (
+                    hir::ExprKind::BlockLit {
+                        params: lowered_params,
+                        body: lowered_body,
+                    },
+                    hir::Type::Undetermined,
+                )
+            }
             ExprKind::Dbg(inner) => {
                 let inner_span = inner.span;
                 // Use only the basename so output is portable across machines.
@@ -3166,6 +3301,15 @@ impl<'a> LoweringContext<'a> {
                 mutable: *mutable,
                 pointee: Box::new(self.lower_type(pointee, module_scope)),
             },
+            Type::Block(params) => hir::Type::Block(
+                params
+                    .iter()
+                    .map(|p| hir::BlockParam {
+                        mode: p.mode,
+                        ty: self.lower_type(&p.ty, module_scope),
+                    })
+                    .collect(),
+            ),
             // A borrow type in a value position (return type, `let`
             // annotation): a real, tracked `Ref`. Parameters are still unwrapped
             // to `(PassMode, inner)` by the parser, so this only fires for
@@ -3196,6 +3340,32 @@ impl<'a> LoweringContext<'a> {
             Type::Undetermined => hir::Type::IntVar,
             _ => self.lower_type(ty, module_scope),
         }
+    }
+
+    /// Reject a `block(...)` type appearing anywhere but an inline-fn parameter.
+    fn reject_block_type(&mut self, ty: &hir::Type, span: Span, file: FileId) {
+        if type_contains_block(ty) {
+            self.errors
+                .push(LoweringError::BlockTypeNotParam { file, span });
+        }
+    }
+
+    /// Lower a parameter type. If it is (or contains) `block(...)`, it is only
+    /// legal on an `inline fn`.
+    fn lower_param_type(
+        &mut self,
+        ty: &Type,
+        module_scope: &ModuleScope,
+        span: Span,
+        file: FileId,
+        is_inline: bool,
+    ) -> hir::Type {
+        let lowered = self.lower_type(ty, module_scope);
+        if type_contains_block(&lowered) && !is_inline {
+            self.errors
+                .push(LoweringError::BlockParamInNonInlineFn { file, span });
+        }
+        lowered
     }
 
     fn lower_float_type(&self, ty: &Type, module_scope: &ModuleScope) -> hir::Type {

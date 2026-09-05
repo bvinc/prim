@@ -1,0 +1,15 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.with
+
+fn main() {
+    let v = new[i32]()
+    push(mut v, own 5)
+    let mut i = 0i32
+    while i < 10 {
+        with(v, 0usize, |e| { if e == 5 { break } })
+        i = i + 1
+    }
+    println(i)
+}

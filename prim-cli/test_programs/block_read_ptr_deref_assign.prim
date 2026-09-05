@@ -1,0 +1,17 @@
+import std.io.println
+import std.ptr.null_mut_u8
+import std.ptr.ptr_byte_add_mut_u8
+
+// A `read` block element of type `*mut u8`: the binding itself is read-only,
+// but `*e = v` writes through the pointer (mutating the pointee), exactly as
+// `read p: *mut u8` permits `*p = v`. This must NOT be rejected as a
+// read-block-param write.
+inline fn poke(read p: *mut u8, b: block(*mut u8)) {
+    b(p)
+}
+
+unsafe fn main() {
+    let base = ptr_byte_add_mut_u8(null_mut_u8(), 32768usize)
+    poke(base, |e| { *e = 42u8 })
+    println(*base)
+}

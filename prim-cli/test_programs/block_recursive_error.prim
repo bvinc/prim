@@ -1,0 +1,7 @@
+inline fn f() {
+    f()
+}
+
+fn main() {
+    f()
+}

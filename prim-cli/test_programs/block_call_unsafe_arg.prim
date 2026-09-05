@@ -1,0 +1,9 @@
+// A block call's argument is an expression evaluated inside the inline fn
+// body, so `b(*p)` must check the `*p` raw-pointer load under the inline fn's
+// own safe/unsafe context — the argument is not a leaf to skip.
+inline fn read_elem(p: *mut i32, b: block(i32)) {
+    b(*p)
+}
+
+fn main() {
+}

@@ -1,0 +1,31 @@
+import std.io.println
+
+struct Point { x: i32, y: i32 }
+
+impl Copy for Point {}
+
+// `own` of an `impl Copy` struct is a by-value copy — evaluated once and
+// private to the callee — not a borrow of the caller's place. Field writes
+// must not leak into the caller.
+inline fn bump(own p: Point) {
+    p.x = p.x + 1
+}
+
+// The argument is a temporary here; it must be evaluated exactly once, not
+// once per use of `p`.
+inline fn read_twice(own p: Point) {
+    println(p.x)
+    println(p.x)
+}
+
+fn make() -> Point {
+    println(7i32)
+    return Point { x = 3, y = 4 }
+}
+
+fn main() {
+    let p = Point { x = 3, y = 4 }
+    bump(p)
+    println(p.x)          // 3 — caller's value unchanged (private copy)
+    read_twice(make())    // 7 once (argument evaluated once), then 3, 3
+}

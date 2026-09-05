@@ -1,0 +1,16 @@
+import std.io.println
+
+// Trailing commas in `block(...)` parameter lists must parse: the `)` after
+// the trailing comma closes the block type, not the enclosing parameter list.
+inline fn apply1(b: block(i32,)) {
+    b(21)
+}
+
+inline fn apply2(b: block(read i32, read i32,)) {
+    b(1, 2)
+}
+
+fn main() {
+    apply1(|x| { println(x) })
+    apply2(|r, m| { println(r + m) })
+}

@@ -1,0 +1,22 @@
+import std.io.println
+import std.mem.alloc_array
+
+struct S { n: i32 }
+
+// Each call prints a marker, so a duplicated argument expression would show
+// two markers. `read_twice` reads its borrow parameter twice.
+unsafe fn get_ptr() -> *mut S {
+    println(7i32)
+    let p = alloc_array[S](1)
+    *p = S { n = 42 }
+    return p
+}
+
+inline fn read_twice(read s: S) {
+    println(s.n)
+    println(s.n)
+}
+
+unsafe fn main() {
+    read_twice(*get_ptr())
+}

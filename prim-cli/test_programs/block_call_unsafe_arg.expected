@@ -1,0 +1,1 @@
+ERROR: unsafe operation outside `unsafe` context: *p (raw pointer load)

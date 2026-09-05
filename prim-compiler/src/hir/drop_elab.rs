@@ -382,6 +382,8 @@ impl Insert<'_> {
             | ExprKind::Spawn { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::TraitBoundCall { .. }
+            | ExprKind::BlockLit { .. }
+            | ExprKind::BlockCall { .. }
             | ExprKind::Error => {}
         }
     }
@@ -558,6 +560,8 @@ impl Filter<'_> {
             | ExprKind::Ident(_)
             | ExprKind::ConstParam(_)
             | ExprKind::Spawn { .. }
+            | ExprKind::BlockLit { .. }
+            | ExprKind::BlockCall { .. }
             | ExprKind::Error => {}
         }
     }

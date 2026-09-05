@@ -1,0 +1,23 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.with
+import std.vec.with_mut
+
+// `Color` is the first enum (EnumId 0) and `S` the first struct (StructId 0):
+// their ids coincide, which must not be misread as a recursive reference.
+enum Color { Red, Green }
+
+struct S { c: Color }
+
+fn main() {
+    let v = new[S]()
+    push(mut v, own S { c = Color.Red })
+    with_mut(mut v, 0usize, |e| { e.c = Color.Green })
+    with(v, 0usize, |e| {
+        match e.c {
+            Color.Red => println(1i32),
+            Color.Green => println(2i32),
+        }
+    })
+}

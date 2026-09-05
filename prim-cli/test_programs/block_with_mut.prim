@@ -1,0 +1,12 @@
+import std.io.println
+import std.vec.new
+import std.vec.push
+import std.vec.get
+import std.vec.with_mut
+
+fn main() {
+    let v = new[i32]()
+    push(mut v, own 10)
+    with_mut(mut v, 0usize, |e| { e = e + 5 })
+    println(get(v, 0usize))
+}

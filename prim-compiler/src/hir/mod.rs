@@ -9,6 +9,8 @@ pub use typecheck::{TypeCheckError, TypeCheckKind, type_check};
 pub mod mono;
 pub use mono::monomorphize;
 
+pub mod block_inline;
+
 pub mod ownership;
 pub use ownership::{MoveError, MoveErrorKind, check as check_ownership};
 
@@ -173,6 +175,11 @@ pub struct Function {
     /// `unsafe fn`: part of the raw core; its body is an implicit `unsafe`
     /// block, and it may only be called from an `unsafe` context.
     pub unsafe_fn: bool,
+    /// `inline fn`: spliced into its caller by the block-inlining pass (after
+    /// monomorphization, before drop elaboration). Required for `block`
+    /// parameters; the pass leaves its body empty so codegen skips the
+    /// second-class block types it used to carry.
+    pub is_inline: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -504,6 +511,24 @@ pub struct Param {
     pub span: SpanId,
 }
 
+/// One element of a `block(...)` type: the passing mode the callee grants the
+/// block for that element, plus the element's type. `mode` is `Read` or `Mut`
+/// (`Own` is rejected at parse time — a block borrows, never moves an element
+/// out of the receiver).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BlockParam {
+    pub mode: PassMode,
+    pub ty: Type,
+}
+
+/// One parameter of a block *literal*: just a name. Types and modes are
+/// supplied by the `block(...)` formal the literal is passed to.
+#[derive(Clone, Debug)]
+pub struct BlockLitParam {
+    pub name: SymbolId,
+    pub span: SpanId,
+}
+
 #[derive(Clone, Debug)]
 pub struct Field {
     pub name: InternSymbol,
@@ -539,6 +564,12 @@ pub enum Stmt {
         ptr: Expr,
         value: Expr,
         span: SpanId,
+        /// Whole-place assignment of a `block(mut T)` element: drop the
+        /// displaced slot value (via `drop_in_place`) before overwriting it,
+        /// mirroring `Vec.set`. `false` for every ordinary `*p = v` store,
+        /// which (like `Vec.set`) leaves the displaced-value drop to the
+        /// caller — a raw pointer store must not implicitly drop.
+        drop_old: bool,
     },
     /// `object.field = value` — store to a struct field.
     FieldAssign {
@@ -718,6 +749,23 @@ pub enum ExprKind {
     /// Erased to a plain `Block` at codegen; only the unsafe-checking pass
     /// treats it specially.
     UnsafeBlock(Block),
+    /// A block literal `|e| { ... }` as an argument to an `inline fn`. The
+    /// parameters carry names only; their types and passing modes come from
+    /// the `block(...)` formal the literal is unified against at typecheck
+    /// (stored in the expression's `ty`). Erased by the block-inlining pass.
+    BlockLit {
+        params: Vec<BlockLitParam>,
+        body: Block,
+    },
+    /// Invocation of a block parameter inside an `inline fn` body: `b(args)`.
+    /// `arg_modes` are the call-site passing modes (parallel to `args`); the
+    /// block's declared parameter modes/types live on the callee's parameter.
+    /// Erased by the block-inlining pass.
+    BlockCall {
+        param: SymbolId,
+        args: Vec<Expr>,
+        arg_modes: Vec<PassMode>,
+    },
     /// Placeholder for expressions that failed during lowering.
     Error,
 }
@@ -877,6 +925,10 @@ pub enum Type {
     /// `Undetermined` means the type checker could not determine a type (an
     /// error). `produces_value` is false only for `Unit`.
     Unit,
+    /// A second-class compile-time closure type, `block(...)`. Never a runtime
+    /// value and never reaches codegen: the block-inlining pass erases every
+    /// `Type::Block` after typecheck/ownership/mono.
+    Block(Vec<BlockParam>),
     /// Undetermined integer type (will default to i32).
     IntVar,
     /// Undetermined float type (will default to f64).
@@ -982,6 +1034,20 @@ impl fmt::Display for Type {
                 }
             }
             Type::Unit => write!(f, "()"),
+            Type::Block(params) => {
+                write!(f, "block(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    match p.mode {
+                        PassMode::Read => write!(f, "{}", p.ty)?,
+                        PassMode::Mut => write!(f, "mut {}", p.ty)?,
+                        PassMode::Own => write!(f, "own {}", p.ty)?,
+                    }
+                }
+                write!(f, ")")
+            }
             Type::IntVar => write!(f, "{{integer}}"),
             Type::FloatVar => write!(f, "{{float}}"),
             Type::Undetermined => write!(f, "unknown"),
