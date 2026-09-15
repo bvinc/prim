@@ -9,32 +9,34 @@ struct Duration {
     nanos: u64,
 }
 
-fn from_nanos(n: u64) -> Duration {
-    return Duration { nanos = n }
-}
+impl Duration {
+    fn from_nanos(n: u64) -> Duration {
+        return Duration { nanos = n }
+    }
 
-fn from_micros(us: u64) -> Duration {
-    return Duration { nanos = us * 1000u64 }
-}
+    fn from_micros(us: u64) -> Duration {
+        return Duration { nanos = us * 1000u64 }
+    }
 
-fn from_millis(ms: u64) -> Duration {
-    return Duration { nanos = ms * 1000000u64 }
-}
+    fn from_millis(ms: u64) -> Duration {
+        return Duration { nanos = ms * 1000000u64 }
+    }
 
-fn from_secs(s: u64) -> Duration {
-    return Duration { nanos = s * 1000000000u64 }
-}
+    fn from_secs(s: u64) -> Duration {
+        return Duration { nanos = s * 1000000000u64 }
+    }
 
-fn as_nanos(read d: Duration) -> u64 {
-    return d.nanos
-}
+    fn as_nanos(read self) -> u64 {
+        return self.nanos
+    }
 
-fn as_millis(read d: Duration) -> u64 {
-    return d.nanos / 1000000u64
-}
+    fn as_millis(read self) -> u64 {
+        return self.nanos / 1000000u64
+    }
 
-fn as_secs(read d: Duration) -> u64 {
-    return d.nanos / 1000000000u64
+    fn as_secs(read self) -> u64 {
+        return self.nanos / 1000000000u64
+    }
 }
 
 // A monotonic instant in nanoseconds. Subtract two to get elapsed time.

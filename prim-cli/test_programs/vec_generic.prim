@@ -1,6 +1,5 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.vec.get
 
 struct Point { x: i32, y: i32 }
@@ -10,15 +9,15 @@ impl Copy for Point {}
 fn main() {
     // Vec[u64] — 8-byte elements (exercises size_of scaling)
     let nums = new[u64]()
-    push(mut nums, own 1000000000000u64)
-    push(mut nums, own 2000000000000u64)
+    nums.push(own 1000000000000u64)
+    nums.push(own 2000000000000u64)
     println(get(nums, 0usize))   // 1000000000000
     println(get(nums, 1usize))   // 2000000000000
 
     // Vec[Point] — struct (reference) elements
     let pts = new[Point]()
-    push(mut pts, own Point { x = 1, y = 2 })
-    push(mut pts, own Point { x = 3, y = 4 })
+    pts.push(own Point { x = 1, y = 2 })
+    pts.push(own Point { x = 3, y = 4 })
     let p = get(pts, 1usize)
     println(p.x)                 // 3
     println(p.y)                 // 4

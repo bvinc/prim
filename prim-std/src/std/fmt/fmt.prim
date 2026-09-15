@@ -2,7 +2,6 @@ mod fmt
 
 import std.vec.Vec
 import std.vec.new
-import std.vec.push
 import std.string.from_vec
 import std.ptr.byte_add
 
@@ -20,14 +19,14 @@ fn new_formatter() -> Formatter {
 
 impl Formatter {
     fn write_byte(mut self, b: u8) {
-        push[u8](mut self.buf, own b)
+        self.buf.push(own b)
     }
 
     fn write_str(mut self, read s: String) {
         let mut i = 0usize
         while i < s.len {
             unsafe {
-                push[u8](mut self.buf, own *byte_add[u8](s.data, i))
+                self.buf.push(own *byte_add[u8](s.data, i))
             }
             i = i + 1usize
         }
@@ -39,7 +38,7 @@ impl Formatter {
         if x >= 10u64 {
             self.write_u64(x / 10u64)
         }
-        push[u8](mut self.buf, own u8.from_u64_wrapping(48u64 + x % 10u64))
+        self.buf.push(own u8.from_u64_wrapping(48u64 + x % 10u64))
     }
 
     // Signed decimal. The magnitude is negated in u64 so the most-negative
@@ -92,7 +91,7 @@ impl Formatter {
         while i < keep {
             frac = frac * 10.0f64
             let digit = u64.from_f64_trunc(frac)
-            push[u8](mut self.buf, own u8.from_u64_wrapping(48u64 + digit))
+            self.buf.push(own u8.from_u64_wrapping(48u64 + digit))
             frac = frac - f64.from_u64(digit)
             i = i + 1usize
         }

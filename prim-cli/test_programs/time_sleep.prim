@@ -1,17 +1,17 @@
 import std.io.println
 import std.rt.spawn
 import std.time.sleep
-import std.time.from_millis
+import std.time.Duration
 
 // Two tasks sleep for different durations; the scheduler wakes each when its
 // timer is due, so they finish in wake-time order regardless of spawn order.
 fn fast() {
-    sleep(from_millis(10u64))
+    sleep(Duration.from_millis(10u64))
     println(2i32)
 }
 
 fn slow() {
-    sleep(from_millis(30u64))
+    sleep(Duration.from_millis(30u64))
     println(3i32)
 }
 

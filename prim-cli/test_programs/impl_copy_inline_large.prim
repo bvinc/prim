@@ -1,7 +1,6 @@
 import std.io.println
 import std.mem.size_of
 import std.vec.new
-import std.vec.push
 import std.vec.get
 
 // A flat `Copy` struct *larger* than the legacy 16-byte inline cutoff (5 x i32
@@ -22,8 +21,8 @@ fn main() {
     println(size_of[Big5]())   // 20
 
     let mut v = new[Big5]()
-    push(mut v, own Big5 { a = 1, b = 2, c = 3, d = 4, e = 5 })
-    push(mut v, own Big5 { a = 6, b = 7, c = 8, d = 9, e = 10 })
+    v.push(own Big5 { a = 1, b = 2, c = 3, d = 4, e = 5 })
+    v.push(own Big5 { a = 6, b = 7, c = 8, d = 9, e = 10 })
 
     let x = get(v, 0usize)
     let y = get(v, 1usize)

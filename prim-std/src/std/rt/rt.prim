@@ -7,10 +7,7 @@ import std.mem.free
 import std.ptr.at
 import std.vec.Vec
 import std.vec.new
-import std.vec.len
 import std.vec.get
-import std.vec.set
-import std.vec.push
 
 // Cooperatively yield from the current green thread, returning control to
 // the scheduler. The scheduler picks the next runnable task (or, in the
@@ -148,7 +145,7 @@ fn poll_parked(mut kind: Vec[i32], read deadline: Vec[u64], read fd: Vec[i32]) {
         let mut e = 0usize
         while e < nready {
             let h = usize.from_u64_wrapping(*at[u64](events, e * 32usize))
-            set[i32](mut kind, h, own 0i32)
+            kind.set(h, own 0i32)
             e = e + 1usize
         }
         free(subs)
@@ -171,19 +168,19 @@ fn schedule() {
         let mut ran = false
         let mut i = 0usize
         while i < task_count() {
-            while len[i32](kind) <= i {
-                push[i32](mut kind, own 0i32)
-                push[u64](mut deadline, own 0u64)
-                push[i32](mut fd, own 0i32)
+            while kind.len() <= i {
+                kind.push(own 0i32)
+                deadline.push(own 0u64)
+                fd.push(own 0i32)
             }
             if task_live(i) {
                 any_live = true
                 if get[i32](kind, i) == 0i32 {
                     PENDING_KIND = 0i32
                     if resume(i) {
-                        set[i32](mut kind, i, own PENDING_KIND)
-                        set[u64](mut deadline, i, own PENDING_DEADLINE)
-                        set[i32](mut fd, i, own PENDING_FD)
+                        kind.set(i, own PENDING_KIND)
+                        deadline.set(i, own PENDING_DEADLINE)
+                        fd.set(i, own PENDING_FD)
                     }
                     ran = true
                 }

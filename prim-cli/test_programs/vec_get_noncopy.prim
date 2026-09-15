@@ -1,6 +1,5 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.vec.get
 
 struct S { n: i32 }
@@ -15,7 +14,7 @@ impl Drop for S {
 // the slot (double free / use-after-free).
 fn main() {
     let mut v = new[S]()
-    push(mut v, own S { n = 9 })
+    v.push(own S { n = 9 })
     let x = get(v, 0usize)
     println(x.n)
 }

@@ -1,6 +1,5 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.string.from_vec
 
 // Assigning a whole moved value into an inline struct field (`h.s = ...`)
@@ -12,14 +11,14 @@ struct Holder { s: String }
 
 fn main() {
     let mut first = new[u8]()
-    push(mut first, own 65u8)
-    push(mut first, own 66u8)
+    first.push(own 65u8)
+    first.push(own 66u8)
     let mut h = Holder { s = from_vec(own first) }
 
     let mut second = new[u8]()
-    push(mut second, own 70u8)
-    push(mut second, own 71u8)
-    push(mut second, own 72u8)
+    second.push(own 70u8)
+    second.push(own 71u8)
+    second.push(own 72u8)
 
     h.s = from_vec(own second)
     println(h.s)   // FGH

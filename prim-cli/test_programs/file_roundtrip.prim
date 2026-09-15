@@ -3,7 +3,6 @@ import std.io.Reader
 import std.io.write_display
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.vec.get
 
 // Write "hi" through the Writer-backed write_display; File closes on drop.
@@ -17,10 +16,10 @@ fn write_file() {
 fn read_file() {
     let g = File.open("__prim_fs_test.txt")
     let mut buf = new[u8]()
-    push(mut buf, own 0u8)
-    push(mut buf, own 0u8)
-    push(mut buf, own 0u8)
-    push(mut buf, own 0u8)
+    buf.push(own 0u8)
+    buf.push(own 0u8)
+    buf.push(own 0u8)
+    buf.push(own 0u8)
     let n = g.read_into(mut buf)
     println(n)
     println(get(buf, 0usize))

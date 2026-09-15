@@ -1,6 +1,5 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.string.from_vec
 
 // Assemble text at runtime: push bytes into a Vec[u8], wrap it as a String.
@@ -8,7 +7,7 @@ fn main() {
     let bytes = new[u8]()
     let mut c = 65i32              // 'A'
     while c < 70i32 {             // through 'E'
-        push(mut bytes, own u8.from_i32_wrapping(c))
+        bytes.push(own u8.from_i32_wrapping(c))
         c = c + 1
     }
     let s = from_vec(own bytes)

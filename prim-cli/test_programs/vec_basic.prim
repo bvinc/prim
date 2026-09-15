@@ -1,21 +1,18 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.vec.get
-import std.vec.set
-import std.vec.len
 
 fn main() {
     let v = new[i32]()
     let mut i = 0i32
     while i < 10 {
-        push(mut v, own i * i)            // forces regrowth 0 -> 4 -> 8 -> 16
+        v.push(own i * i)            // forces regrowth 0 -> 4 -> 8 -> 16
         i = i + 1
     }
-    println(len(v))         // 10
+    println(v.len())         // 10
     println(get(v, 0usize))   // 0
     println(get(v, 3usize))   // 9
     println(get(v, 9usize))   // 81
-    set(mut v, 3usize, own 999)
+    v.set(3usize, own 999)
     println(get(v, 3usize))   // 999
 }

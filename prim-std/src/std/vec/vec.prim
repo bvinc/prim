@@ -11,8 +11,8 @@ import std.ptr.drop_in_place
 import std.sys.panic
 
 // A growable array. `ptr` points at `cap` slots of T (each an inline value);
-// the first `len` are live. `Vec` is passed as a `mut`/`read` borrow by the
-// mutating functions, so they update the caller's vector in place.
+// the first `len` are live. Mutating methods take `mut self`, so they update
+// the caller's vector in place.
 struct Vec[T] {
     ptr: *mut T,
     len: usize,
@@ -44,32 +44,76 @@ fn new[T]() -> Vec[T] {
     }
 }
 
-fn len[T](read v: Vec[T]) -> usize {
-    return v.len
-}
+impl Vec {
+    // Number of live elements.
+    fn len(read self) -> usize {
+        return self.len
+    }
 
-fn push[T](mut v: Vec[T], own value: T) {
-    if v.len == v.cap {
-        let mut new_cap = 4usize
-        if v.cap != 0usize {
-            new_cap = v.cap * 2usize
-            if new_cap < v.cap {
-                // The capacity doubled past 2^31 and wrapped to a small
-                // number; realloc would shrink the buffer and the copy that
-                // follows would overrun it. A Vec at 2^31 elements is at the
-                // 32-bit heap's practical limit — abort rather than corrupt.
-                panic("Vec.push: capacity overflow")
+    // Append `value`, growing the buffer when it is full. Doubles capacity
+    // from an initial 4; the wrap check guards the 32-bit heap's practical
+    // limit.
+    fn push(mut self, own value: T) {
+        if self.len == self.cap {
+            let mut new_cap = 4usize
+            if self.cap != 0usize {
+                new_cap = self.cap * 2usize
+                if new_cap < self.cap {
+                    // The capacity doubled past 2^31 and wrapped to a small
+                    // number; realloc would shrink the buffer and the copy that
+                    // follows would overrun it. A Vec at 2^31 elements is at the
+                    // 32-bit heap's practical limit — abort rather than corrupt.
+                    panic("Vec.push: capacity overflow")
+                }
             }
+            unsafe {
+                self.ptr = realloc[T](self.ptr, self.len, new_cap)
+            }
+            self.cap = new_cap
         }
         unsafe {
-            v.ptr = realloc[T](v.ptr, v.len, new_cap)
+            *add[T](self.ptr, self.len) = value
         }
-        v.cap = new_cap
+        self.len = self.len + 1
     }
-    unsafe {
-        *add[T](v.ptr, v.len) = value
+
+    // Replace element `i` with `value`. Drops the displaced element before
+    // overwriting its slot, so replacing a needs-drop element (e.g.
+    // Vec[String]) doesn't leak its box. A no-op for scalar/inline elements
+    // with no destructor.
+    fn set(mut self, i: usize, own value: T) {
+        if i >= self.len {
+            panic("Vec.set: index out of bounds")
+        }
+        unsafe {
+            drop_in_place[T](add[T](self.ptr, i))
+            *add[T](self.ptr, i) = value
+        }
     }
-    v.len = v.len + 1
+
+    // Swap elements `i` and `j` in place, for *every* element type — including
+    // `Drop`-implementing ones. Elements are inline values, so exchanging the
+    // two slots' `size_of[T]` raw bytes through a one-slot scratch buffer *is*
+    // the value swap: no `T` value is ever formed, no destructor runs, and each
+    // value still ends up owned by exactly one slot (just the other one).
+    fn swap(mut self, i: usize, j: usize) {
+        if i >= self.len || j >= self.len {
+            panic("Vec.swap: index out of bounds")
+        }
+        if i == j {
+            return
+        }
+        unsafe {
+            let pi = add[T](self.ptr, i)
+            let pj = add[T](self.ptr, j)
+            let n = size_of[T]()
+            let scratch = alloc_array[T](1)
+            copy_bytes[T](scratch, pi, n)
+            copy_bytes[T](pi, pj, n)
+            copy_bytes[T](pj, scratch, n)
+            dealloc[T](scratch)
+        }
+    }
 }
 
 // Read element `i` as a copy. The element must be `Copy` (a scalar/pointer, or
@@ -83,42 +127,5 @@ fn get[T: Copy](read v: Vec[T], i: usize) -> T {
     }
     unsafe {
         return *add[T](v.ptr, i)
-    }
-}
-
-fn set[T](mut v: Vec[T], i: usize, own value: T) {
-    if i >= v.len {
-        panic("Vec.set: index out of bounds")
-    }
-    // Drop the displaced element before overwriting its slot, so replacing a
-    // needs-drop element (e.g. Vec[String]) doesn't leak its box. A no-op for
-    // scalar/inline elements with no destructor.
-    unsafe {
-        drop_in_place[T](add[T](v.ptr, i))
-        *add[T](v.ptr, i) = value
-    }
-}
-
-// Swap elements `i` and `j` in place, for *every* element type — including
-// `Drop`-implementing ones. Elements are inline values, so exchanging the two
-// slots' `size_of[T]` raw bytes through a one-slot scratch buffer *is* the
-// value swap: no `T` value is ever formed, no destructor runs, and each value
-// still ends up owned by exactly one slot (just the other one).
-fn swap[T](mut v: Vec[T], i: usize, j: usize) {
-    if i >= v.len || j >= v.len {
-        panic("Vec.swap: index out of bounds")
-    }
-    if i == j {
-        return
-    }
-    unsafe {
-        let pi = add[T](v.ptr, i)
-        let pj = add[T](v.ptr, j)
-        let n = size_of[T]()
-        let scratch = alloc_array[T](1)
-        copy_bytes[T](scratch, pi, n)
-        copy_bytes[T](pi, pj, n)
-        copy_bytes[T](pj, scratch, n)
-        dealloc[T](scratch)
     }
 }

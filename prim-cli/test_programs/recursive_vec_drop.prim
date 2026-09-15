@@ -1,6 +1,5 @@
 import std.io.println
 import std.vec.new
-import std.vec.push
 import std.option.Option
 
 // A recursive type with a needs-drop field. `Node` is not inline (it contains
@@ -18,6 +17,6 @@ struct Node {
 
 fn main() {
     let mut v = new[Node]()
-    push(mut v, own Node { next = Option.None, mark = Mark { id = 7i32 } })
+    v.push(own Node { next = Option.None, mark = Mark { id = 7i32 } })
     println(0i32)
 }
